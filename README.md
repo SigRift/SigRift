@@ -27,9 +27,7 @@ fuzzing, OIDC, STIX, TDOA) ship separately in `sigrift-sentinel`.
 [INSTALL.md](INSTALL.md) (full install) ·
 [ARCHITECTURE.md](ARCHITECTURE.md) (system overview)
 
-![SigRift frequency overview with fourteen populated bands of synthetic RF observations](docs/images/features/frequency-hero-readme.png)
-
-*Synthetic demonstration data in the real application.* [View feature screenshots](docs/images/README.md#feature-gallery) for populated metrics, Wi-Fi discovery, alerts and known-frequency review.
+![SigRift: Raspberry Pi nodes with an RTL-SDR, a Wi-Fi adapter and Bluetooth send detections over HTTPS to a central server, whose gateway handles TLS and sign-in and whose bridge correlates the nodes and runs alert rules; one dashboard shows live stats, a detection-rate chart and alerts (illustrative example)](docs/images/sigrift-overview.png)
 
 > ## ⚠️ Lawful Use Only
 >
@@ -72,12 +70,6 @@ the cloud. Each node signs in with its own API key, and the server
 correlates what all of them see:
 
 <img src="docs/images/architecture/multi-node.svg" width="960" alt="Multi-node architecture: three Raspberry Pi nodes with different radios each run scanners and an edge agent and send detections and heartbeats over HTTPS, with one API key per node, to the Rust gateway on a central server; the Python bridge there correlates all nodes, stores the data and serves one dashboard to operators' browsers">
-
-Operators then work from one dashboard that covers every node: live
-counts, detection trends, and alerts they can acknowledge or mark as known
-(illustrative example):
-
-<img src="docs/images/architecture/nodes-dashboard.svg" width="960" alt="Illustrative example: three Raspberry Pi nodes with an RTL-SDR, a Wi-Fi adapter and Bluetooth send detections over HTTPS, each with its own API key, to a central SigRift server; its gateway handles TLS and sign-in, its bridge correlates the nodes and runs alert rules, and one dashboard shows live stats, a detection-rate chart and alerts with Ack and Mark known actions">
 
 In this release the one-line edge installer sets up only the heartbeat
 agent on a remote host; it does not capture RF. Remote scanners are set
@@ -133,6 +125,12 @@ Read any hardware preparation message before continuing. With no ready hardware,
 ![Setup and capture checklist showing, per node and scanner, adapter readiness, capture reports and latest stored data for synthetic demonstration nodes](docs/images/features/setup-checklist-readme.png)
 
 *The Setup and capture checklist keeps adapter readiness, live capture reports and stored data as separate checks (synthetic demonstration data).*
+
+Once observations arrive, the frequency overview shows where activity clusters:
+
+![SigRift frequency overview with fourteen populated bands of synthetic RF observations](docs/images/features/frequency-hero-readme.png)
+
+*Synthetic demonstration data in the real application.* [View feature screenshots](docs/images/README.md#feature-gallery) for populated metrics, Wi-Fi discovery, alerts and known-frequency review.
 
 For Docker Desktop or an intentional hardware-free install, use `scripts/quickstart.sh --dashboard-only` instead. This skips hardware discovery and model downloads and keeps that choice on plain retries. On a supported Linux host, `scripts/quickstart.sh --scanners=auto` enables or rediscovers hardware later; see [scanner setup and limits](QUICKSTART.md#enable-hardware-later).
 
