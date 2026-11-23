@@ -368,17 +368,19 @@ def test_actual_stalled_ssh_process_is_killed_and_reaped(monkeypatch):
         return process
 
     monkeypatch.setattr(deployment.subprocess, "Popen", record)
-    monkeypatch.setattr(deployment, "_SSH_TIMEOUT", 0.4)
+    # Generous limits: on a loaded CI runner starting `ssh` and connecting can
+    # take seconds, and a sub-second timeout killed it before it connected.
+    monkeypatch.setattr(deployment, "_SSH_TIMEOUT", 5)
     accepted = threading.Event()
     with socket.socket() as endpoint:
         endpoint.bind(("127.0.0.1", 0))
         endpoint.listen(1)
-        endpoint.settimeout(3)
+        endpoint.settimeout(20)
 
         def stall():
             with endpoint.accept()[0] as connection:
                 accepted.set()
-                connection.settimeout(3)
+                connection.settimeout(20)
                 while connection.recv(4096):
                     pass
 
@@ -389,7 +391,7 @@ def test_actual_stalled_ssh_process_is_killed_and_reaped(monkeypatch):
                 "127.0.0.1", port=endpoint.getsockname()[1]
             )
         finally:
-            server.join(4)
+            server.join(22)
     assert accepted.is_set() and not server.is_alive()
     assert result["ssh_status"] == "timeout"
     assert len(children) == 1 and children[0].poll() is not None

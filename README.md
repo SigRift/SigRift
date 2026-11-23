@@ -73,6 +73,12 @@ correlates what all of them see:
 
 <img src="docs/images/architecture/multi-node.svg" width="960" alt="Multi-node architecture: three Raspberry Pi nodes with different radios each run scanners and an edge agent and send detections and heartbeats over HTTPS, with one API key per node, to the Rust gateway on a central server; the Python bridge there correlates all nodes, stores the data and serves one dashboard to operators' browsers">
 
+Operators then work from one dashboard that covers every node: live
+counts, detection trends, and alerts they can acknowledge or mark as known
+(illustrative example):
+
+<img src="docs/images/architecture/nodes-dashboard.svg" width="960" alt="Illustrative example: three Raspberry Pi nodes with an RTL-SDR, a Wi-Fi adapter and Bluetooth send detections over HTTPS, each with its own API key, to a central SigRift server; its gateway handles TLS and sign-in, its bridge correlates the nodes and runs alert rules, and one dashboard shows live stats, a detection-rate chart and alerts with Ack and Mark known actions">
+
 In this release the one-line edge installer sets up only the heartbeat
 agent on a remote host; it does not capture RF. Remote scanners are set
 up by hand (see [src/sigrift/edge/README.md](src/sigrift/edge/README.md))

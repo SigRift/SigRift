@@ -6,6 +6,8 @@ name: CI
 # accepts those skips. Pushes to main keep the filter — no merge waits on a
 # push run — but a docs-only commit on main then has no CI run, and
 # release.yml's coverage preflight refuses to release such a commit.
+# A fix commit meant for release should also touch this file: it is in the
+# `python` and `rust` filters, so its push runs every job the preflight needs.
 on:
   push:
     branches: [main]

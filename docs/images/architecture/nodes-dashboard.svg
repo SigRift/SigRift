@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
+<title id="t">SigRift: many radios, one dashboard</title>
+<desc id="d">Three Raspberry Pi nodes with different radios (an RTL-SDR, a Wi-Fi adapter and Bluetooth) send detections and heartbeats over HTTPS, each with its own API key, to a central server. The gateway there handles TLS and authentication, and the bridge correlates all nodes, stores detections and runs alert rules. Operators see one dashboard with live stats, a detection-rate chart and alerts they can acknowledge or mark as known. Illustrative example.</desc>
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#9198a1"/></marker>
+  <linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fb950" stop-opacity="0.45"/><stop offset="1" stop-color="#3fb950" stop-opacity="0.05"/></linearGradient>
+</defs>
+<rect width="1600" height="900" fill="#000000"/>
+
+<!-- Title -->
+<text x="48" y="78" font-size="36" font-weight="700" fill="#e6edf3">Many radios, one dashboard</text>
+<text x="48" y="112" font-size="18" fill="#9198a1">SigRift nodes with different radios report to one central server.</text>
+
+<!-- Node 1: RTL-SDR -->
+<rect x="48" y="150" width="420" height="170" rx="14" fill="none" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="68" y="184" font-size="17" font-weight="600" fill="#9198a1">Node · rooftop</text>
+<rect x="68" y="208" width="160" height="48" rx="10" fill="#0c2d4d" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="148" y="238" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">RTL-SDR</text>
+<line x1="230" y1="232" x2="260" y2="232" stroke="#9198a1" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="264" y="196" width="184" height="72" rx="10" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="356" y="226" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">Raspberry Pi</text>
+<text x="356" y="250" font-size="13" text-anchor="middle" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">scanner + agent</text>
+<text x="68" y="298" font-size="14" fill="#9198a1">classifies RF from 24 MHz to 1.7 GHz</text>
+
+<!-- Node 2: Wi-Fi -->
+<rect x="48" y="350" width="420" height="170" rx="14" fill="none" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="68" y="384" font-size="17" font-weight="600" fill="#9198a1">Node · office</text>
+<rect x="68" y="408" width="160" height="48" rx="10" fill="#0f2d27" stroke="#3fb9a0" stroke-width="1.5"/>
+<text x="148" y="438" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">Wi-Fi adapter</text>
+<line x1="230" y1="432" x2="260" y2="432" stroke="#9198a1" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="264" y="396" width="184" height="72" rx="10" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="356" y="426" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">Raspberry Pi</text>
+<text x="356" y="450" font-size="13" text-anchor="middle" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">scanner + agent</text>
+<text x="68" y="498" font-size="14" fill="#9198a1">networks, clients and deauth floods</text>
+
+<!-- Node 3: Bluetooth -->
+<rect x="48" y="550" width="420" height="170" rx="14" fill="none" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="68" y="584" font-size="17" font-weight="600" fill="#9198a1">Node · street</text>
+<rect x="68" y="608" width="160" height="48" rx="10" fill="#3d1f0a" stroke="#f0883e" stroke-width="1.5"/>
+<text x="148" y="638" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">Bluetooth</text>
+<line x1="230" y1="632" x2="260" y2="632" stroke="#9198a1" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="264" y="596" width="184" height="72" rx="10" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="356" y="626" font-size="16" font-weight="600" text-anchor="middle" fill="#e6edf3">Raspberry Pi</text>
+<text x="356" y="650" font-size="13" text-anchor="middle" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">scanner + agent</text>
+<text x="68" y="698" font-size="14" fill="#9198a1">BLE beacons such as ALPR cameras</text>
+
+<!-- Links to the server -->
+<text x="534" y="196" font-size="13" text-anchor="middle" fill="#9198a1">HTTPS, one</text>
+<text x="534" y="214" font-size="13" text-anchor="middle" fill="#9198a1">API key per node</text>
+<line x1="470" y1="235" x2="596" y2="350" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="470" y1="435" x2="596" y2="450" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="470" y1="635" x2="596" y2="550" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a)"/>
+
+<!-- Central server -->
+<rect x="600" y="262" width="340" height="378" rx="14" fill="#0d1117" stroke="#e6edf3" stroke-width="1.5"/>
+<text x="620" y="298" font-size="20" font-weight="700" fill="#e6edf3">Central server</text>
+<text x="620" y="320" font-size="14" fill="#9198a1">on-prem or in the cloud</text>
+<rect x="620" y="340" width="300" height="108" rx="10" fill="#0c2d4d" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="640" y="374" font-size="18" font-weight="700" fill="#e6edf3">Gateway</text>
+<text x="640" y="400" font-size="14" fill="#c9d1d9">TLS and per-node API keys</text>
+<text x="640" y="424" font-size="14" fill="#c9d1d9">sign-in and rate limits</text>
+<rect x="620" y="466" width="300" height="154" rx="10" fill="#0f2d27" stroke="#3fb9a0" stroke-width="1.5"/>
+<text x="640" y="500" font-size="18" font-weight="700" fill="#e6edf3">Bridge</text>
+<text x="640" y="526" font-size="14" fill="#c9d1d9">correlates every node</text>
+<text x="640" y="550" font-size="14" fill="#c9d1d9">stores detections</text>
+<text x="640" y="574" font-size="14" fill="#c9d1d9">learned baselines</text>
+<text x="640" y="598" font-size="14" fill="#c9d1d9">alert rules</text>
+<line x1="942" y1="451" x2="996" y2="451" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a)"/>
+
+<!-- Dashboard window -->
+<rect x="1000" y="150" width="552" height="640" rx="14" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+<path d="M1000 164a14 14 0 0 1 14-14h524a14 14 0 0 1 14 14v26h-552z" fill="#161b22"/>
+<circle cx="1024" cy="170" r="6" fill="#f85149"/><circle cx="1044" cy="170" r="6" fill="#d29922"/><circle cx="1064" cy="170" r="6" fill="#3fb950"/>
+<text x="1086" y="175" font-size="14" fill="#9198a1">SigRift dashboard</text>
+
+<text x="1022" y="218" font-size="15" font-weight="600" fill="#58a6ff">Summary</text>
+<line x1="1022" y1="226" x2="1088" y2="226" stroke="#58a6ff" stroke-width="2"/>
+<text x="1110" y="218" font-size="15" fill="#9198a1">SDR</text>
+<text x="1158" y="218" font-size="15" fill="#9198a1">Wi-Fi</text>
+<text x="1214" y="218" font-size="15" fill="#9198a1">Threats</text>
+<text x="1284" y="218" font-size="15" fill="#9198a1">Alerts</text>
+<circle cx="1342" cy="213" r="10" fill="#f85149"/><text x="1342" y="218" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff">3</text>
+
+<rect x="1022" y="242" width="160" height="70" rx="10" fill="#161b22" stroke="#30363d"/>
+<text x="1102" y="276" font-size="24" font-weight="700" text-anchor="middle" fill="#58a6ff">3</text>
+<text x="1102" y="298" font-size="13" text-anchor="middle" fill="#9198a1">nodes online</text>
+<rect x="1198" y="242" width="160" height="70" rx="10" fill="#161b22" stroke="#30363d"/>
+<text x="1278" y="276" font-size="24" font-weight="700" text-anchor="middle" fill="#58a6ff">2.4/s</text>
+<text x="1278" y="298" font-size="13" text-anchor="middle" fill="#9198a1">detections</text>
+<rect x="1374" y="242" width="160" height="70" rx="10" fill="#161b22" stroke="#30363d"/>
+<text x="1454" y="276" font-size="24" font-weight="700" text-anchor="middle" fill="#f0883e">5</text>
+<text x="1454" y="298" font-size="13" text-anchor="middle" fill="#9198a1">anomalies, last hour</text>
+
+<rect x="1022" y="328" width="512" height="158" rx="10" fill="#161b22" stroke="#30363d"/>
+<text x="1038" y="352" font-size="13" fill="#9198a1">Detection rate, last hour</text>
+<path d="M1038 470 L1038 440 L1080 432 L1122 436 L1164 422 L1206 428 L1248 414 L1290 418 L1332 404 L1360 376 L1388 410 L1430 402 L1472 396 L1518 400 L1518 470 Z" fill="url(#g)"/>
+<polyline points="1038,440 1080,432 1122,436 1164,422 1206,428 1248,414 1290,418 1332,404 1360,376 1388,410 1430,402 1472,396 1518,400" fill="none" stroke="#3fb950" stroke-width="2"/>
+<circle cx="1360" cy="376" r="5" fill="#f85149"/>
+<text x="1372" y="372" font-size="12" fill="#f85149">anomaly</text>
+
+<text x="1022" y="522" font-size="16" font-weight="700" fill="#e6edf3">Alerts</text>
+
+<rect x="1022" y="536" width="512" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="1036" y="550" width="56" height="22" rx="11" fill="#3d1418" stroke="#f85149"/>
+<text x="1064" y="566" font-size="12" font-weight="700" text-anchor="middle" fill="#f85149">HIGH</text>
+<text x="1104" y="566" font-size="14" font-weight="600" fill="#e6edf3">Unknown FSK burst, 433.9 MHz</text>
+<text x="1104" y="590" font-size="13" fill="#9198a1">rooftop · 2 min ago</text>
+<rect x="1374" y="558" width="58" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1403" y="577" font-size="12" text-anchor="middle" fill="#58a6ff">Ack</text>
+<rect x="1440" y="558" width="84" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1482" y="577" font-size="12" text-anchor="middle" fill="#58a6ff">Mark known</text>
+
+<rect x="1022" y="616" width="512" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="1036" y="630" width="56" height="22" rx="11" fill="#3d1f0a" stroke="#f0883e"/>
+<text x="1064" y="646" font-size="12" font-weight="700" text-anchor="middle" fill="#f0883e">MED</text>
+<text x="1104" y="646" font-size="14" font-weight="600" fill="#e6edf3">ALPR camera beacon (BLE)</text>
+<text x="1104" y="670" font-size="13" fill="#9198a1">street · 6 min ago</text>
+<rect x="1374" y="638" width="58" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1403" y="657" font-size="12" text-anchor="middle" fill="#58a6ff">Ack</text>
+<rect x="1440" y="638" width="84" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1482" y="657" font-size="12" text-anchor="middle" fill="#58a6ff">Mark known</text>
+
+<rect x="1022" y="696" width="512" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="1036" y="710" width="56" height="22" rx="11" fill="#2e2a0c" stroke="#d29922"/>
+<text x="1064" y="726" font-size="12" font-weight="700" text-anchor="middle" fill="#d29922">LOW</text>
+<text x="1104" y="726" font-size="14" font-weight="600" fill="#e6edf3">Deauth burst on guest Wi-Fi</text>
+<text x="1104" y="750" font-size="13" fill="#9198a1">office · 11 min ago</text>
+<rect x="1374" y="718" width="58" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1403" y="737" font-size="12" text-anchor="middle" fill="#58a6ff">Ack</text>
+<rect x="1440" y="718" width="84" height="28" rx="14" fill="none" stroke="#58a6ff"/>
+<text x="1482" y="737" font-size="12" text-anchor="middle" fill="#58a6ff">Mark known</text>
+
+<!-- Footer -->
+<text x="1552" y="852" font-size="13" text-anchor="end" fill="#6e7681">Illustrative example</text>
+</svg>
