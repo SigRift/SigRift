@@ -1,0 +1,157 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+.hypothesis/
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+
+# Rust
+target/
+**/*.rs.bk
+
+# Binary / model files
+*.npy
+*.pth
+*.pt
+*.safetensors
+*.bin
+*.pkl
+*.joblib
+*.ckpt
+*.h5
+*.gguf
+*.har
+*.hef
+*.whl
+*.onnx
+*.tflite
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Secrets / certificates
+*.pem
+*.key
+# Set-aside and temporary private keys (ca.key.tmp, ca.key.legacy.<time>
+# from older bridges, ...), wherever a secrets dir is.
+*.key.*
+# The from-source bridge's secrets dir (BRIDGE_SECRETS_DIR default): the
+# CA private key and anything else only the bridge may read.
+src/sigrift/bridge/secrets/
+keys.json
+master_key.txt
+license.jwt
+.env
+.env.sh
+docker-compose.override.yml
+tls/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Data captures
+data/iq_captures/
+data/pcap_captures/
+data/detections.db*
+detections.db
+detections.db-wal
+detections.db-shm
+
+# Runtime data (generated/updated by running server)
+baselines.json
+bt_baselines.json
+wifi_baselines.json
+signal_whitelist.json
+alerts.json
+alert_rules.json
+nodes.json
+jobs.json
+schedules.json
+history.json
+watch_bands.json
+webhooks.json
+syslog_targets.json
+bt_whitelist.json
+wifi_whitelist.json
+spectrum_connection.json
+detection_config.json
+keys.json
+keys.json.bak
+audit.key
+master_key.txt
+license.jwt
+*.pem
+src/sigrift/bridge/data/iq_captures/
+src/sigrift/bridge/data/pcap_captures/
+
+# Training outputs — large + reproducible from training/train_open_default.py.
+# Only the trained ONNX gets attached to a GitHub Release; the working
+# dirs stay local. The `!training/logs/` un-ignore overrides the broader
+# `logs/` rule earlier in this file (which would otherwise hide the
+# training/logs subtree entirely).
+!training/logs/
+!training/models/
+!training/tmp/
+!training/configs/
+training/logs/*
+!training/logs/.gitkeep
+training/models/*
+!training/models/.gitkeep
+training/tmp/*
+!training/tmp/.gitkeep
+training/configs/*
+!training/configs/.gitkeep
+# Preset profile configs ARE source (drive generate_preset_bundles.py + tests).
+!training/configs/presets/
+!training/configs/presets/*.json
+
+# Bridge runtime state generated at first boot — never commit.
+src/sigrift/bridge/data/.mac_secret
+src/sigrift/bridge/data/*.json
+src/sigrift/bridge/data/*.key
+src/sigrift/bridge/data/*.txt
+
+# Local review/analysis artifacts — may contain pre-scrub material.
+/reports/
+
+# Managed local scanner selection (contains hardware identities, no keys)
+.sigrift-scanners.yml
+.sigrift-scanners-*.yml
+
+# Atomic nonsecret desired scanner selection retained across setup failures.
+.sigrift-scanners-pending.json
+.sigrift-scanners-pending-*.json
+
+# Local agent worktrees and stray coverage output
+.claude/
+/coverage/
+lcov.info
+tests/bridge/js/coverage/

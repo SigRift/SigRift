@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest an enhancement to SigRift (community edition).
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an enhancement. Before opening a feature
+        request, please check whether the capability is already part of
+        the commercial SigRift Enterprise edition — if so, community
+        contribution is not the right path. For enterprise enquiries,
+        use [GitHub Discussions](https://github.com/SigRift/SigRift/discussions).
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I searched existing issues and discussions for a duplicate or related request.
+          required: true
+        - label: This request is about the community edition, not the commercial enterprise edition.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case. What are you trying to do, and what is getting in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like SigRift to do? Sketch the UX, config, or API if you have one in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you evaluated, and why they didn't fit.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Approximate scope
+      options:
+        - Small (a few files, clearly additive)
+        - Medium (a new module or subcommand)
+        - Large (cross-cutting architectural change)
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Are you offering to implement this?
+      options:
+        - label: I would be willing to open a PR (we will help with review).
+          required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links to prior art, similar features in other projects, relevant specs, etc.

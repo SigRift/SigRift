@@ -1,0 +1,49 @@
+/* Separate help styling keeps existing panel layout and theme intact. */
+.panel-help-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin-left: 6px;
+    padding: 2px;
+    border: 1px solid var(--text-secondary, #8b949e);
+    border-radius: 50%;
+    background: var(--bg-card, #161b22);
+    color: var(--text-primary, #e6edf3);
+    font: 600 13px/1 sans-serif;
+    vertical-align: middle;
+    cursor: help;
+    flex-shrink: 0;
+}
+.panel-help-button::before { content: "i"; }
+.panel-help-button:hover,
+.panel-help-button[aria-expanded="true"] { border-color: var(--accent, #58a6ff); }
+.panel-help-button:focus-visible {
+    outline: 2px solid var(--accent, #58a6ff);
+    outline-offset: 3px;
+}
+.panel-help-tooltip {
+    position: fixed;
+    z-index: 10000;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(340px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    overflow: auto;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color, #46505e);
+    border-radius: 8px;
+    background: var(--bg-card, #161b22);
+    color: var(--text-primary, #e6edf3);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .3);
+    font: 400 14px/1.5 var(--font-sans, sans-serif);
+    text-transform: none;
+    letter-spacing: normal;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+.panel-help-tooltip[hidden] { display: none !important; }
+@media (pointer: coarse) {
+    .panel-help-button { min-width: 32px; min-height: 32px; }
+}

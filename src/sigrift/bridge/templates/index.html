@@ -1,0 +1,2473 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Bridge — RF Signal Intelligence</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v=37">
+    <link rel="stylesheet" href="{{ url_for('static', path='panel_help.css') }}?v=1">
+    <link rel="stylesheet" href="{{ url_for('static', path='known_signals.css') }}?v=2">
+    <link rel="stylesheet" href="{{ url_for('static', path='setup_checklist.css') }}?v=2">
+</head>
+<body>
+    <script src="/static/auth_guard.js?v=201"></script>
+    <div id="app-content" style="display:none">
+    <!-- Header -->
+    <header class="dashboard-header">
+        <div class="header-top">
+            <div class="header-left">
+                <h1 class="header-title">
+                    <span class="header-logo">RF</span> The Bridge
+                </h1>
+                <span id="connection-status" class="connection-indicator disconnected" aria-live="polite">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </span>
+            </div>
+            <div class="header-right">
+                <span id="uptime-display" class="uptime-text"></span>
+                <span id="user-info" style="display:none;font-size:0.85em;color:var(--text-secondary);">
+                    <span id="user-display-name"></span>
+                    <span id="user-role" style="opacity:0.6;margin-left:2px;"></span>
+                </span>
+                <div class="docs-dropdown" style="position:relative;display:inline-block;">
+                    <button class="help-icon" title="Documentation" aria-label="Help and documentation">?</button>
+                    <div class="docs-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-card,#1e1e2e);border:1px solid var(--border,#333);border-radius:6px;min-width:180px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+                        <a href="/static/docs/api_reference.html" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;border-bottom:1px solid var(--border,#333);">API Reference</a>
+                        <a href="/documentation/" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;border-bottom:1px solid var(--border,#333);">Operations Guide</a>
+                        <a href="/static/docs/deployment_guide.html" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;">Deployment Guide</a>
+                    </div>
+                </div>
+                <style>.docs-dropdown-menu a:hover{background:rgba(88,166,255,0.1)!important;color:var(--accent,#58a6ff)!important;}.docs-dropdown-open{display:block!important;}</style>
+                <script src="{{ url_for('static', path='docs_dropdown.js') }}?v=1"></script>
+                <a href="/admin" class="btn btn-sm btn-secondary" title="Admin Panel">Admin</a>
+                <button id="logout-btn" class="btn btn-sm btn-secondary" title="Sign out" style="display:none;">Logout</button>
+                <button id="settings-btn" class="btn btn-icon" title="User Settings" style="display:none;">&#9881;</button>
+                <button id="alert-sound-toggle" class="btn btn-icon" title="Toggle alert sounds">
+                    <span id="alert-sound-icon">&#128264;</span>
+                </button>
+                <button id="browser-notification-toggle" type="button" class="btn btn-sm btn-secondary" aria-pressed="false" aria-label="Browser notifications">
+                    <span aria-hidden="true">&#128276;</span> Browser: <span id="browser-notification-state">Off</span>
+                </button>
+                <select id="theme-select" class="form-input" title="Select theme" style="width:auto;padding:4px 8px;font-size:12px;">
+                    <optgroup label="Operational">
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                        <option value="command">Command</option>
+                        <option value="tactical">Tactical</option>
+                        <option value="sentinel">Sentinel</option>
+                        <option value="gateway">Gateway</option>
+                        <option value="explorer">Explorer</option>
+                    </optgroup>
+                    <optgroup label="Recreational">
+                        <option value="bladerunner">Blade Runner</option>
+                        <option value="br2049">BR 2049</option>
+                        <option value="cyberpunk">Cyberpunk</option>
+                        <option value="matrix">Matrix &#9888;</option>
+                    </optgroup>
+                </select>
+                <span class="theme-warning" id="theme-warning" style="display:none">Impaired urgency colors</span>
+            </div>
+        </div>
+        <nav class="tab-bar" id="dashboard-tabs" role="tablist">
+            <button class="tab-btn active" data-tab="summary" role="tab" aria-selected="true" aria-controls="tab-summary">Summary</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="rf" role="tab" aria-selected="false" aria-controls="tab-rf">SDR <span class="tab-badge" id="tab-badge-rf"></span></button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="wifi" role="tab" aria-selected="false" aria-controls="tab-wifi">Wi-Fi <span class="tab-badge" id="tab-badge-wifi"></span></button>
+            <button class="tab-btn" data-tab="map" role="tab" aria-selected="false" aria-controls="tab-map">Map</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="spectrum-analysis" role="tab" aria-selected="false" aria-controls="tab-spectrum-analysis">Spectrum</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="bluetooth" role="tab" aria-selected="false" aria-controls="tab-bluetooth">Bluetooth <span class="tab-badge" id="tab-badge-bluetooth"></span></button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="zigbee" role="tab" aria-selected="false" aria-controls="tab-zigbee">Zigbee</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="adsb" role="tab" aria-selected="false" aria-controls="tab-adsb">ADS-B</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="drone" role="tab" aria-selected="false" aria-controls="tab-drone">Drone</button>
+            <button class="tab-btn" hidden disabled aria-disabled="true" data-tab="iot" role="tab" aria-selected="false" aria-controls="tab-iot">IoT</button>
+            <button class="tab-btn" data-tab="incidents" role="tab" aria-selected="false" aria-controls="tab-incidents">Incidents <span class="tab-badge tab-badge-alert" id="tab-badge-incidents"></span></button>
+            <button class="tab-btn" data-tab="threats" role="tab" aria-selected="false" aria-controls="tab-threats">Threats</button>
+            <button class="tab-btn" data-tab="alerts" role="tab" aria-selected="false" aria-controls="tab-alerts">Alerts <span class="tab-badge tab-badge-alert" id="tab-badge-alerts"></span></button>
+            <button class="tab-btn" data-tab="deployment" role="tab" aria-selected="false" aria-controls="tab-deployment">Deployment</button>
+        </nav>
+    </header>
+
+    <!-- R1: Unified Cross-Protocol Threat Timeline -->
+    <div id="threat-timeline" class="threat-timeline" aria-label="Cross-protocol threat timeline">
+        <canvas id="threat-timeline-canvas" height="48" tabindex="0" role="group" aria-label="Threat timeline: use Left and Right to inspect alerts, Enter to open Alerts" aria-describedby="threat-timeline-summary"></canvas>
+        <div class="threat-timeline-footer">
+            <div class="threat-timeline-legend" id="threat-timeline-legend"></div>
+            <button id="threat-timeline-open" type="button" class="btn btn-sm btn-secondary">Open alerts</button>
+        </div>
+        <div id="threat-timeline-summary" class="threat-timeline-summary" role="status" hidden></div>
+    </div>
+
+    <div id="critical-banner" class="critical-banner hidden">
+        <span id="critical-banner-msg"></span>
+        <button id="critical-banner-dismiss">Dismiss</button>
+    </div>
+
+    <!-- R6: Stale data warning overlay -->
+    <div class="stale-overlay" id="stale-data-banner" aria-live="polite">
+        <span>&#9888;</span>
+        <span>Data may be stale — last updated <span id="stale-data-ago">?</span>s ago</span>
+    </div>
+
+    <main class="dashboard-main">
+        <section class="card" id="scanner-warning" role="status" aria-live="polite" aria-atomic="true" style="border-left:4px solid var(--accent-yellow);padding:16px;margin-bottom:16px;" hidden>
+            <h2 class="card-title" data-help-label="Scanner attention" data-help="Previously reported scanners remain listed when capture fails, stops or its report expires, even while their tabs are hidden. A fresh healthy capture report clears the warning. Quiet air alone is not a failure.">Scanner attention needed</h2>
+            <ul id="scanner-warning-list"></ul>
+            <p>Scanner tabs require current capture. <a id="scanner-warning-setup" href="#panel-setup-checklist">Open the Summary setup checklist</a> for recovery checks.</p>
+        </section>
+        <!-- ============================================================
+             SUMMARY TAB
+             ============================================================ -->
+        <div class="tab-content active" id="tab-summary" role="tabpanel">
+
+            <!-- Edge-agent onboarding banner (first-run UX, PR-6).
+                 Hidden by default; dashboard.js _toggleEdgeOnboarding
+                 picks one of two sub-states based on whether the
+                 in-stack scanner key is pre-registered. -->
+            <div id="edge-onboarding-card" style="display:none;margin:16px 0;padding:16px 20px;border:1px solid var(--accent);border-radius:6px;background:rgba(88,166,255,0.06);">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                    <div>
+                        <div style="font-weight:600;font-size:15px;margin-bottom:4px;" id="edge-onboarding-heading">No edge agents are reporting yet</div>
+                        <div style="color:var(--text-secondary);font-size:13px;" id="edge-onboarding-sub">
+                            Attach an RTL-SDR (or other supported SDR) to a host on your
+                            network, then run the installer below on that host. A node
+                            typically appears here within 30&nbsp;seconds of install.
+                        </div>
+                    </div>
+                    <button id="edge-onboarding-dismiss" class="btn btn-sm" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);">Hide</button>
+                </div>
+
+                <!-- Sub-state A: no scanners registered — show full installer steps -->
+                <div id="edge-onboarding-installer">
+                    <ol style="margin:16px 0 8px 20px;padding:0;font-size:13px;line-height:1.7;">
+                        <li>
+                            Open <a href="/admin#keys" style="color:var(--accent);">Admin &rarr; API Keys</a>
+                            and create a key with the <strong>NODE</strong> role. Copy its value
+                            (shown once).
+                        </li>
+                        <li>
+                            Copy the gateway's TLS certificate to the scanning host as
+                            <code>gateway-cert.pem</code>: it is <code>tls/cert.pem</code> in the
+                            directory you ran <code>quickstart.sh</code> or
+                            <code>install-release.sh</code> from (<code>/opt/sigrift/tls/cert.pem</code>
+                            on staging hosts). The edge agent verifies the gateway against it, so
+                            use a host name or IP in the URL below that the certificate lists.
+                            A gateway with a publicly trusted certificate needs no file: drop
+                            <code>--cacert</code> and <code>--ca-cert</code>.
+                        </li>
+                        <li>
+                            SSH to the scanning host (Ubuntu 22.04+ / Debian 12 / Pi OS bookworm),
+                            then run, in the directory holding <code>gateway-cert.pem</code>:
+                            <pre style="margin:6px 0;padding:10px 12px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-size:12px;overflow-x:auto;"><code id="edge-install-oneliner">curl -sfL --cacert gateway-cert.pem &lt;bridge-url&gt;/api/edge/install.sh | sudo bash -s -- --api-url &lt;bridge-url&gt; --ca-cert gateway-cert.pem --api-key YOUR_NODE_KEY</code></pre>
+                            <button id="edge-oneliner-copy" class="btn btn-sm btn-secondary" style="font-size:12px;">Copy command</button>
+                            <span id="edge-oneliner-copied" style="color:var(--accent-green);font-size:12px;margin-left:8px;display:none;">Copied</span>
+                        </li>
+                        <li>
+                            Wait for the node to check in. This banner will disappear once
+                            at least one agent has reported.
+                        </li>
+                    </ol>
+                </div>
+
+                <!-- Sub-state B: in-stack scanner key registered, awaiting heartbeat -->
+                <div id="edge-onboarding-waiting" style="display:none;margin-top:12px;font-size:13px;line-height:1.6;color:var(--text-secondary);">
+                    <div>
+                        Edge agent registered (key: <code>local-edge</code>). Waiting for the
+                        first heartbeat from the in-stack scanners.
+                    </div>
+                    <div style="margin-top:8px;">
+                        Still nothing after 60&nbsp;s? Check the scanner logs:
+                        <pre style="margin:6px 0;padding:10px 12px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-size:12px;overflow-x:auto;"><code>docker compose logs scan wifi-scan bt-scan</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PR-16 (cog review §1.1): canonical "look here first"
+                 stat-card. The summary grid below has 12 cards in 4
+                 groups; without a lead card operators have no single
+                 anchor for triage. Unacked-critical count is the
+                 highest-value scan target — promote it above the
+                 grid with 2x type size and a red accent stripe that
+                 flips green when the count drops to zero. Populated
+                 from /api/alerts/?severity=critical&acknowledged=false
+                 in dashboard.js _pollStatus. -->
+            <style>
+              .summary-lead-card { padding: 16px 24px; margin: 0 0 16px 0; background: var(--bg-card); border-left: 4px solid var(--accent-red); border-radius: 6px; }
+              .summary-lead-card .lead-stat-label { font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); }
+              .summary-lead-card .lead-stat-value { font-size: 2.4em; font-weight: 600; line-height: 1; margin: 4px 0; }
+              .summary-lead-card .lead-stat-sub { font-size: 0.85em; color: var(--text-secondary); }
+              .summary-lead-card[data-state="zero"] { border-left-color: var(--accent-green); }
+              .summary-lead-card[data-state="zero"] .lead-stat-value { color: var(--text-secondary); }
+            </style>
+            <div class="summary-lead-card" id="stat-unacked-critical-card" data-state="zero">
+                <div class="lead-stat-label" data-help-label="UNACKED CRITICAL overview" data-help="Counts critical alerts awaiting acknowledgment. Review the evidence and acknowledge after triage; a zero count is not a guarantee of safety.">UNACKED CRITICAL</div>
+                <div class="lead-stat-value" id="stat-unacked-critical">0</div>
+                <div class="lead-stat-sub" id="stat-unacked-critical-sub">no open criticals</div>
+            </div>
+
+            <section class="card" id="panel-setup-checklist">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Setup and capture checklist" data-help="Separates adapter readiness, live capture reports and stored data. Readiness comes from the last authenticated host setup check and becomes stale after five minutes; this page cannot inspect or change host permissions. A running capture can be quiet; a heartbeat or old data cannot prove current capture. Refresh is read-only.">Setup and capture checklist</h2>
+                    <div class="setup-checklist-actions">
+                        <button class="btn btn-sm" id="setup-checklist-refresh" type="button">Refresh status</button>
+                        <button class="btn btn-sm" id="setup-checklist-toggle" type="button" aria-expanded="true" aria-controls="setup-checklist-body">Hide details</button>
+                    </div>
+                </div>
+                <p id="setup-checklist-overview" role="status" aria-live="polite">Checking status…</p>
+                <div id="setup-checklist-body">
+                <p class="setup-checklist-note" id="setup-checklist-status" role="status" aria-live="polite">Loading setup checks…</p>
+                <div class="table-wrap" tabindex="0" role="region" aria-label="Scanner setup status by node"><table class="data-table">
+                    <thead><tr><th scope="col">Node / scanner</th><th scope="col">Adapter readiness</th><th scope="col">Capture report</th><th scope="col">Latest stored data</th><th scope="col">Next check</th></tr></thead>
+                    <tbody id="setup-checklist-rows"></tbody>
+                </table></div>
+                <details><summary>Scanner-host checks and safe retry</summary>
+                    <p>On the scanner host, a read-only hardware selection plan is <code>python3 scripts/scanner_setup.py plan --scanners=auto</code>. It checks supported adapters, driver/permission readiness and protected network interfaces; it does not start scanners.</p>
+                    <p>For an existing managed installation, rerun <code>./scripts/quickstart.sh</code> without new selection flags. It preserves saved scanner selection and operator configuration, and reports conflicts for review. Hardware is not silently selected for a saved dashboard-only installation.</p>
+                    <p>For a first hardware selection, review <a href="/documentation/">the operations guide</a> before using <code>--scanners=auto</code> or an explicit selection. Never repurpose <code>wlan0</code> or the SSH/management radio without a separate recovery path. No hardware or privilege-changing command runs from this page.</p>
+                    <p>Stored timestamps are supplied by capture records; an hourly RF summary has hour precision. They are not gateway arrival times or a liveness signal. This checklist reports SDR and Wi-Fi capture. First setup and ordinary retries send a sanitized host readiness check, when the installed node key and gateway are available. After five minutes it is labeled stale, not offline; there is no background host refresh in this version. A healthy capture lease remains independent evidence. Explicit dashboard-only setup does not probe hardware.</p>
+                </details>
+                </div>
+            </section>
+
+            <!-- Summary Overview Stats -->
+            <div class="summary-stats">
+                <div class="summary-group" id="summary-general">
+                    <div class="summary-group-label" data-help-label="System overview" data-help="Node connectivity and recorded alerts remain visible independently of scanner activity. A current scanner report enables each protocol overview; stored RF history remains available below.">System</div>
+                    <div class="stat-row">
+                        <div class="stat-card" id="stat-nodes">
+                            <div class="stat-value" id="stat-node-count">--</div>
+                            <div class="stat-label">Nodes</div>
+                            <div class="stat-sub" id="stat-node-detail">-- active</div>
+                        </div>
+                        <div class="stat-card" id="stat-alerts">
+                            <div class="stat-value" id="stat-alert-count">--</div>
+                            <div class="stat-label">Alerts</div>
+                            <div class="stat-sub" id="stat-alert-detail"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-group" id="summary-sdr" data-scanner-section="sdr" hidden>
+                    <div class="summary-group-label" data-help-label="SDR overview" data-help="Summarizes received RF data. Node connectivity and a live SDR scanner report are separate; lack of observations alone does not explain why.">SDR</div>
+                    <div class="stat-row">
+                        <div class="stat-card" id="stat-detections">
+                            <div class="stat-value" id="stat-det-rate">--</div>
+                            <div class="stat-label">Detections/sec</div>
+                            <div class="stat-sub" id="stat-det-detail"></div>
+                        </div>
+                        <div class="stat-card" id="stat-anomalies">
+                            <div class="stat-value" id="stat-anomaly-count">--</div>
+                            <div class="stat-label">RF Anomalies</div>
+                            <div class="stat-sub" id="stat-anomaly-detail"></div>
+                        </div>
+                        <div class="stat-card" id="stat-freqs">
+                            <div class="stat-value" id="stat-freq-count">--</div>
+                            <div class="stat-label">Active Freqs</div>
+                            <div class="stat-sub" id="stat-freq-detail"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-group" id="summary-wifi" data-scanner-section="wifi" hidden>
+                    <div class="summary-group-label" data-help-label="Wi-Fi overview" data-help="Summarizes received Wi-Fi observations. Unknown security labels mean evidence is incomplete, not that a network is open.">Wi-Fi</div>
+                    <div class="stat-row">
+                        <div class="stat-card" id="stat-wifi-networks">
+                            <div class="stat-value" id="sum-wifi-networks">--</div>
+                            <div class="stat-label">Networks</div>
+                            <div class="stat-sub" id="sum-wifi-detail">discovered</div>
+                        </div>
+                        <div class="stat-card" id="stat-wifi-clients">
+                            <div class="stat-value" id="sum-wifi-clients">--</div>
+                            <div class="stat-label">Clients</div>
+                            <div class="stat-sub" id="sum-wifi-clients-detail">tracked</div>
+                        </div>
+                        <div class="stat-card" id="stat-wifi-anomalies">
+                            <div class="stat-value" id="sum-wifi-anomalies">--</div>
+                            <div class="stat-label">WiFi Anomalies</div>
+                            <div class="stat-sub" id="sum-wifi-anomalies-detail"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-group" id="summary-bluetooth" data-scanner-section="bluetooth" hidden>
+                    <div class="summary-group-label">Bluetooth SIGINT</div>
+                    <div class="stat-row">
+                        <div class="stat-card" id="stat-bt-devices">
+                            <div class="stat-value" id="sum-bt-devices">--</div>
+                            <div class="stat-label">Devices</div>
+                            <div class="stat-sub" id="sum-bt-devices-detail">discovered</div>
+                        </div>
+                        <div class="stat-card" id="stat-bt-anomalies">
+                            <div class="stat-value" id="sum-bt-anomalies">--</div>
+                            <div class="stat-label">BT Anomalies</div>
+                            <div class="stat-sub" id="sum-bt-anomalies-detail"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-group" id="summary-zigbee" data-scanner-section="zigbee" hidden>
+                    <div class="summary-group-label">Zigbee</div>
+                    <div class="stat-row">
+                        <div class="stat-card" id="stat-zb-devices">
+                            <div class="stat-value" id="sum-zb-devices">--</div>
+                            <div class="stat-label">Devices</div>
+                            <div class="stat-sub" id="sum-zb-devices-detail">discovered</div>
+                        </div>
+                        <div class="stat-card" id="stat-zb-pan-ids">
+                            <div class="stat-value" id="sum-zb-pan-ids">--</div>
+                            <div class="stat-label">PAN IDs</div>
+                            <div class="stat-sub" id="sum-zb-pan-ids-detail">networks</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Raw Ingest Warning Panel (hidden when empty) -->
+            <section class="card" id="panel-raw-ingest-warning" style="display:none; border: 2px solid #dc2626;">
+                <div class="card-header" style="background:#dc2626; color:#fff;">
+                    <h2 class="card-title" style="color:#fff;" data-help-label="Raw Ingest Nodes (Non-Aggregated)" data-help="Shows individual incoming node reports before aggregation. Use this to check which node supplied data; a heartbeat alone does not prove radio capture.">Raw Ingest Nodes (Non-Aggregated)</h2>
+                    <span class="card-badge" id="raw-ingest-badge" style="background:#991b1b; color:#fff;">0</span>
+                </div>
+                <div class="card-content" style="background:#fef2f2; color:#1e1e1e;">
+                    <p style="margin:0 0 10px; font-size:13px; color:#991b1b;">
+                        These nodes are sending individual detections instead of hourly summaries.
+                        Enable <code style="background:#fecaca; padding:2px 5px; border-radius:3px;">MLRF_SUMMARIZE=1</code> on each node to reduce write volume by ~45x.
+                    </p>
+                    <div class="table-wrap">
+                        <table class="data-table" id="raw-ingest-table">
+                            <thead>
+                                <tr>
+                                    <th>Node ID</th>
+                                    <th>Last Raw Ingest</th>
+                                </tr>
+                            </thead>
+                            <tbody id="raw-ingest-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Unique Frequencies Panel -->
+            <section class="card" id="panel-unique-freqs">
+                <div class="card-header" data-collapse="unique-freqs">
+                    <h2 class="card-title" data-help-label="Unique Frequencies" data-help="Counts distinct observed frequencies in the selected view. Use this to compare activity; an empty result can reflect filters or no observations.">Unique Frequencies</h2>
+                    <span class="card-badge" id="unique-freqs-badge">0 bands</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="unique-freqs-content">
+                    <div class="unique-freqs-grid" id="unique-freqs-grid"></div>
+                    <p class="empty-state" id="unique-freqs-empty">No frequency data</p>
+                </div>
+            </section>
+
+            <!-- Suspicious Frequencies Panel -->
+            <section class="card" id="panel-suspicious-freqs">
+                <div class="card-header" data-collapse="suspicious-freqs">
+                    <h2 class="card-title" data-help-label="Suspicious Frequencies" data-help="Highlights frequencies associated with anomaly scores. Review the underlying detections before treating a score as a confirmed threat.">Suspicious Frequencies</h2>
+                    <span class="card-badge" id="suspicious-freqs-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="suspicious-freqs-content">
+                    <div id="suspicious-freqs-list"></div>
+                    <p class="empty-state" id="suspicious-freqs-empty">No suspicious frequencies detected</p>
+                </div>
+            </section>
+
+            <!-- Active Frequencies Panel -->
+            <section class="card" id="panel-active-freqs">
+                <div class="card-header" data-collapse="active-freqs">
+                    <h2 class="card-title" data-help-label="Active Frequencies" data-help="Summarizes observed frequency activity. Compare timestamps and node coverage before interpreting a quiet band.">Active Frequencies</h2>
+                    <span class="card-badge" id="active-freqs-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="active-freqs-content">
+                    <div class="det-time-range" id="active-freqs-range" style="margin-bottom:8px;">
+                        <button class="det-timeline-btn active" data-freq-range="1">1h</button>
+                        <button class="det-timeline-btn" data-freq-range="4">4h</button>
+                        <button class="det-timeline-btn" data-freq-range="24">24h</button>
+                        <button class="det-timeline-btn" data-freq-range="168">7d</button>
+                    </div>
+                    <div class="table-wrap">
+                        <!-- PR-17 (cog review §7.1): Signal Classes
+                             promoted from column 6 to column 3 so
+                             the "what kind of signal is this?"
+                             answer sits next to the Frequency/Band
+                             identity columns — operators were
+                             scanning past three numeric columns
+                             before reaching the classification. -->
+                        <table class="data-table" id="active-freqs-table">
+                            <thead>
+                                <tr>
+                                    <th>Frequency (MHz)</th>
+                                    <th>Band</th>
+                                    <th>Signal Classes</th>
+                                    <th>Detections</th>
+                                    <th>Avg Power</th>
+                                    <th>Nodes</th>
+                                </tr>
+                            </thead>
+                            <tbody id="active-freqs-tbody">
+                                <tr><td colspan="6" class="empty-state">Waiting for data...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Floor Plan Panel -->
+            <section class="card" id="panel-floorplan">
+                <div class="card-header" data-collapse="floorplan">
+                    <h2 class="card-title" data-help-label="Floor Plan" data-help="Places configured nodes on an uploaded floor plan. Positions are operator supplied, not measured radio locations.">Floor Plan</h2>
+                    <span class="card-badge" id="floorplan-badge">0 placed</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="floorplan-content">
+                    <div class="floorplan-container" style="position:relative;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);overflow:hidden;">
+                        <canvas id="floorplan-canvas" width="700" height="400" style="display:block;width:100%;cursor:default;"></canvas>
+                    </div>
+                    <div id="floorplan-tooltip" class="floorplan-tooltip" style="display:none;position:absolute;pointer-events:none;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:4px;padding:6px 10px;font-size:12px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.3);"></div>
+                </div>
+            </section>
+
+            <!-- Edge Nodes Panel -->
+            <section class="card" id="panel-nodes">
+                <div class="card-header" data-collapse="nodes">
+                    <h2 class="card-title" data-help-label="Edge Nodes" data-help="Shows node connectivity and reported scanner activity separately. Online means the node is checking in; only a current scanner report enables its scanner tabs.">Edge Nodes</h2>
+                    <span class="card-badge" id="node-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="nodes-content">
+                    <div class="node-search-bar" style="margin-bottom: 16px;">
+                        <input type="text" id="node-search" placeholder="Search nodes by ID, host, status..." class="anomaly-select" style="width: 400px; max-width: 100%;">
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+                        <label class="checkbox-label" style="font-size:12px;">
+                            <input type="checkbox" id="nodes-show-details"> Show all columns
+                        </label>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="nodes-table">
+                            <thead>
+                                <!-- PR-17 (cog review §7.2): Actions
+                                     moved from column 7 to column 2
+                                     so the primary ack/ping/capture
+                                     controls sit immediately next
+                                     to the Node ID — operators were
+                                     scrolling horizontally to reach
+                                     them, especially in expanded
+                                     "show all columns" mode. -->
+                                <tr>
+                                    <th>Health</th>
+                                    <th>Actions</th>
+                                    <th>Node ID</th>
+                                    <th class="node-col-compact">Status</th>
+                                    <th>Det/min</th>
+                                    <th>Top Issue</th>
+                                    <th>Last Seen</th>
+                                    <th class="node-col-detail">Monitor</th>
+                                    <th class="node-col-detail">Platform</th>
+                                    <th class="node-col-detail">CPU</th>
+                                    <th class="node-col-detail">Host</th>
+                                    <th class="node-col-detail">Radio</th>
+                                    <th class="node-col-detail">AI HW</th>
+                                    <th class="node-col-detail">Top Classes</th>
+                                    <th class="node-col-detail">Uptime</th>
+                                    <th class="node-col-detail">CPU %</th>
+                                    <th class="node-col-detail">Mem MB</th>
+                                    <th class="node-col-detail">Temp</th>
+                                    <th class="node-col-detail">Latency</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nodes-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="nodes-empty">No nodes registered</p>
+                    <p class="empty-state" id="nodes-no-match" style="display: none;">No nodes match search</p>
+                    <div class="node-actions-bar">
+                        <button class="btn btn-secondary" id="compare-nodes-btn">Compare Nodes</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Alerts Panel -->
+            <section class="card" id="panel-alerts">
+                <div class="card-header" data-collapse="alerts">
+                    <h2 class="card-title" data-help-label="Alerts" data-help="Lists triggered alerts for review. Acknowledge after investigating; an alert is a rule or scoring result, not confirmation of a physical threat.">Alerts</h2>
+                    <span class="card-badge" id="alert-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="alerts-content">
+                    <div class="alert-filters">
+                        <select id="alert-severity-filter" class="form-input">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="alert-hide-acked"> Hide acknowledged
+                        </label>
+                    </div>
+                    <div id="alerts-list" class="alerts-list"></div>
+                    <p class="empty-state" id="alerts-empty">No alerts</p>
+                    <h3 class="sub-heading" data-help-label="Condition-Based Alert Rules" data-help="Match detections using the rule&#x27;s selected all/any condition logic. Check the scope and cooldown to avoid repeated notifications.">Condition-Based Alert Rules</h3>
+                    <div id="condition-rules-list" class="condition-rules-list"></div>
+                    <p class="empty-state" id="condition-rules-empty">No condition rules defined</p>
+
+                    <div class="condition-builder" id="condition-builder">
+                        <div class="cb-header">
+                            <h4 class="cb-title" id="cb-title">New Alert Rule</h4>
+                        </div>
+                        <div class="cb-row">
+                            <label class="cb-label">Name</label>
+                            <input type="text" id="cb-rule-name" placeholder="e.g. High-power BPSK on 433 MHz" class="form-input cb-input-wide">
+                        </div>
+                        <div class="cb-row">
+                            <label class="cb-label">Severity</label>
+                            <select id="cb-rule-severity" class="form-input">
+                                <option value="warning">Warning</option>
+                                <option value="critical">Critical</option>
+                                <option value="info">Info</option>
+                            </select>
+                            <label class="cb-label cb-label-ml">Logic</label>
+                            <select id="cb-rule-logic" class="form-input">
+                                <option value="AND">AND (all conditions)</option>
+                                <option value="OR">OR (any condition)</option>
+                            </select>
+                        </div>
+                        <div class="cb-row">
+                            <label class="cb-label">Cooldown</label>
+                            <input type="number" id="cb-cooldown" class="form-input cb-input-num" value="300" min="0" max="86400"> <span class="cb-hint">seconds</span>
+                            <label class="checkbox-label cb-label-ml">
+                                <input type="checkbox" id="cb-enabled" checked> Enabled
+                            </label>
+                        </div>
+
+                        <div class="cb-conditions-header">
+                            <span class="cb-conditions-title">Conditions</span>
+                            <button id="cb-add-condition" class="btn btn-sm btn-primary">+ Add Condition</button>
+                        </div>
+                        <div id="cb-conditions" class="cb-conditions"></div>
+                        <p class="cb-hint" id="cb-no-conditions">Add at least one condition to create a rule.</p>
+                        <div class="cb-rule-preview" id="cb-rule-preview">Rule preview will appear here...</div>
+
+                        <div class="cb-actions">
+                            <button id="cb-save-rule" class="btn btn-primary">Save Rule</button>
+                            <button id="cb-test-rule" class="btn btn-outline" title="Dry-run test against recent detections">Test Rule</button>
+                            <button id="cb-cancel" class="btn btn-sm">Cancel</button>
+                            <span id="cb-test-result" class="cb-test-result"></span>
+                        </div>
+                        <input type="hidden" id="cb-editing-rule-id" value="">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Activity Log -->
+            <section class="card" id="panel-activity">
+                <div class="card-header" data-collapse="activity">
+                    <h2 class="card-title" data-help-label="Activity Log" data-help="Shows recorded system activity. Use the timestamps to connect changes with observations; this is not a complete packet capture.">Activity Log</h2>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="activity-content">
+                    <div class="activity-log-wrapper" id="activity-log-wrapper">
+                        <table class="activity-log" id="activity-log-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Node</th>
+                                    <th>Type</th>
+                                    <th>Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="activity-log"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="activity-empty">No activity recorded</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             RF TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-rf" role="tabpanel">
+            <!-- Detections Panel -->
+            <section class="card" id="panel-detections">
+                <div class="card-header" data-collapse="detections">
+                    <h2 class="card-title" data-help-label="Detections" data-help="Browse received RF classifications and their confidence. Check node, frequency and time before relying on a classification; no rows can mean no matching observations.">Detections</h2>
+                    <span class="card-badge" id="det-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="detections-content">
+                    <!-- Detection KPI strip -->
+                    <div class="detection-kpi-row" id="det-kpi-row">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="det-kpi-rate">--</div>
+                            <div class="det-kpi-label">Rate</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="det-kpi-classes">--</div>
+                            <div class="det-kpi-label">Unique Classes</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="det-kpi-confidence">--</div>
+                            <div class="det-kpi-label">Avg Confidence</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="det-kpi-anomalies">--</div>
+                            <div class="det-kpi-label">Anomalies 1h</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="det-kpi-freqs">--</div>
+                            <div class="det-kpi-label" data-help-label="Active Frequencies (1h)" data-help="Counts distinct 100 kHz frequency bins in raw observations from the last hour, regardless of the chart time range. Tuned scan frequencies do not prove occupied channels or distinct emitters.">Active Freqs (1h)</div>
+                        </div>
+                    </div>
+
+                    <!-- Time range controls -->
+                    <div class="detection-feed-controls">
+                        <div class="det-time-range">
+                            <button class="det-timeline-btn active" data-range="1">1h</button>
+                            <button class="det-timeline-btn" data-range="6">6h</button>
+                            <button class="det-timeline-btn" data-range="24">24h</button>
+                            <button class="det-timeline-btn" data-range="168">7d</button>
+                        </div>
+                        <div class="det-controls-right">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="det-auto-refresh" checked> Auto-refresh
+                            </label>
+                            <button class="btn btn-sm" id="det-pause-btn">Pause</button>
+                        </div>
+                    </div>
+
+                    <!-- Detection rate timeline -->
+                    <h3 class="sub-heading" data-help-label="Detection Rate Timeline" data-help="Shows how detection volume changes over time. Gaps can mean quiet air, filtering or missing observations; compare node and scanner status.">Detection Rate Timeline</h3>
+                    <canvas id="det-timeline-canvas" width="900" height="180"></canvas>
+
+                    <!-- Class distribution treemap -->
+                    <h3 class="sub-heading" data-help-label="Class Distribution" data-help="Groups detections by predicted signal class. Counts describe observations, not distinct physical devices.">Class Distribution</h3>
+                    <div class="treemap-container">
+                        <canvas id="det-treemap-canvas" width="900" height="220"></canvas>
+                    </div>
+
+                    <!-- Frequency x time heatmap -->
+                    <h3 class="sub-heading" data-help-label="Frequency x Time Heatmap" data-help="Shows where detections cluster by frequency and time. Use it to find patterns, then inspect individual observations.">Frequency x Time Heatmap</h3>
+                    <div class="freq-heatmap-container">
+                        <canvas id="det-heatmap-canvas" width="900" height="250"></canvas>
+                        <div class="heatmap-legend" id="heatmap-legend"></div>
+                    </div>
+
+                    <!-- Grouped detection feed -->
+                    <h3 class="sub-heading" data-help-label="Detection Feed" data-help="Lists recent matching observations. Open a detection to inspect its evidence and context.">Detection Feed</h3>
+                    <div class="table-wrap">
+                        <table class="data-table" id="det-feed-table">
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Freq Band</th>
+                                    <th>Nodes</th>
+                                    <th>Count</th>
+                                    <th>Avg Conf</th>
+                                    <th>Avg SNR</th>
+                                    <th>Baseline</th>
+                                    <th>Score</th>
+                                </tr>
+                            </thead>
+                            <tbody id="det-feed-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="det-feed-empty">No detections yet</p>
+                </div>
+            </section>
+
+            <!-- Anomalies Panel -->
+            <section class="card" id="panel-anomalies">
+                <div class="card-header" data-collapse="anomalies">
+                    <h2 class="card-title" data-help-label="Anomalies" data-help="Ranks unusual observations for investigation. Learned baselines provide scoring context. Marking an RF signal as known suppresses future matching RF alerts while preserving detections and scores; it does not confirm that a signal is safe.">Anomalies</h2>
+                    <span class="card-badge" id="anomaly-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="anomalies-content">
+                    <div class="anomaly-legend" id="anomaly-legend">
+                        <div class="anomaly-legend-title">Anomaly Scoring <span class="anomaly-legend-toggle" id="anomaly-legend-toggle" title="Toggle legend">&#9432;</span></div>
+                        <div class="anomaly-legend-body" id="anomaly-legend-body" style="display:none;">
+                            <div class="anomaly-legend-section">
+                                <strong>Score Ranges</strong>
+                                <div class="anomaly-legend-row"><span class="anomaly-score-badge score-normal">0.00</span> Normal (0.0 &ndash; 0.3) &mdash; expected behavior</div>
+                                <div class="anomaly-legend-row"><span class="anomaly-score-badge score-interesting">0.35</span> Interesting (0.3 &ndash; 0.5) &mdash; unusual characteristics</div>
+                                <div class="anomaly-legend-row"><span class="anomaly-score-badge score-anomalous">0.60</span> Anomalous (0.5 &ndash; 0.7) &mdash; definitely anomalous</div>
+                                <div class="anomaly-legend-row"><span class="anomaly-score-badge score-critical">0.85</span> Critical (0.7 &ndash; 1.0) &mdash; immediate attention</div>
+                            </div>
+                            <div class="anomaly-legend-section">
+                                <strong>Baseline Status</strong>
+                                <div class="anomaly-legend-row"><span class="baseline-badge learning">learning</span> &lt; 100 detections at frequency &mdash; scores dampened 50%</div>
+                                <div class="anomaly-legend-row"><span class="baseline-badge stable">stable</span> &ge; 100 detections &mdash; full scoring active</div>
+                                <div class="anomaly-legend-row"><span class="baseline-badge unknown">unknown</span> No baseline data available</div>
+                            </div>
+                            <div class="anomaly-legend-section">
+                                <strong>Scoring Dimensions</strong>
+                                <div class="anomaly-legend-dims">
+                                    <span class="dim-tag">novel_class: 30%</span>
+                                    <span class="dim-tag">rare_class: 20%</span>
+                                    <span class="dim-tag">low_confidence: 20%</span>
+                                    <span class="dim-tag">power_zscore: 15%</span>
+                                    <span class="dim-tag">timing_anomaly: 10%</span>
+                                    <span class="dim-tag">quiet_frequency: 5%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rf-anomaly-summary" id="rf-anomaly-summary" style="display:none">
+                        <span class="rf-sum-item" id="rf-sum-critical"></span>
+                        <span class="rf-sum-item" id="rf-sum-anomalous"></span>
+                        <span class="rf-sum-item" id="rf-sum-interesting"></span>
+                        <span class="rf-sum-separator">|</span>
+                        <span class="rf-sum-item" id="rf-sum-families"></span>
+                        <span class="rf-sum-item" id="rf-sum-nodes"></span>
+                    </div>
+                    <div class="anomaly-controls">
+                        <label class="anomaly-ctrl-label">Group by
+                            <select id="rf-anomaly-group-select" class="anomaly-select">
+                                <option value="">None</option>
+                                <option value="signal_class">Signal Class</option>
+                                <option value="family">Family</option>
+                                <option value="band">Frequency Band</option>
+                                <option value="node_id">Node</option>
+                                <option value="priority">Priority</option>
+                                <option value="dimension">Top Dimension</option>
+                            </select>
+                        </label>
+                        <label class="anomaly-ctrl-label">Filter
+                            <select id="rf-anomaly-filter-key" class="anomaly-select">
+                                <option value="">None</option>
+                                <option value="family">Family</option>
+                                <option value="signal_class">Signal Class</option>
+                                <option value="band">Frequency Band</option>
+                                <option value="node_id">Node</option>
+                                <option value="priority">Priority</option>
+                                <option value="dimension">Top Dimension</option>
+                            </select>
+                        </label>
+                        <select id="rf-anomaly-filter-val" class="anomaly-select" style="display:none">
+                            <option value="">All</option>
+                        </select>
+                        <label class="anomaly-ctrl-label">Sort
+                            <select id="rf-anomaly-sort-select" class="anomaly-select">
+                                <option value="score">Score</option>
+                                <option value="time">Time</option>
+                                <option value="freq">Frequency</option>
+                                <option value="seen">Seen Count</option>
+                            </select>
+                        </label>
+                        <button class="btn btn-sm" id="rf-reeval-all-btn">Re-evaluate All</button>
+                        <button class="btn btn-sm" id="rf-dismiss-resolved-btn" style="display:none">Dismiss Resolved</button>
+                        <button class="btn btn-sm" id="rf-purge-resolved-btn">Purge Resolved</button>
+                        <span class="shortcut-hint" title="j/k: navigate, d: dismiss, i: investigate, b: baseline, ?: help">KB: j/k d i b</span>
+                    </div>
+                    <div class="reeval-summary-bar" id="rf-reeval-summary" style="display:none"></div>
+                    <div class="bulk-action-bar" id="rf-bulk-bar" style="display:none" role="toolbar" aria-label="Bulk actions for selected RF anomalies">
+                        <label class="bulk-select-toggle" id="rf-select-all-label">
+                            <input type="checkbox" id="rf-select-all" aria-label="Select all RF anomalies">
+                            <span>Select All</span>
+                        </label>
+                        <span class="bulk-count" id="rf-bulk-count">0 selected</span>
+                        <button class="btn btn-sm" id="rf-bulk-dismiss" disabled aria-label="Dismiss selected RF anomalies">Dismiss Selected</button>
+                        <button class="btn btn-sm btn-danger" id="rf-bulk-escalate" disabled aria-label="Escalate selected RF anomalies">Escalate Selected</button>
+                        <button class="btn btn-sm btn-secondary" id="rf-bulk-export" disabled aria-label="Export selected RF anomalies">Export Selected</button>
+                    </div>
+                    <div class="anomaly-layout">
+                        <div class="anomaly-queue" id="anomaly-queue" role="list" aria-label="RF anomaly queue"></div>
+                        <div class="anomaly-sparkline-wrap">
+                            <h4 class="sub-heading" data-help-label="Anomaly Timeline" data-help="Shows when scored anomalies occurred. Compare repeated events and scanner coverage before deciding what needs investigation.">Anomaly Timeline</h4>
+                            <canvas id="anomaly-sparkline" width="400" height="80"></canvas>
+                        </div>
+                    </div>
+                    <p class="empty-state" id="anomaly-empty">No anomalies detected</p>
+                </div>
+            </section>
+
+            <!-- IQ Captures Panel -->
+            <section class="card" id="panel-iq-captures">
+                <div class="card-header" data-collapse="iq-captures">
+                    <h2 class="card-title" data-help-label="IQ Captures" data-help="Request or inspect raw I/Q samples for deeper signal analysis. Captures require a capable active node and can use significant storage.">IQ Captures</h2>
+                    <span class="card-badge" id="iq-captures-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="iq-captures-content">
+                    <div class="iq-stats-bar" style="display:flex;gap:24px;margin-bottom:12px;">
+                        <div class="det-kpi"><div class="det-kpi-value" id="iq-stat-total">--</div><div class="det-kpi-label">Total Captures</div></div>
+                        <div class="det-kpi"><div class="det-kpi-value" id="iq-stat-size">--</div><div class="det-kpi-label">Storage</div></div>
+                        <div class="det-kpi"><div class="det-kpi-value" id="iq-stat-critical">--</div><div class="det-kpi-label">Critical</div></div>
+                        <div class="det-kpi"><div class="det-kpi-value" id="iq-stat-standard">--</div><div class="det-kpi-label">Standard</div></div>
+                        <div class="det-kpi"><div class="det-kpi-value" id="iq-stat-temporary">--</div><div class="det-kpi-label">Temporary</div></div>
+                    </div>
+                    <h4 class="sub-heading" data-help-label="Command Queue" data-help="Tracks requested capture work. A queued command is not a completed capture; check its outcome before expecting samples.">Command Queue</h4>
+                    <div id="iq-commands-list" style="margin-bottom:16px;">
+                        <p style="color:var(--text-secondary);font-size:0.9em;">No pending captures</p>
+                    </div>
+
+                    <h4 class="sub-heading" data-help-label="Stored Captures" data-help="Lists saved I/Q sample files. Use these for detailed signal inspection; retention and available storage affect what remains.">Stored Captures</h4>
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                        <select id="iq-filter-node" class="anomaly-select" style="width:140px;">
+                            <option value="">All Nodes</option>
+                        </select>
+                        <select id="iq-filter-class" class="anomaly-select" style="width:140px;">
+                            <option value="">All Classes</option>
+                        </select>
+                        <select id="iq-filter-tier" class="anomaly-select" style="width:120px;">
+                            <option value="">All Tiers</option>
+                            <option value="critical">Critical</option>
+                            <option value="standard">Standard</option>
+                            <option value="temporary">Temporary</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="iq-refresh">Refresh</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="iq-captures-table">
+                            <thead>
+                                <tr>
+                                    <th>Detection</th>
+                                    <th>Node</th>
+                                    <th>Frequency</th>
+                                    <th>Class</th>
+                                    <th>Samples</th>
+                                    <th>Size</th>
+                                    <th>Quality</th>
+                                    <th>Tier</th>
+                                    <th>Captured</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="iq-captures-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="iq-captures-empty" style="display:none;">No IQ captures found</p>
+                </div>
+            </section>
+
+            <!-- Spectrum Panel -->
+            <section class="card" id="panel-spectrum">
+                <div class="card-header" data-collapse="spectrum">
+                    <h2 class="card-title" data-help-label="Spectrum Viewer" data-help="Displays available spectrum or capture data. Check the source and timestamp before interpreting it as current RF conditions.">Spectrum Viewer</h2>
+                    <span class="card-badge" id="spectrum-badge">Disconnected</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="spectrum-content">
+                    <!-- Connection controls -->
+                    <div class="spectrum-controls">
+                        <div class="form-group">
+                            <label for="spec-node">Node</label>
+                            <select id="spec-node" class="form-input">
+                                <option value="">-- Select node --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <button id="spec-refresh-nodes" class="btn btn-secondary btn-sm" title="Refresh node list">&#x21bb;</button>
+                        </div>
+                        <div class="form-group">
+                            <label for="spec-freq">Freq (MHz)</label>
+                            <input type="number" id="spec-freq" value="433.92" class="form-input" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label for="spec-gain">Gain (dB)</label>
+                            <input type="number" id="spec-gain" value="40" class="form-input" min="0" max="73">
+                        </div>
+                        <div class="form-group">
+                            <label for="spec-sample-rate">Rate (MS/s)</label>
+                            <input type="number" id="spec-sample-rate" value="2.048" class="form-input" step="0.1" min="0.25" max="3.2">
+                        </div>
+                        <div class="form-group form-actions">
+                            <button id="spec-connect" class="btn btn-primary">Connect</button>
+                            <button id="spec-disconnect" class="btn btn-secondary" disabled>Disconnect</button>
+                            <button id="spec-pause" class="btn btn-secondary" disabled>Pause</button>
+                        </div>
+                    </div>
+                    <!-- Display controls -->
+                    <div class="spectrum-controls spectrum-display-controls">
+                        <div class="form-group">
+                            <label>Min dB</label>
+                            <input type="range" id="spec-min-db" min="-120" max="-20" value="-80" class="form-range">
+                            <span id="spec-min-db-label" class="range-label">-80 dB</span>
+                        </div>
+                        <div class="form-group">
+                            <label>Max dB</label>
+                            <input type="range" id="spec-max-db" min="-40" max="20" value="0" class="form-range">
+                            <span id="spec-max-db-label" class="range-label">0 dB</span>
+                        </div>
+                        <div class="form-group">
+                            <label>Averaging</label>
+                            <input type="range" id="spec-averaging" min="1" max="20" value="1" class="form-range">
+                            <span id="spec-avg-label" class="range-label">Off</span>
+                        </div>
+                        <div class="form-group form-actions">
+                            <button id="spec-peak-hold" class="btn btn-secondary btn-sm">Peak Hold</button>
+                            <span id="spec-fps" class="spectrum-fps"></span>
+                        </div>
+                    </div>
+                    <!-- FFT and Waterfall canvases -->
+                    <div class="spectrum-display">
+                        <canvas id="spectrum-canvas" width="900" height="220"></canvas>
+                        <canvas id="waterfall-canvas" width="900" height="200"></canvas>
+                    </div>
+                    <div id="signal-list" class="signal-overlay-list"></div>
+                </div>
+            </section>
+
+            <!-- Signals Panel -->
+            <section class="card" id="panel-signals">
+                <div class="card-header" data-collapse="signals">
+                    <h2 class="card-title" data-help-label="Signal Browser" data-help="Inspect recorded signals and available DSP features. Plots require supporting sample data and may be empty when it was not captured.">Signal Browser</h2>
+                    <span class="card-badge">40 classes</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="signals-content">
+                    <div id="taxonomy-browser" class="taxonomy-browser">
+                        <div id="sf-buttons" class="taxonomy-level"></div>
+                        <div id="family-list" class="taxonomy-level"></div>
+                        <div id="class-cards" class="class-card-grid"></div>
+                    </div>
+                    <div class="signal-viewer" id="signal-viewer" style="display:none;">
+                        <div class="signal-viewer-header">
+                            <h3 id="sig-class-name"></h3>
+                            <div class="form-group">
+                                <label for="sig-snr">SNR (dB)</label>
+                                <input type="number" id="sig-snr" value="15" class="form-input" min="-20" max="40">
+                                <button id="sig-generate" class="btn btn-primary">Generate</button>
+                                <button id="sig-compare" class="btn btn-secondary">Compare</button>
+                            </div>
+                        </div>
+                        <div class="signal-canvases">
+                            <div class="canvas-panel">
+                                <h4 data-help-label="IQ Constellation" data-help="Plots the in-phase and quadrature samples when available. Use its shape as evidence for analysis, not a definitive protocol label.">IQ Constellation</h4>
+                                <canvas id="constellation-canvas" width="300" height="300"></canvas>
+                            </div>
+                            <div class="canvas-panel">
+                                <h4 data-help-label="Power Spectral Density" data-help="Shows signal power across frequency for available samples. Compare the capture settings before comparing different recordings.">Power Spectral Density</h4>
+                                <canvas id="psd-canvas" width="400" height="200"></canvas>
+                            </div>
+                            <div class="canvas-panel">
+                                <h4 data-help-label="DSP Features" data-help="Shows features calculated from the available samples. Missing features can mean the recording lacks the required data.">DSP Features</h4>
+                                <canvas id="features-canvas" width="400" height="200"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Cross-Node Correlation Panel -->
+            <section class="card" id="panel-correlation">
+                <div class="card-header" data-collapse="correlation">
+                    <h2 class="card-title" data-help-label="Cross-Node Correlation" data-help="Looks for observations that may describe the same activity across nodes. Similar timing and frequency are clues, not proof of a common transmitter.">Cross-Node Correlation</h2>
+                    <span class="card-badge" id="corr-cluster-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="correlation-content">
+                    <!-- Correlation KPI strip -->
+                    <div class="detection-kpi-row" id="corr-kpi-row">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="corr-kpi-clusters">--</div>
+                            <div class="det-kpi-label">Active Clusters</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="corr-kpi-nodes">--</div>
+                            <div class="det-kpi-label">Nodes Reporting</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="corr-kpi-agreement">--</div>
+                            <div class="det-kpi-label">Max Agreement</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="corr-kpi-24h">--</div>
+                            <div class="det-kpi-label">Correlations 24h</div>
+                        </div>
+                    </div>
+
+                    <!-- Time range controls -->
+                    <div class="detection-feed-controls">
+                        <div class="det-time-range">
+                            <button class="corr-range-btn active" data-corr-range="1">1h</button>
+                            <button class="corr-range-btn" data-corr-range="4">4h</button>
+                            <button class="corr-range-btn" data-corr-range="24">24h</button>
+                            <button class="corr-range-btn" data-corr-range="168">7d</button>
+                        </div>
+                        <button class="btn btn-sm" id="corr-refresh-btn">Refresh</button>
+                    </div>
+
+                    <!-- Node Correlation Matrix Heatmap -->
+                    <h3 class="sub-heading" data-help-label="Node Correlation Matrix" data-help="Compares activity between nodes. Use stronger matches to choose observations for a closer review.">Node Correlation Matrix</h3>
+                    <div class="corr-matrix-wrap">
+                        <canvas id="corr-matrix-canvas" width="500" height="500"></canvas>
+                    </div>
+                    <p class="empty-state" id="corr-matrix-empty" style="display:none">Not enough nodes for matrix</p>
+
+                    <!-- Cross-Node Timeline -->
+                    <h3 class="sub-heading" data-help-label="Cross-Node Detection Timeline" data-help="Aligns node observations in time. Clock accuracy and capture coverage affect the comparison.">Cross-Node Detection Timeline</h3>
+                    <canvas id="corr-timeline-canvas" width="900" height="250"></canvas>
+                    <p class="empty-state" id="corr-timeline-empty" style="display:none">No timeline data available</p>
+
+                    <!-- Correlation Cluster Cards -->
+                    <h3 class="sub-heading" data-help-label="Correlated Detection Clusters" data-help="Groups potentially related detections. Review their timestamps and frequencies before treating a group as one emitter.">Correlated Detection Clusters</h3>
+                    <div class="corr-cluster-grid" id="corr-cluster-grid"></div>
+                    <p class="empty-state" id="corr-cluster-empty">No correlated clusters detected</p>
+                </div>
+            </section>
+
+            <!-- TDOA Geolocation Panel -->
+            <section class="card" id="panel-tdoa">
+                <div class="card-header" data-collapse="tdoa">
+                    <h2 class="card-title" data-help-label="TDOA Geolocation" data-help="Estimates locations from arrival-time differences when suitable observations exist. Accurate timing and known node positions are required; estimates can be uncertain.">TDOA Geolocation</h2>
+                    <span class="card-badge" id="tdoa-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="tdoa-content">
+                    <!-- TDOA KPI strip -->
+                    <div class="detection-kpi-row" id="tdoa-kpi-row">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="tdoa-kpi-estimates">--</div>
+                            <div class="det-kpi-label">Estimates 24h</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="tdoa-kpi-avg-cep">--</div>
+                            <div class="det-kpi-label">Avg CEP (m)</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="tdoa-kpi-avg-conf">--</div>
+                            <div class="det-kpi-label">Avg Confidence</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="tdoa-kpi-hotspots">--</div>
+                            <div class="det-kpi-label">Emitter Hotspots</div>
+                        </div>
+                    </div>
+
+                    <!-- TDOA controls -->
+                    <div class="detection-feed-controls">
+                        <div class="det-time-range">
+                            <button class="tdoa-range-btn active" data-tdoa-range="4">4h</button>
+                            <button class="tdoa-range-btn" data-tdoa-range="24">24h</button>
+                            <button class="tdoa-range-btn" data-tdoa-range="168">7d</button>
+                        </div>
+                        <button class="btn btn-sm" id="tdoa-refresh-btn">Refresh</button>
+                    </div>
+
+                    <!-- TDOA Floor Plan Canvas -->
+                    <h3 class="sub-heading" data-help-label="Emitter Location Map" data-help="Plots available location estimates. Inspect their quality and supporting observations before using a position.">Emitter Location Map</h3>
+                    <div class="corr-matrix-wrap">
+                        <canvas id="tdoa-map-canvas" width="600" height="400"></canvas>
+                    </div>
+                    <p class="empty-state" id="tdoa-map-empty" style="display:none">No TDOA estimates available</p>
+
+                    <!-- Recent TDOA Estimates Table -->
+                    <h3 class="sub-heading" data-help-label="Recent TDOA Estimates" data-help="Lists recent timing-based location estimates. An empty list means no matching estimates are available, not necessarily a failed scanner.">Recent TDOA Estimates</h3>
+                    <div class="table-wrap" id="tdoa-table-wrap">
+                        <table class="detection-table" id="tdoa-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Signal Class</th>
+                                    <th>Freq (MHz)</th>
+                                    <th>Location</th>
+                                    <th>CEP (m)</th>
+                                    <th>Confidence</th>
+                                    <th>Nodes</th>
+                                    <th>GDOP</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tdoa-table-body"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="tdoa-table-empty">No TDOA estimates available</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             WIFI TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-wifi" role="tabpanel">
+            <!-- Wi-Fi Panel -->
+            <section class="card" id="panel-wifi">
+                <div class="card-header" data-collapse="wifi">
+                    <h2 class="card-title" data-help-label="Wi-Fi" data-help="Shows observed wireless networks, clients and anomaly results. A live Wi-Fi scanner enables this view; empty air or filters can still produce an empty table.">Wi-Fi</h2>
+                    <span class="card-badge" id="wifi-net-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="wifi-content">
+                    <!-- WiFi stats summary bar -->
+                    <div class="wifi-stats-bar" id="wifi-stats-bar">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="wifi-stat-networks">--</div>
+                            <div class="det-kpi-label">Networks</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="wifi-stat-clients">--</div>
+                            <div class="det-kpi-label">Clients</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="wifi-stat-channel">--</div>
+                            <div class="det-kpi-label">Busiest Ch</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="wifi-stat-24g">--</div>
+                            <div class="det-kpi-label">2.4 GHz</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="wifi-stat-5g">--</div>
+                            <div class="det-kpi-label">5 GHz</div>
+                        </div>
+                    </div>
+
+                    <!-- Band toggle -->
+                    <div class="wifi-band-toggle" id="wifi-band-toggle">
+                        <button class="det-timeline-btn active" data-wifi-band="all">All</button>
+                        <button class="det-timeline-btn" data-wifi-band="2.4GHz">2.4 GHz</button>
+                        <button class="det-timeline-btn" data-wifi-band="5GHz">5 GHz</button>
+                        <button class="det-timeline-btn" data-wifi-band="6GHz">6 GHz</button>
+                    </div>
+
+                    <!-- Channel utilization heatmap -->
+                    <h3 class="sub-heading" data-help-label="Channel Utilization" data-help="Compares observed activity across Wi-Fi channels. Scanner coverage affects the result; it is not a complete measurement of every nearby channel.">Channel Utilization</h3>
+                    <div class="wifi-channel-heatmap">
+                        <canvas id="wifi-channel-canvas" width="900" height="160"></canvas>
+                    </div>
+
+                    <!-- WiFi Anomalies -->
+                    <h3 class="sub-heading" data-help-label="WiFi Anomalies" data-help="Highlights unusual wireless observations for review. A label is a detection hypothesis; check the network details before dismissing or escalating.">WiFi Anomalies <span class="card-badge" id="wifi-anomaly-count-badge">0</span></h3>
+                    <div class="anomaly-controls" id="wifi-anomaly-controls">
+                        <label class="anomaly-ctrl-label">Group by
+                            <select id="wifi-anomaly-group-select" class="anomaly-select">
+                                <option value="">None</option>
+                                <option value="bssid">BSSID</option>
+                                <option value="attack">Attack Type</option>
+                                <option value="band">Band</option>
+                                <option value="channel">Channel</option>
+                                <option value="priority">Priority</option>
+                                <option value="ssid">SSID</option>
+                                <option value="node_id">Node</option>
+                            </select>
+                        </label>
+                        <label class="anomaly-ctrl-label">Filter
+                            <select id="wifi-anomaly-filter-key" class="anomaly-select">
+                                <option value="">None</option>
+                                <option value="band">Band</option>
+                                <option value="channel">Channel</option>
+                                <option value="priority">Priority</option>
+                                <option value="ssid">SSID</option>
+                                <option value="bssid">BSSID</option>
+                                <option value="node_id">Node</option>
+                                <option value="attack">Attack Type</option>
+                            </select>
+                        </label>
+                        <select id="wifi-anomaly-filter-val" class="anomaly-select" style="display:none">
+                            <option value="">All</option>
+                        </select>
+                        <button class="btn btn-sm" id="wifi-reeval-all-btn">Re-evaluate All</button>
+                        <button class="btn btn-sm" id="wifi-dismiss-resolved-btn" style="display:none">Dismiss Resolved</button>
+                        <button class="btn btn-sm" id="wifi-reeval-dismiss-all-btn">Purge Resolved</button>
+                    </div>
+                    <div class="reeval-summary-bar" id="wifi-reeval-summary" style="display:none"></div>
+                    <div class="bulk-action-bar" id="wifi-bulk-bar" style="display:none" role="toolbar" aria-label="Bulk actions for selected WiFi anomalies">
+                        <label class="bulk-select-toggle" id="wifi-select-all-label">
+                            <input type="checkbox" id="wifi-select-all" aria-label="Select all WiFi anomalies">
+                            <span>Select All</span>
+                        </label>
+                        <span class="bulk-count" id="wifi-bulk-count">0 selected</span>
+                        <button class="btn btn-sm" id="wifi-bulk-dismiss" disabled aria-label="Dismiss selected WiFi anomalies">Dismiss Selected</button>
+                        <button class="btn btn-sm btn-danger" id="wifi-bulk-escalate" disabled aria-label="Escalate selected WiFi anomalies">Escalate Selected</button>
+                        <button class="btn btn-sm btn-secondary" id="wifi-bulk-export" disabled aria-label="Export selected WiFi anomalies">Export Selected</button>
+                    </div>
+                    <div class="anomaly-queue" id="wifi-anomaly-queue" role="list" aria-label="WiFi anomaly queue"></div>
+                    <p class="empty-state" id="wifi-anomaly-empty">No WiFi anomalies detected</p>
+
+                    <!-- Network discovery table -->
+                    <h3 class="sub-heading" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                        Discovered Networks
+                        <label style="font-size:12px;font-weight:normal;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                            Sort by
+                            <select id="wifi-net-sort-select" class="anomaly-select" style="font-size:12px;padding:2px 6px;">
+                                <option value="signal">Signal</option>
+                                <option value="ssid">SSID</option>
+                                <option value="bssid">BSSID</option>
+                                <option value="channel">Channel</option>
+                                <option value="band">Band</option>
+                                <option value="security">Security</option>
+                                <option value="clients">Clients</option>
+                                <option value="last_seen">Last Seen</option>
+                            </select>
+                            <button id="wifi-net-sort-dir" class="btn btn-icon" style="font-size:12px;padding:0 4px;line-height:1;" title="Toggle sort direction">&#9660;</button>
+                        </label>
+                        <label style="font-size:12px;font-weight:normal;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                            Group by
+                            <select id="wifi-net-group-select" class="anomaly-select" style="font-size:12px;padding:2px 6px;">
+                                <option value="">None</option>
+                                <option value="ssid">SSID</option>
+                                <option value="vendor">Vendor</option>
+                                <option value="security">Security</option>
+                                <option value="band">Band</option>
+                                <option value="channel">Channel</option>
+                            </select>
+                        </label>
+                        <label style="font-size:12px;font-weight:normal;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                            Show
+                            <select id="wifi-net-show-select" class="anomaly-select" style="font-size:12px;padding:2px 6px;">
+                                <option value="all">All</option>
+                                <option value="authorized">Authorized</option>
+                                <option value="unauthorized">Unauthorized</option>
+                            </select>
+                        </label>
+                    </h3>
+                    <div class="table-wrap">
+                        <table class="data-table wifi-network-table" id="wifi-network-table">
+                            <thead>
+                                <tr>
+                                    <th data-sort="ssid">SSID</th>
+                                    <th data-sort="bssid">BSSID</th>
+                                    <th data-sort="vendor">Vendor</th>
+                                    <th data-sort="channel">Channel</th>
+                                    <th data-sort="band">Band</th>
+                                    <th data-sort="security">Security</th>
+                                    <th data-sort="signal">Signal</th>
+                                    <th data-sort="clients">Clients</th>
+                                    <th data-sort="last_seen">Last Seen</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="wifi-network-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="wifi-network-empty">No WiFi networks discovered</p>
+
+                    <!-- Client association list -->
+                    <h3 class="sub-heading" data-help-label="Client Associations" data-help="Shows observed relationships between clients and access points. Missing traffic and randomized addresses can limit the picture.">Client Associations</h3>
+                    <div class="wifi-client-list" id="wifi-client-list"></div>
+                    <p class="empty-state" id="wifi-client-empty">No clients observed</p>
+
+                    <!-- Signal strength timeline -->
+                    <h3 class="sub-heading" data-help-label="Signal Strength Timeline" data-help="Plots reported signal strength over time. Distance, obstacles and receiver settings all affect the measurements.">Signal Strength Timeline</h3>
+                    <div class="wifi-signal-chart">
+                        <canvas id="wifi-signal-canvas" width="900" height="150"></canvas>
+                    </div>
+
+                    
+                    <!-- Device Fingerprint Clusters -->
+                    <h3 class="sub-heading" data-help-label="Device Clusters" data-help="Groups observations using available fingerprints and timing. A group is an inference, not a verified persistent physical identity.">Device Clusters <span class="card-badge" id="wifi-fp-count-badge">0</span></h3>
+                    <div id="wifi-fp-cluster-list"></div>
+                    <div id="wifi-fp-detail" style="display:none;margin-top:12px;padding:12px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;"></div>
+                    
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             MAP TAB
+             ============================================================ -->
+        
+        <div class="tab-content" id="tab-map" role="tabpanel">
+            <section class="card" id="panel-geomap">
+                <div class="card-header" data-collapse="geomap">
+                    <h2 class="card-title" data-help-label="Node Map" data-help="Shows configured node locations and status. An online node does not necessarily have an active radio scanner.">Node Map</h2>
+                    <span class="card-badge" id="geo-node-count-badge">0 nodes</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="geomap-content">
+                    <div class="geo-controls" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+                        <button class="det-timeline-btn" id="geo-toggle-heatmap">Heatmap</button>
+                        <button class="det-timeline-btn" id="geo-toggle-coverage">Coverage</button>
+                        <button class="det-timeline-btn" id="geo-place-node">Place Node</button>
+                        <button class="btn btn-sm" id="geo-refresh-btn">Refresh</button>
+                    </div>
+                    <div id="geo-map-container" style="width:100%;height:500px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);z-index:1;"></div>
+                    <p class="empty-state" id="geo-map-empty">No nodes with location data. Click <strong>Place Node</strong> to position nodes on the map.</p>
+                    <div class="geo-legend" style="margin-top:12px;display:flex;gap:16px;font-size:12px;color:var(--text-secondary);">
+                        <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;margin-right:4px;"></span>Active</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#eab308;margin-right:4px;"></span>Stale</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:4px;"></span>Offline</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Floor Plan / Emitter Map Panel -->
+            <section class="card" id="panel-map-view">
+                <div class="card-header" data-collapse="map-view">
+                    <h2 class="card-title" data-help-label="Floor Plan / Emitter Map" data-help="Combines configured positions with available emitter estimates. Distinguish manually placed nodes from inferred emitter locations.">Floor Plan / Emitter Map</h2>
+                    <span class="card-badge" id="map-view-badge">0 plans</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="map-view-content">
+                    <div class="panel-controls" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+                        <select id="map-floor-plan" class="anomaly-select" style="width:220px;">
+                            <option value="">Outdoor Map</option>
+                        </select>
+                        <button id="map-refresh" class="btn btn-sm">Refresh</button>
+                        <label class="checkbox-label" style="font-size:12px;">
+                            <input type="checkbox" id="map-auto-refresh"> Auto-refresh
+                        </label>
+                    </div>
+                    <div id="map-view-container" style="height:600px;width:100%;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);z-index:1;"></div>
+                    <div class="map-legend" style="margin-top:12px;display:flex;gap:16px;font-size:12px;color:var(--text-secondary);">
+                        <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#3b82f6;margin-right:4px;"></span> Nodes</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:4px;"></span> Emitters</span>
+                        <span><span style="display:inline-block;width:20px;height:3px;background:#f97316;margin-right:4px;vertical-align:middle;"></span> Tracks</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+        
+
+        <!-- ============================================================
+             SPECTRUM ANALYSIS TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-spectrum-analysis" role="tabpanel">
+            <!-- Shared time picker toolbar -->
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:6px;">
+                <label style="font-size:13px;color:var(--text-secondary);white-space:nowrap;">Time Window</label>
+                <select id="sa-hours" class="anomaly-select" style="width:100px;">
+                    <option value="1">1h</option>
+                    <option value="4">4h</option>
+                    <option value="24" selected>24h</option>
+                    <option value="48">48h</option>
+                    <option value="168">7d</option>
+                </select>
+                <button class="btn btn-sm btn-secondary" id="sa-refresh">Refresh All</button>
+            </div>
+
+            <!-- Band Occupancy -->
+            <section class="card" id="panel-band-occupancy">
+                <div class="card-header" data-collapse="band-occupancy">
+                    <h2 class="card-title" data-help-label="Band Occupancy" data-help="Summarizes observed activity by band. A quiet result can reflect scan coverage or filters as well as actual inactivity.">Band Occupancy</h2>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="band-occupancy-content">
+                    <div class="table-wrap">
+                        <table class="data-table" id="sa-bands-table">
+                            <thead>
+                                <tr>
+                                    <th>Band</th>
+                                    <th>Range</th>
+                                    <th>Occupancy</th>
+                                    <th>Signals</th>
+                                    <th>Avg Power</th>
+                                    <th>Peak Power</th>
+                                    <th>Dominant Class</th>
+                                    <th>Last Seen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sa-bands-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="sa-bands-empty" style="display:none;">No band data</p>
+                </div>
+            </section>
+
+            <!-- Waterfall Display -->
+            <section class="card" id="panel-sa-waterfall">
+                <div class="card-header" data-collapse="sa-waterfall">
+                    <h2 class="card-title" data-help-label="Waterfall" data-help="Shows available spectral activity over frequency and time. Check the time range and source before treating it as live.">Waterfall</h2>
+                    <span class="card-badge" id="sa-waterfall-badge">--</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="sa-waterfall-content">
+                    <canvas id="sa-waterfall-canvas" width="900" height="300" style="width:100%;border:1px solid var(--border-color);border-radius:4px;background:#0d1117;"></canvas>
+                </div>
+            </section>
+
+            <!-- Activity Timeline -->
+            <section class="card" id="panel-sa-activity">
+                <div class="card-header" data-collapse="sa-activity">
+                    <h2 class="card-title" data-help-label="Activity Timeline" data-help="Shows changes in observed activity over time. Use it to select an interval for closer inspection.">Activity Timeline</h2>
+                    <span class="card-badge" id="sa-activity-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="sa-activity-content">
+                    <canvas id="sa-activity-canvas" width="900" height="250" style="width:100%;border:1px solid var(--border-color);border-radius:4px;background:#0d1117;"></canvas>
+                </div>
+            </section>
+
+            <!-- Wideband Monitor -->
+            <section class="card" id="panel-wideband-monitor">
+                <div class="card-header" data-collapse="wideband-monitor">
+                    <h2 class="card-title" data-help-label="Wideband Monitor" data-help="Displays available wideband spectrum data. Hardware coverage and scan settings determine which frequencies can be observed.">Wideband Monitor</h2>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <select id="wb-node-select" class="anomaly-select" style="width:140px;">
+                            <option value="">All Nodes</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="wb-refresh">Refresh</button>
+                        <span class="card-badge" id="wb-status-badge">--</span>
+                    </div>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="wideband-monitor-content">
+                    <canvas id="wb-psd-canvas" width="900" height="280" style="width:100%;border:1px solid var(--border-color);border-radius:4px;background:#0d1117;"></canvas>
+                    <div style="margin-top:8px;display:flex;gap:16px;align-items:center;font-size:12px;color:var(--text-secondary);">
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#58a6ff;border-radius:2px;"></span> PSD</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#3fb950;border-radius:2px;"></span> Classified Peak</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#f85149;border-radius:2px;"></span> Unclassified Peak</span>
+                        <span><span style="display:inline-block;width:10px;height:10px;background:#f0883e;border-radius:2px;border:1px dashed #f0883e;"></span> Noise Floor</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Unclassified Peaks -->
+            <section class="card" id="panel-wideband-peaks">
+                <div class="card-header" data-collapse="wideband-peaks">
+                    <h2 class="card-title" data-help-label="Detected Peaks" data-help="Lists peaks found in the available spectrum. A peak indicates signal energy, not a confirmed device or threat.">Detected Peaks</h2>
+                    <span class="card-badge" id="wb-peaks-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="wideband-peaks-content">
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                        <label style="font-size:12px;color:var(--text-secondary);">Group by</label>
+                        <select id="wb-peaks-group" class="anomaly-select" style="width:120px;font-size:12px;">
+                            <option value="frequency" selected>Frequency</option>
+                            <option value="node_id">Node</option>
+                            <option value="signal_class">Class</option>
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="wb-peaks-table">
+                            <thead>
+                                <tr>
+                                    <th>Frequency</th>
+                                    <th>Power</th>
+                                    <th>Noise Floor</th>
+                                    <th>Node</th>
+                                    <th>Time</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="wb-peaks-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="wb-peaks-empty" style="display:none;">No peaks detected</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             BLUETOOTH TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-bluetooth" role="tabpanel">
+            <section class="card" id="panel-bluetooth">
+                <div class="card-header" data-collapse="bluetooth">
+                    <h2 class="card-title" data-help-label="Bluetooth SIGINT" data-help="Shows received Bluetooth observations and anomalies. This tab requires an explicit live Bluetooth scanner report; general node connectivity is insufficient.">Bluetooth SIGINT</h2>
+                    <span class="card-badge" id="bt-device-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="bluetooth-content">
+                    <!-- BT stats summary bar -->
+                    <div class="wifi-stats-bar" id="bt-stats-bar">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="bt-stat-total">--</div>
+                            <div class="det-kpi-label">Total Devices</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="bt-stat-ble">--</div>
+                            <div class="det-kpi-label">BLE</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="bt-stat-classic">--</div>
+                            <div class="det-kpi-label">Classic</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="bt-stat-anomalies">--</div>
+                            <div class="det-kpi-label">Anomalies</div>
+                        </div>
+                    </div>
+
+                    <!-- Device type toggle -->
+                    <div class="wifi-band-toggle" id="bt-type-toggle">
+                        <button class="det-timeline-btn active" data-bt-type="all">All</button>
+                        <button class="det-timeline-btn" data-bt-type="ble">BLE</button>
+                        <button class="det-timeline-btn" data-bt-type="classic">Classic</button>
+                        <button class="det-timeline-btn" data-bt-type="dual">Dual</button>
+                    </div>
+
+                    <!-- Manufacturer search -->
+                    <div style="margin:12px 0;">
+                        <input type="text" id="bt-manufacturer-search" placeholder="Search by manufacturer or device name..." class="anomaly-select" style="width:400px;max-width:100%;">
+                    </div>
+
+                    <!-- BT Anomalies -->
+                    <h3 class="sub-heading" data-help-label="BT Anomalies" data-help="Highlights Bluetooth observations scored as unusual. Review supporting device and timing details before acting.">BT Anomalies <span class="card-badge" id="bt-anomaly-count-badge">0</span></h3>
+                    <div class="bulk-action-bar" id="bt-bulk-bar" style="display:none" role="toolbar" aria-label="Bulk actions for selected BT anomalies">
+                        <label class="bulk-select-toggle" id="bt-select-all-label">
+                            <input type="checkbox" id="bt-select-all" aria-label="Select all BT anomalies">
+                            <span>Select All</span>
+                        </label>
+                        <span class="bulk-count" id="bt-bulk-count">0 selected</span>
+                        <button class="btn btn-sm" id="bt-bulk-dismiss" disabled aria-label="Dismiss selected BT anomalies">Dismiss Selected</button>
+                        <button class="btn btn-sm btn-secondary" id="bt-bulk-snooze" disabled aria-label="Snooze selected BT anomalies">Snooze 24h</button>
+                    </div>
+                    <div class="anomaly-queue" id="bt-anomaly-queue" role="list" aria-label="Bluetooth anomaly queue"></div>
+                    <p class="empty-state" id="bt-anomaly-empty">No Bluetooth anomalies detected</p>
+
+                    <!-- Device discovery table -->
+                    <h3 class="sub-heading" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                        Discovered Devices
+                        <label style="font-size:12px;font-weight:normal;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                            Show
+                            <select id="bt-device-show-select" class="anomaly-select" style="font-size:12px;padding:2px 6px;">
+                                <option value="all">All</option>
+                                <option value="authorized">Authorized</option>
+                                <option value="unauthorized">Unauthorized</option>
+                            </select>
+                        </label>
+                    </h3>
+                    <div class="table-wrap">
+                        <table class="data-table" id="bt-device-table">
+                            <thead>
+                                <tr>
+                                    <th>Address</th>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Manufacturer</th>
+                                    <th>RSSI</th>
+                                    <th>Node</th>
+                                    <th>Services</th>
+                                    <th>Last Seen</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bt-device-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="bt-device-empty">No Bluetooth devices discovered</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             ZIGBEE TAB
+             ============================================================ -->
+        
+        <div class="tab-content" id="tab-zigbee" role="tabpanel">
+            <section class="card" id="panel-zigbee">
+                <div class="card-header" data-collapse="zigbee">
+                    <h2 class="card-title" data-help-label="Zigbee" data-help="Shows available Zigbee observations. This tab requires a live Zigbee scanner report; connected USB hardware alone does not enable it.">Zigbee</h2>
+                    <span class="card-badge" id="zb-device-count-badge">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="zigbee-content">
+                    <!-- ZB stats summary bar -->
+                    <div class="wifi-stats-bar" id="zb-stats-bar">
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-stat-total">--</div>
+                            <div class="det-kpi-label">Total Devices</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-stat-pan-ids">--</div>
+                            <div class="det-kpi-label">PAN IDs</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-stat-coordinators">--</div>
+                            <div class="det-kpi-label">Coordinators</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-stat-routers">--</div>
+                            <div class="det-kpi-label">Routers</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-stat-end-devices">--</div>
+                            <div class="det-kpi-label">End Devices</div>
+                        </div>
+                        <div class="det-kpi">
+                            <div class="det-kpi-value" id="zb-energy-mini" style="display:flex;gap:2px;"></div>
+                            <div class="det-kpi-label">Ch Energy</div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-view toggle: Table | Topology | Energy -->
+                    <div class="wifi-band-toggle" id="zb-subview-toggle" style="margin-bottom:8px;">
+                        <button class="det-timeline-btn active" data-zb-subview="table">Device Table</button>
+                        <button class="det-timeline-btn" data-zb-subview="topology">Network Topology</button>
+                        <button class="det-timeline-btn" data-zb-subview="energy">Channel Energy</button>
+                    </div>
+
+                    <!-- Device type toggle -->
+                    <div class="wifi-band-toggle" id="zb-type-toggle">
+                        <button class="det-timeline-btn active" data-zb-type="all">All</button>
+                        <button class="det-timeline-btn" data-zb-type="coordinator">Coordinator</button>
+                        <button class="det-timeline-btn" data-zb-type="router">Router</button>
+                        <button class="det-timeline-btn" data-zb-type="end_device">End Device</button>
+                    </div>
+
+                    <!-- Search -->
+                    <div style="margin:12px 0;">
+                        <input type="text" id="zb-search" placeholder="Search by manufacturer, name, or PAN ID..." class="anomaly-select" style="width:400px;max-width:100%;">
+                    </div>
+
+                    <!-- TABLE sub-view -->
+                    <div id="zb-view-table">
+                        <div class="table-wrap">
+                            <table class="data-table" id="zb-device-table">
+                                <thead>
+                                    <tr>
+                                        <th>IEEE Address</th>
+                                        <th>Short Addr</th>
+                                        <th>Name</th>
+                                        <th>Type</th>
+                                        <th>PAN ID</th>
+                                        <th>Channel</th>
+                                        <th>Manufacturer</th>
+                                        <th>RSSI</th>
+                                        <th>LQI</th>
+                                        <th>Power</th>
+                                        <th>Sec</th>
+                                        <th>Node</th>
+                                        <th>Last Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="zb-device-tbody"></tbody>
+                            </table>
+                        </div>
+                        <p class="empty-state" id="zb-device-empty">No Zigbee devices discovered</p>
+                    </div>
+
+                    <!-- TOPOLOGY sub-view -->
+                    <div id="zb-view-topology" style="display:none;">
+                        <div id="zb-topology-container"></div>
+                    </div>
+
+                    <!-- ENERGY sub-view -->
+                    <div id="zb-view-energy" style="display:none;">
+                        <div id="zb-energy-container"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        
+
+        <!-- ============================================================
+             ADS-B TAB
+             ============================================================ -->
+        
+        <div class="tab-content" id="tab-adsb" role="tabpanel">
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="ADS-B / UAT Aircraft Tracking" data-help="Displays received aviation decoder observations. This tab requires an explicit live decoder report, not just an active SDR scanner.">ADS-B / UAT Aircraft Tracking</h2>
+                </div>
+                <div class="card-content">
+                    <div id="adsb-map" style="height:400px;background:var(--bg-secondary);border-radius:8px;margin-bottom:16px;display:flex;align-items:center;justify-content:center;color:var(--text-dim)">
+                        Aircraft map loads here
+                    </div>
+                    <div class="table-wrap">
+                        <table id="aircraft-table" class="data-table">
+                            <thead><tr><th>ICAO</th><th>Callsign</th><th>Source</th><th>Altitude</th><th>Speed</th><th>Position</th><th>RSSI</th><th>Last Seen</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+        
+
+        <!-- ============================================================
+             DRONE TAB
+             ============================================================ -->
+        
+        <div class="tab-content" id="tab-drone" role="tabpanel">
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Drone / UAV Detection" data-help="Reviews RF observations classified as possible drone activity. An RF classification alone does not confirm a drone or its location.">Drone / UAV Detection</h2>
+                </div>
+                <div class="card-content">
+                    <div class="table-wrap">
+                        <table id="drone-table" class="data-table">
+                            <thead><tr><th>Type</th><th>Protocol</th><th>Frequency</th><th>Power</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+        
+
+        <!-- ============================================================
+             IoT TAB
+             ============================================================ -->
+        
+        <div class="tab-content" id="tab-iot" role="tabpanel">
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="IoT Protocol Activity" data-help="Groups RF observations by supported IoT protocol classifications. Check confidence and supporting data before identifying a device.">IoT Protocol Activity</h2>
+                </div>
+                <div class="card-content">
+                    <div class="metrics-grid">
+                        <div class="stat-card"><div class="stat-value" id="zwave-devices">0</div><div class="stat-label">Z-Wave</div></div>
+                        <div class="stat-card"><div class="stat-value" id="tpms-ids">0</div><div class="stat-label">TPMS</div></div>
+                        <div class="stat-card"><div class="stat-value" id="ism433-activity">0</div><div class="stat-label">433 MHz</div></div>
+                        <div class="stat-card"><div class="stat-value" id="nrf24-channels">0</div><div class="stat-label">nRF24</div></div>
+                        <div class="stat-card"><div class="stat-value" id="sigfox-msgs">0</div><div class="stat-label">Sigfox</div></div>
+                        <div class="stat-card"><div class="stat-value" id="sidewalk-msgs">0</div><div class="stat-label">Sidewalk</div></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        
+
+        <!-- ============================================================
+             INCIDENTS TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-incidents" role="tabpanel">
+            <!-- Incident Stats Bar -->
+            <div class="stat-row" id="incidents-stat-row">
+                <div class="stat-card">
+                    <div class="stat-value" id="inc-stat-total">--</div>
+                    <div class="stat-label">Total</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-red);" id="inc-stat-open">--</div>
+                    <div class="stat-label">Open</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-blue);" id="inc-stat-investigating">--</div>
+                    <div class="stat-label">Investigating</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-purple);" id="inc-stat-escalated">--</div>
+                    <div class="stat-label">Escalated</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="inc-stat-mtta">--</div>
+                    <div class="stat-label">MTTA</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="inc-stat-mttr">--</div>
+                    <div class="stat-label">MTTR</div>
+                </div>
+            </div>
+
+            <section class="card" id="panel-incidents">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Incident Management" data-help="Organize observations into investigations and track their status. Creating an incident records your workflow; it does not verify the underlying threat.">Incident Management</h2>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="btn btn-sm btn-primary" id="inc-create-btn">New Incident</button>
+                        <button class="btn btn-sm" id="inc-refresh-btn">Refresh</button>
+                    </div>
+                </div>
+                <div class="card-content">
+                    <!-- Create Incident Form (hidden by default) -->
+                    <div id="incident-create-form" style="display:none;background:var(--bg-secondary);padding:16px;border-radius:6px;margin-bottom:16px;border:1px solid var(--border-color);">
+                        <h3 style="margin:0 0 12px;">Create Incident</h3>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Title *</label>
+                                <input type="text" id="inc-create-title" class="form-input" placeholder="Incident title" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Severity</label>
+                                <select id="inc-create-severity" class="form-input" style="width:100%;">
+                                    <option value="info">Info</option>
+                                    <option value="warning" selected>Warning</option>
+                                    <option value="high">High</option>
+                                    <option value="critical">Critical</option>
+                                </select>
+                            </div>
+                            <div style="grid-column:1/-1;">
+                                <label style="font-size:0.85em;font-weight:600;">Description</label>
+                                <input type="text" id="inc-create-desc" class="form-input" placeholder="Description (optional)" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Node ID</label>
+                                <input type="text" id="inc-create-node" class="form-input" placeholder="Node ID (optional)" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Frequency (Hz)</label>
+                                <input type="number" id="inc-create-freq" class="form-input" placeholder="e.g. 2437000000" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Signal Class</label>
+                                <input type="text" id="inc-create-class" class="form-input" placeholder="Signal class (optional)" style="width:100%;">
+                            </div>
+                        </div>
+                        <div style="margin-top:12px;display:flex;gap:8px;">
+                            <button class="btn btn-sm btn-primary" id="inc-create-submit">Create</button>
+                            <button class="btn btn-sm" id="inc-create-cancel">Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- Filters -->
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                        <select id="inc-filter-status" class="form-input">
+                            <option value="">All Statuses</option>
+                            <option value="open">Open</option>
+                            <option value="investigating">Investigating</option>
+                            <option value="escalated">Escalated</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                        <select id="inc-filter-severity" class="form-input">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                        <input type="text" id="inc-filter-assigned" class="form-input" placeholder="Assigned to...">
+                    </div>
+
+                    <!-- Incident Table -->
+                    <div class="table-wrap">
+                        <table class="data-table" id="incidents-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Title</th>
+                                    <th>Severity</th>
+                                    <th>Status</th>
+                                    <th>Assigned To</th>
+                                    <th>Created</th>
+                                    <th>Updated</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="incidents-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="incidents-empty">No incidents</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             THREATS TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-threats" role="tabpanel">
+            <!-- Threat Stats Bar -->
+            <div class="stat-row" id="threats-stat-row">
+                <div class="stat-card">
+                    <div class="stat-value" id="threat-stat-total">--</div>
+                    <div class="stat-label">Total Signatures</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="threat-stat-threats">--</div>
+                    <div class="stat-label">Threat Sigs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-red);" id="threat-stat-critical">0</div>
+                    <div class="stat-label">Critical</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-yellow);" id="threat-stat-high">0</div>
+                    <div class="stat-label">High</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:#fefcbf;" id="threat-stat-medium">0</div>
+                    <div class="stat-label">Medium</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:var(--accent-green);" id="threat-stat-low">0</div>
+                    <div class="stat-label">Low</div>
+                </div>
+            </div>
+            <div style="font-size:0.85em;color:var(--text-secondary);margin-bottom:12px;">
+                <strong>Categories:</strong> <span id="threat-stat-categories">--</span>
+            </div>
+
+            <section class="card" id="panel-threats">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Threat Signature Library" data-help="Manage patterns used to match observations. Test a signature against known examples and review matches for false positives.">Threat Signature Library</h2>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="btn btn-sm btn-primary" id="threat-create-btn">New Signature</button>
+                        <button class="btn btn-sm" id="threat-seed-btn">Seed Defaults</button>
+                        <button class="btn btn-sm" id="threat-refresh-btn">Refresh</button>
+                    </div>
+                </div>
+                <div class="card-content">
+                    <!-- Create Threat Form (hidden by default) -->
+                    <div id="threat-create-form" style="display:none;background:var(--bg-secondary);padding:16px;border-radius:6px;margin-bottom:16px;border:1px solid var(--border-color);">
+                        <h3 style="margin:0 0 12px;">Create Threat Signature</h3>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Name *</label>
+                                <input type="text" id="threat-create-name" class="form-input" placeholder="Signature name" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Protocol</label>
+                                <input type="text" id="threat-create-protocol" class="form-input" placeholder="e.g. analog_fm" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Signal Class</label>
+                                <input type="text" id="threat-create-signal-class" class="form-input" placeholder="e.g. unknown" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Threat Category</label>
+                                <select id="threat-create-category" class="form-input" style="width:100%;">
+                                    <option value="">-- select --</option>
+                                    <option value="covert_mic">Covert Mic</option>
+                                    <option value="video_tx">Video TX</option>
+                                    <option value="body_worn_tx">Body Worn TX</option>
+                                    <option value="gps_tracker">GPS Tracker</option>
+                                    <option value="jammer">Jammer</option>
+                                    <option value="remote_control">Remote Control</option>
+                                    <option value="imsi_catcher">IMSI Catcher</option>
+                                    <option value="drone_surveillance">Drone Surveillance</option>
+                                    <option value="data_exfil">Data Exfil</option>
+                                    <option value="surveillance_infra">Surveillance Infra</option>
+                                    <option value="counter_surveillance">Counter Surveillance</option>
+                                    <option value="unknown_threat">Unknown Threat</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Threat Level</label>
+                                <select id="threat-create-level" class="form-input" style="width:100%;">
+                                    <option value="">-- select --</option>
+                                    <option value="critical">Critical</option>
+                                    <option value="high">High</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="low">Low</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Center Freq (Hz)</label>
+                                <input type="number" id="threat-create-center-freq" class="form-input" placeholder="e.g. 433920000" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Freq Min (Hz)</label>
+                                <input type="number" id="threat-create-freq-min" class="form-input" placeholder="e.g. 433000000" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Freq Max (Hz)</label>
+                                <input type="number" id="threat-create-freq-max" class="form-input" placeholder="e.g. 434000000" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Power Min (dBm)</label>
+                                <input type="number" id="threat-create-power-min" class="form-input" placeholder="e.g. -80" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Power Max (dBm)</label>
+                                <input type="number" id="threat-create-power-max" class="form-input" placeholder="e.g. -20" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Burst Duration (ms)</label>
+                                <input type="number" id="threat-create-burst-duration" class="form-input" placeholder="e.g. 50" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-size:0.85em;font-weight:600;">Burst Interval (ms)</label>
+                                <input type="number" id="threat-create-burst-interval" class="form-input" placeholder="e.g. 500" style="width:100%;">
+                            </div>
+                            <div style="grid-column:1/-1;">
+                                <label style="font-size:0.85em;font-weight:600;">Description</label>
+                                <input type="text" id="threat-create-description" class="form-input" placeholder="Description of the threat signature" style="width:100%;">
+                            </div>
+                        </div>
+                        <div style="margin-top:12px;display:flex;gap:8px;">
+                            <button class="btn btn-sm btn-primary" id="threat-create-submit">Create</button>
+                            <button class="btn btn-sm" id="threat-create-cancel">Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- Filters -->
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                        <select id="threat-filter-category" class="form-input">
+                            <option value="">All Categories</option>
+                            <option value="covert_mic">Covert Mic</option>
+                            <option value="video_tx">Video TX</option>
+                            <option value="body_worn_tx">Body Worn TX</option>
+                            <option value="gps_tracker">GPS Tracker</option>
+                            <option value="jammer">Jammer</option>
+                            <option value="remote_control">Remote Control</option>
+                            <option value="imsi_catcher">IMSI Catcher</option>
+                            <option value="drone_surveillance">Drone Surveillance</option>
+                            <option value="data_exfil">Data Exfil</option>
+                            <option value="surveillance_infra">Surveillance Infra</option>
+                            <option value="counter_surveillance">Counter Surveillance</option>
+                            <option value="unknown_threat">Unknown Threat</option>
+                        </select>
+                        <select id="threat-filter-level" class="form-input">
+                            <option value="">All Levels</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                        <input type="text" id="threat-filter-search" class="form-input" placeholder="Search signatures...">
+                    </div>
+
+                    <!-- Threat Table -->
+                    <div class="table-wrap">
+                        <table class="data-table" id="threats-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Category</th>
+                                    <th>Level</th>
+                                    <th>Signal Class</th>
+                                    <th>Frequency Range</th>
+                                    <th>Description</th>
+                                    <th>Active</th>
+                                </tr>
+                            </thead>
+                            <tbody id="threats-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="threats-empty">No threat signatures — click "Seed Defaults" to add curated TSCM signatures</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ============================================================
+             ALERTS TAB
+             ============================================================ -->
+        <div class="tab-content" id="tab-alerts" role="tabpanel">
+            <!-- Alert Summary Stats -->
+            <div class="stat-row" id="alerts-stat-row">
+                <div class="stat-card" id="alerts-stat-critical">
+                    <div class="stat-value" style="color:var(--accent-red);" id="alerts-count-critical">0</div>
+                    <div class="stat-label">Critical</div>
+                </div>
+                <div class="stat-card" id="alerts-stat-warning">
+                    <div class="stat-value" style="color:var(--accent-yellow);" id="alerts-count-warning">0</div>
+                    <div class="stat-label">Warning</div>
+                </div>
+                <div class="stat-card" id="alerts-stat-info">
+                    <div class="stat-value" style="color:var(--accent-blue);" id="alerts-count-info">0</div>
+                    <div class="stat-label">Info</div>
+                </div>
+                <div class="stat-card" id="alerts-stat-total">
+                    <div class="stat-value" style="color:var(--accent-purple);" id="alerts-count-total">0</div>
+                    <div class="stat-label">Total Unacked</div>
+                </div>
+            </div>
+
+            <!-- Alert Analysis -->
+            <section class="card" id="panel-alert-analysis">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Alert analysis" data-help="The most common RF frequencies and alert types in the Alert Feed's time window, open alerts first. Mark a recurring frequency as known to suppress its future RF alerts and, if you choose, acknowledge the open alerts it covers. Detections and alert history are kept.">Alert analysis</h2>
+                </div>
+                <div class="card-content">
+                    <div class="alerts-tab-controls">
+                        <span id="alert-analysis-summary" class="alert-analysis-summary"></span>
+                        <div class="alerts-tab-actions">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="alert-analysis-include-acked"> Include acknowledged
+                            </label>
+                            <button class="btn btn-sm" id="alert-analysis-refresh" type="button">Refresh</button>
+                        </div>
+                    </div>
+                    <h3 class="alert-analysis-heading">Most common frequencies</h3>
+                    <div class="table-wrap">
+                        <table class="data-table" id="alert-analysis-freq-table">
+                            <thead>
+                                <tr><th>Frequency</th><th>Node</th><th>Classes</th><th>Alert types</th><th>Open / total</th><th>Actions</th></tr>
+                            </thead>
+                            <tbody id="alert-analysis-freq-body"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="alert-analysis-freq-empty">No RF alerts with a linked detection in this window</p>
+                    <h3 class="alert-analysis-heading">Most common alert types</h3>
+                    <div class="table-wrap">
+                        <table class="data-table" id="alert-analysis-type-table">
+                            <thead>
+                                <tr><th>Alert type</th><th>Severities</th><th>Top frequencies</th><th>Open / total</th></tr>
+                            </thead>
+                            <tbody id="alert-analysis-type-body"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="alert-analysis-type-empty">No alerts in this window</p>
+                </div>
+            </section>
+
+            <!-- Alert Filters -->
+            <section class="card" id="panel-alerts-tab">
+                <div class="card-header">
+                    <h2 class="card-title" data-help-label="Alert Feed" data-help="Review triggered alerts and their status. Acknowledging records that you have seen an alert; it does not change the underlying radio conditions.">Alert Feed</h2>
+                    <span class="card-badge" id="alerts-tab-badge">0</span>
+                </div>
+                <div class="card-content">
+                    <div class="alerts-tab-controls">
+                        <div class="alerts-tab-filters">
+                            <select id="alerts-tab-priority" class="form-input">
+                                <option value="">All Priorities</option>
+                                <option value="critical">Critical</option>
+                                <option value="warning">Warning</option>
+                                <option value="info">Info</option>
+                            </select>
+                            <select id="alerts-tab-time" class="form-input">
+                                <option value="1">Last 1 hour</option>
+                                <option value="6">Last 6 hours</option>
+                                <option value="24" selected>Last 24 hours</option>
+                                <option value="168">Last 7 days</option>
+                                <option value="">All time</option>
+                            </select>
+                            <select id="alerts-tab-node" class="form-input">
+                                <option value="">All Nodes</option>
+                            </select>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="alerts-tab-hide-acked"> Hide acknowledged
+                            </label>
+                        </div>
+                        <div class="alerts-tab-actions">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="alerts-tab-autorefresh" checked> Auto-refresh
+                            </label>
+                            <button class="btn btn-sm" id="alerts-tab-refresh-btn">Refresh</button>
+                            <span data-help-label="Alert settings" data-help="Suppress future RF alerts for reviewed frequency ranges, such as the FM broadcast band. Choose the range and receiver scope explicitly; detections and spectrum remain available. This is manual suppression, not automatic detection of new frequencies."><button class="btn btn-sm btn-primary" id="alerts-settings-btn">Alert settings</button></span>
+                            <span data-help-label="Known RF patterns" data-help="Review or change saved RF alert suppression patterns, including when no alerts are listed. These rules leave detections and scores unchanged; removing a rule enables future matching alerts again. Detection-database backups include them; config-only exports do not."><button class="btn btn-sm" id="known-signals-manage">Known RF patterns</button></span>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="alerts-tab-table">
+                            <thead>
+                                <tr>
+                                    <th data-sort="triggered_at" class="sortable">Timestamp</th>
+                                    <th data-sort="severity" class="sortable">Priority</th>
+                                    <th data-sort="name">Signal / Rule</th>
+                                    <th>Message</th>
+                                    <th data-sort="node_id" class="sortable">Node</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="alerts-tab-tbody"></tbody>
+                        </table>
+                    </div>
+                    <p class="empty-state" id="alerts-tab-empty">No alerts</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- Deployment Tab -->
+        <div class="tab-content" id="tab-deployment" role="tabpanel">
+            <section class="card" id="panel-deployment">
+                <div class="card-header" data-collapse="deployment">
+                    <h2 class="card-title" data-help-label="Deployment Status" data-help="Shows recent node contact and scanner activity. Optional SSH audits provide additional host details; SSH setup is not required for normal scanning.">Deployment Status</h2>
+                    <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+                </div>
+                <div class="card-content" id="deployment-content">
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+                        <button class="btn btn-sm btn-primary" id="deploy-refresh-btn">Refresh</button>
+                        <span id="deploy-cache-info" style="font-size:12px;color:var(--text-secondary);"></span>
+                    </div>
+                    <div class="table-wrap" id="deploy-table-wrap"></div>
+                    <p class="empty-state" id="deploy-empty">Click Refresh to view node and scanner reports. SSH host auditing is optional.</p>
+                </div>
+            </section>
+        </div>
+
+    </main>
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <button id="modal-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer"></div>
+        </div>
+    </div>
+
+    <!-- Wide Modal (for deep-dive) -->
+    <div id="modal-wide-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog modal-wide" role="dialog" aria-modal="true" aria-labelledby="modal-wide-title">
+            <div class="modal-header">
+                <h3 id="modal-wide-title"></h3>
+                <button id="modal-wide-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-wide-body"></div>
+            <div class="modal-footer" id="modal-wide-footer"></div>
+        </div>
+    </div>
+
+    <!-- Deep-Dive Modal -->
+    <div id="deep-dive-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog modal-wide" role="dialog" aria-modal="true" aria-labelledby="deep-dive-title">
+            <div class="modal-header">
+                <h3 id="deep-dive-title">Signal Deep-Dive</h3>
+                <button id="deep-dive-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="deep-dive-body">
+                <!-- IQ Source Indicator -->
+                <div class="iq-source-indicator" id="dd-iq-source"></div>
+
+                <!-- Signal visualization row -->
+                <div class="deep-dive-canvases">
+                    <div class="canvas-panel">
+                        <h4 data-help-label="IQ Constellation" data-help="Plots the in-phase and quadrature samples when available. Use its shape as evidence for analysis, not a definitive protocol label.">IQ Constellation</h4>
+                        <canvas id="dd-constellation" width="300" height="300"></canvas>
+                    </div>
+                    <div class="canvas-panel">
+                        <h4 data-help-label="Power Spectral Density" data-help="Shows signal power across frequency for available samples. Compare the capture settings before comparing different recordings.">Power Spectral Density</h4>
+                        <canvas id="dd-psd" width="400" height="200"></canvas>
+                    </div>
+                    <div class="canvas-panel">
+                        <h4 data-help-label="DSP Features" data-help="Shows features calculated from the available samples. Missing features can mean the recording lacks the required data.">DSP Features</h4>
+                        <canvas id="dd-features" width="400" height="200"></canvas>
+                    </div>
+                    <div class="canvas-panel">
+                        <h4>Time-Domain I/Q</h4>
+                        <canvas id="dd-timedomain" width="400" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Spectrogram / Waterfall Viewer -->
+                <div class="card spectrogram-card" id="spectrogram-card" style="display:none">
+                    <div class="card-header">
+                        <h4 class="card-title" style="margin:0;">Spectrogram</h4>
+                    </div>
+                    <div class="card-content">
+                        <div class="spectrogram-controls">
+                            <label class="sg-ctrl-label">NFFT:
+                                <select id="sg-nfft" class="form-input sg-select">
+                                    <option value="64">64</option>
+                                    <option value="128">128</option>
+                                    <option value="256" selected>256</option>
+                                    <option value="512">512</option>
+                                    <option value="1024">1024</option>
+                                </select>
+                            </label>
+                            <label class="sg-ctrl-label">Window:
+                                <select id="sg-window" class="form-input sg-select">
+                                    <option value="hann" selected>Hann</option>
+                                    <option value="hamming">Hamming</option>
+                                    <option value="blackman">Blackman</option>
+                                </select>
+                            </label>
+                            <label class="sg-ctrl-label">Colormap:
+                                <select id="sg-colormap" class="form-input sg-select">
+                                    <option value="jet" selected>Jet</option>
+                                    <option value="viridis">Viridis</option>
+                                    <option value="hot">Hot</option>
+                                </select>
+                            </label>
+                            <button type="button" id="sg-export-png" class="btn btn-sm btn-secondary">Export PNG</button>
+                        </div>
+                        <canvas id="spectrogram-canvas" width="900" height="400"></canvas>
+                    </div>
+                </div>
+
+                <!-- Detection context -->
+                <div class="deep-dive-context" id="dd-context"></div>
+                <button class="btn btn-sm" id="dd-mark-known" style="display:none;">Mark this RF detection as known…</button>
+
+                <!-- Baseline comparison -->
+                <h4 class="sub-heading" data-help-label="Baseline Comparison" data-help="Compares the observation with available baseline data. A match provides context, not a guarantee that the activity is harmless.">Baseline Comparison</h4>
+                <div class="deep-dive-baseline" id="dd-baseline"></div>
+
+                <!-- Historical activity -->
+                <h4 class="sub-heading" data-help-label="Historical Activity (48h)" data-help="Reviews available recent history for this observation. Retention and capture gaps can limit the comparison.">Historical Activity (48h)</h4>
+                <canvas id="dd-history-sparkline" width="800" height="60"></canvas>
+
+                <!-- Investigation Checklist -->
+                <h4 class="sub-heading" data-help-label="Investigation Checklist" data-help="Provides a review checklist for the current observation. Record evidence before concluding that a signal is expected or threatening.">Investigation Checklist</h4>
+                <div class="investigation-checklist" id="dd-investigation-checklist"></div>
+                <div class="investigation-recommendation" id="dd-investigation-recommendation"></div>
+            </div>
+            <div class="modal-footer" id="deep-dive-footer">
+                <div class="dd-feedback-group" id="dd-feedback-group" style="display:none;">
+                    <span class="dd-feedback-label">Classify:</span>
+                    <button class="btn btn-sm btn-danger" data-feedback="true_positive" title="Confirmed real threat">Threat</button>
+                    <button class="btn btn-sm btn-success" data-feedback="false_positive" title="Not anomalous">False Positive</button>
+                    <button class="btn btn-sm btn-secondary" data-feedback="expected" title="Known/expected signal">Expected</button>
+                    <button class="btn btn-sm btn-info" data-feedback="interesting" title="Worth further investigation">Interesting</button>
+                </div>
+                <button class="btn btn-secondary" id="dd-gen-ref">Generate Reference</button>
+                <button class="btn btn-secondary" id="dd-download-iq" style="display:none;">Download IQ</button>
+                <button class="btn btn-secondary" id="dd-capture-iq">Capture IQ</button>
+                <button class="btn btn-secondary" id="dd-view-nodes">View on All Nodes</button>
+                <button class="btn btn-secondary" id="dd-export">Export Data</button>
+                <button class="btn btn-primary" id="dd-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- WiFi Investigation Modal -->
+    <div id="wifi-investigate-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog modal-wide" role="dialog" aria-modal="true" aria-labelledby="wifi-investigate-title">
+            <div class="modal-header">
+                <h3 id="wifi-investigate-title">WiFi Investigation</h3>
+                <button id="wifi-investigate-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="wifi-investigate-body">
+                <div class="deep-dive-context" id="wifi-inv-context"></div>
+                <h4 class="sub-heading" data-help-label="Investigation Checklist" data-help="Provides a review checklist for the current observation. Record evidence before concluding that a signal is expected or threatening.">Investigation Checklist</h4>
+                <div class="investigation-checklist" id="wifi-inv-checklist"></div>
+                <div class="investigation-recommendation" id="wifi-inv-recommendation"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="wifi-investigate-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Node Comparison Modal -->
+    <div id="node-compare-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog modal-wide" role="dialog" aria-modal="true" aria-labelledby="node-compare-title">
+            <div class="modal-header">
+                <h3 id="node-compare-title">Node Comparison</h3>
+                <button id="node-compare-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="node-compare-body">
+                <div class="node-compare-selector" id="nc-selector"></div>
+                <div class="node-compare-layout">
+                    <div class="canvas-panel">
+                        <h4>Family Distribution (Radar)</h4>
+                        <canvas id="nc-radar" width="400" height="400"></canvas>
+                    </div>
+                    <div class="node-compare-details">
+                        <h4>Cross-Correlation</h4>
+                        <div id="nc-correlation" class="table-wrap"></div>
+                        <h4 class="sub-heading">Detection Timeline</h4>
+                        <canvas id="nc-timeline" width="500" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="nc-refresh">Refresh</button>
+                <button class="btn btn-secondary" id="nc-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- IQ Capture Dialog -->
+    <div id="iq-capture-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="iq-capture-title">
+            <div class="modal-header">
+                <h3 id="iq-capture-title">Manual IQ Capture</h3>
+                <button id="iq-capture-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom:10px;">
+                    <label for="iq-capture-node-id">Target Node</label>
+                    <select id="iq-capture-node-id" class="form-input"></select>
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                    <label for="iq-capture-freq">Frequency (MHz)</label>
+                    <input type="number" id="iq-capture-freq" class="form-input" value="433.920" step="0.001" min="0.1" max="6000">
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                    <label for="iq-capture-duration">Duration (ms)</label>
+                    <input type="number" id="iq-capture-duration" class="form-input" value="1000" min="10" max="30000" step="100">
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                    <label for="iq-capture-samplerate">Sample Rate (MHz)</label>
+                    <input type="number" id="iq-capture-samplerate" class="form-input" value="2.4" step="0.1" min="0.1" max="20">
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                    <label for="iq-capture-gain">Gain (dB)</label>
+                    <input type="number" id="iq-capture-gain" class="form-input" value="" placeholder="node scan gain" min="0" max="102" step="1">
+                </div>
+                <div id="iq-capture-status" style="display:none;margin-top:8px;font-size:0.9em;"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="iq-capture-submit" class="btn btn-primary">Queue Capture</button>
+                <button id="iq-capture-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MFA Settings Modal -->
+    <div id="mfa-settings-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="mfa-settings-title" style="max-width:480px;">
+            <div class="modal-header">
+                <h3 id="mfa-settings-title">User Settings</h3>
+                <button id="mfa-settings-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="mfa-settings-body">
+                <div id="mfa-loading" style="text-align:center;padding:20px;color:var(--text-secondary);">Loading...</div>
+                <div id="mfa-content" style="display:none;">
+                    <h4 style="margin:0 0 12px 0;font-size:0.95em;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;">Multi-Factor Authentication</h4>
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                        <span style="font-size:0.9em;">Status:</span>
+                        <span id="mfa-status-badge" style="padding:3px 10px;border-radius:4px;font-size:0.85em;font-weight:600;"></span>
+                    </div>
+                    <!-- MFA disabled: show enable -->
+                    <div id="mfa-enable-section" style="display:none;">
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 12px 0;">
+                            Enable TOTP-based two-factor authentication to secure your account.
+                        </p>
+                        <button id="mfa-enable-btn" class="btn btn-primary" style="width:100%;">Enable MFA</button>
+                    </div>
+                    <!-- MFA setup flow -->
+                    <div id="mfa-setup-section" style="display:none;">
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 8px 0;">
+                            Scan this provisioning URI in your authenticator app (Google Authenticator, Authy, etc.):
+                        </p>
+                        <div id="mfa-provisioning-uri" style="background:var(--bg-tertiary);padding:10px;border-radius:6px;font-family:monospace;font-size:0.8em;word-break:break-all;margin-bottom:12px;user-select:all;"></div>
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 4px 0;">TOTP Secret (manual entry):</p>
+                        <div id="mfa-secret-display" style="background:var(--bg-tertiary);padding:10px;border-radius:6px;font-family:monospace;font-size:0.9em;letter-spacing:2px;text-align:center;margin-bottom:12px;user-select:all;"></div>
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 4px 0;">Backup codes (save these securely):</p>
+                        <div id="mfa-backup-codes-display" style="background:var(--bg-tertiary);padding:10px;border-radius:6px;font-family:monospace;font-size:0.85em;margin-bottom:12px;columns:2;"></div>
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 8px 0;">
+                            Enter a code from your authenticator to verify setup:
+                        </p>
+                        <div style="display:flex;gap:8px;">
+                            <input type="text" id="mfa-verify-code" class="form-input" placeholder="6-digit code" maxlength="6" pattern="[0-9]{6}" style="flex:1;font-family:monospace;font-size:1.1em;letter-spacing:4px;text-align:center;">
+                            <button id="mfa-verify-setup-btn" class="btn btn-primary">Verify</button>
+                        </div>
+                        <div id="mfa-setup-error" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:rgba(255,60,60,0.15);color:#ff6b6b;font-size:0.85em;"></div>
+                    </div>
+                    <!-- MFA enabled: show disable + backup codes -->
+                    <div id="mfa-enabled-section" style="display:none;">
+                        <div style="margin-bottom:16px;">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                                <span style="font-size:0.9em;">Backup codes remaining:</span>
+                                <span id="mfa-backup-count" style="font-weight:600;"></span>
+                            </div>
+                            <button id="mfa-regen-codes-btn" class="btn btn-secondary" style="width:100%;margin-bottom:8px;">Regenerate Backup Codes</button>
+                            <div id="mfa-regen-codes-display" style="display:none;background:var(--bg-tertiary);padding:10px;border-radius:6px;font-family:monospace;font-size:0.85em;margin-bottom:8px;columns:2;"></div>
+                        </div>
+                        <hr style="border:none;border-top:1px solid var(--border-color);margin:16px 0;">
+                        <p style="font-size:0.85em;color:var(--text-secondary);margin:0 0 8px 0;">
+                            To disable MFA, enter a current TOTP code:
+                        </p>
+                        <div style="display:flex;gap:8px;">
+                            <input type="text" id="mfa-disable-code" class="form-input" placeholder="6-digit code" maxlength="6" pattern="[0-9]{6}" style="flex:1;font-family:monospace;font-size:1.1em;letter-spacing:4px;text-align:center;">
+                            <button id="mfa-disable-btn" class="btn btn-secondary" style="color:#ff6b6b;border-color:#ff6b6b;">Disable MFA</button>
+                        </div>
+                        <div id="mfa-disable-error" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:rgba(255,60,60,0.15);color:#ff6b6b;font-size:0.85em;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- R14: Keyboard Shortcut Overlay -->
+    <div class="shortcut-overlay" id="shortcut-overlay">
+        <div class="shortcut-panel">
+            <h3>Keyboard Shortcuts</h3>
+            <div class="shortcut-row"><span class="shortcut-key">j</span><span class="shortcut-key">&darr;</span> <span class="shortcut-desc">Next anomaly</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">k</span><span class="shortcut-key">&uarr;</span> <span class="shortcut-desc">Previous anomaly</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">d</span> <span class="shortcut-desc">Dismiss focused anomaly</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">i</span><span class="shortcut-key">Enter</span> <span class="shortcut-desc">Investigate focused anomaly</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">b</span> <span class="shortcut-desc">Add focused anomaly to baseline</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">1</span>&ndash;<span class="shortcut-key">0</span> <span class="shortcut-desc">Switch to tab 1-10</span></div>
+            <div class="shortcut-row"><span class="shortcut-key">?</span> <span class="shortcut-desc">Toggle this overlay</span></div>
+            <div class="shortcut-close">Press <span class="shortcut-key">?</span> or <span class="shortcut-key">Esc</span> to close</div>
+        </div>
+    </div>
+
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+    </div><!-- /app-content -->
+
+    <link rel="stylesheet" href="{{ url_for('static', path='vendor/leaflet.css') }}">
+    <script src="{{ url_for('static', path='vendor/leaflet.js') }}"></script>
+    <script src="{{ url_for('static', path='chart_utils.js') }}?v=29"></script>
+    <!-- cog-review PR-14: severity dual-coding helper (window.severityIcon).
+         Must load before any module that renders .severity-badge markup. -->
+    <script src="{{ url_for('static', path='severity.js') }}?v=1"></script>
+    <script src="{{ url_for('static', path='html_text.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='scanner_availability.js') }}?v=3"></script>
+    <script src="{{ url_for('static', path='known_signals.js') }}?v=4"></script>
+    <script src="{{ url_for('static', path='alert_analysis.js') }}?v=1"></script>
+    <script src="{{ url_for('static', path='setup_checklist.js') }}?v=3"></script>
+    <script src="{{ url_for('static', path='dashboard.js') }}?v=1015"></script>
+    <script src="{{ url_for('static', path='detections.js') }}?v=42"></script>
+    <script src="{{ url_for('static', path='node_compare.js') }}?v=28"></script>
+    <script src="{{ url_for('static', path='spectrum.js') }}?v=30"></script>
+    <script src="{{ url_for('static', path='signals.js') }}?v=29"></script>
+    <script src="{{ url_for('static', path='wifi.js') }}?v=39"></script>
+    <script src="{{ url_for('static', path='geo_map.js') }}?v=35"></script>
+    <script src="{{ url_for('static', path='spectrum_analysis.js') }}?v=36"></script>
+    <script src="{{ url_for('static', path='spectrogram_viewer.js') }}?v=29"></script>
+    <script src="{{ url_for('static', path='bluetooth.js') }}?v=38"></script>
+    <script src="{{ url_for('static', path='zigbee.js') }}?v=38"></script>
+    <script src="{{ url_for('static', path='correlation.js') }}?v=28"></script>
+    <script src="{{ url_for('static', path='maps.js') }}?v=29"></script>
+    <script src="{{ url_for('static', path='adsb.js') }}?v=3"></script>
+    <script src="{{ url_for('static', path='drone.js') }}?v=3"></script>
+    <script src="{{ url_for('static', path='iot.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='incidents.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='threats.js') }}?v=3"></script>
+    <script src="{{ url_for('static', path='alerts.js') }}?v=40"></script>
+    <script src="{{ url_for('static', path='deployment.js') }}?v=32"></script>
+    <script src="{{ url_for('static', path='ux_enhancements.js') }}?v=4"></script>
+    <script src="{{ url_for('static', path='panel_help.js') }}?v=1"></script>
+</body>
+</html>

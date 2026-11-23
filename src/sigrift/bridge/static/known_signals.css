@@ -1,0 +1,12 @@
+.known-signal-dialog { width: min(640px, 90vw); max-height: 88vh; overflow-y: auto; color: var(--text-primary); background: var(--bg-card, #161b22); border: 1px solid var(--border-color, #30363d); border-radius: 10px; padding: 24px; }
+.known-signal-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.known-signal-dialog h2 { margin: 0 0 12px; }
+.known-signal-explanation, .known-signal-status { line-height: 1.5; }
+.known-signal-form label { display: block; margin: 12px 0; }
+.known-signal-form input:not([type="checkbox"]) { display: block; width: 100%; margin-top: 4px; }
+.known-signal-form input[type="checkbox"] { margin-left: 8px; }
+.known-signal-dialog .btn { margin: 4px 8px 4px 0; }
+.known-signal-entry { border-bottom: 1px solid var(--border-color, #30363d); padding: 8px 0; overflow-wrap: anywhere; }
+.alert-analysis-summary { color: var(--text-secondary); font-size: 13px; }
+.alert-analysis-heading { font-size: 14px; margin: 16px 0 8px; }
+.alert-analysis-known { color: var(--text-secondary); font-size: 12px; }

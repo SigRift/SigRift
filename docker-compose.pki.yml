@@ -1,0 +1,57 @@
+# PKI Phase A overlay — opt-in mTLS client-cert auth.
+#
+# Layered on by scripts/bootstrap-staging.sh ONLY when SIGRIFT_ENABLE_PKI=1:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#                  -f docker-compose.pki.yml up -d
+#
+# The gateway verifies client certs against the bridge CA, which the
+# bridge writes into the shared bridge_data volume under ca/ the first
+# time the CA is used (any /api/ca/* request — through the gateway). The
+# gateway exits at start-up if that file is missing, so never start the
+# stack with this overlay before the CA exists: bootstrap-staging.sh
+# first runs the plain stack, fetches /api/ca/ca.pem (which creates the
+# CA), checks or mints the node's shared client cert (POST
+# /api/ca/issue, written to /opt/sigrift/pki/local-edge.{crt,key} on the
+# host — the file name is historical) that every scanner presents, and
+# only then re-deploys with this overlay. The cert's identity is the
+# node id the scanners report (MLRF_NODE_ID, default the host name on
+# staging): a NODE certificate is accepted only for the node whose id
+# equals its identity.
+#
+# Additive: the gateway runs the client-cert verifier in
+# allow-unauthenticated mode, so API-key auth keeps working alongside.
+services:
+  gateway:
+    environment:
+      # Both paths resolve inside the bridge_data volume, which the
+      # gateway mounts at /app/data; the bridge CA writes them under ca/.
+      - UC_TLS_CLIENT_CA=/app/data/ca/ca.crt
+      - UC_CA_REGISTRY_PATH=/app/data/ca/registry.json
+
+  edge:
+    volumes:
+      - /opt/sigrift/pki:/app/pki:ro
+    environment:
+      - MLRF_CLIENT_CERT=/app/pki/local-edge.crt
+      - MLRF_CLIENT_KEY=/app/pki/local-edge.key
+
+  scan:
+    volumes:
+      - /opt/sigrift/pki:/app/pki:ro
+    environment:
+      - MLRF_CLIENT_CERT=/app/pki/local-edge.crt
+      - MLRF_CLIENT_KEY=/app/pki/local-edge.key
+
+  wifi-scan:
+    volumes:
+      - /opt/sigrift/pki:/app/pki:ro
+    environment:
+      - MLRF_CLIENT_CERT=/app/pki/local-edge.crt
+      - MLRF_CLIENT_KEY=/app/pki/local-edge.key
+
+  bt-scan:
+    volumes:
+      - /opt/sigrift/pki:/app/pki:ro
+    environment:
+      - MLRF_CLIENT_CERT=/app/pki/local-edge.crt
+      - MLRF_CLIENT_KEY=/app/pki/local-edge.key

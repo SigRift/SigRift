@@ -1,0 +1,21 @@
+[Unit]
+Description=SigRift Database Backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=sigrift
+ExecStart=/bin/bash -c '\
+    BACKUP_DIR="/var/backups/sigrift"; \
+    mkdir -p "$BACKUP_DIR"; \
+    DB_PATH="/opt/sigrift/src/sigrift/bridge/data/detections.db"; \
+    BACKUP_FILE="$BACKUP_DIR/detections-$(date +%%Y%%m%%d%%H%%M%%S).db"; \
+    sqlite3 "$DB_PATH" ".backup $BACKUP_FILE" && \
+    gzip "$BACKUP_FILE" && \
+    find "$BACKUP_DIR" -name "detections-*.db.gz" -mtime +30 -delete && \
+    echo "Backup completed: ${BACKUP_FILE}.gz"'
+ProtectSystem=strict
+ReadWritePaths=/var/backups/sigrift
+ReadOnlyPaths=/opt/sigrift/src/sigrift/bridge/data
+NoNewPrivileges=true
+PrivateTmp=true

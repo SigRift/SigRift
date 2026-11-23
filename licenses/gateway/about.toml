@@ -1,0 +1,81 @@
+# cargo-about 0.9.3. Include both published gateway architectures and
+# transitive/build dependencies; test-only crates are not shipped.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+ignore-dev-dependencies = true
+workarounds = ["ring", "rustls", "chrono"]
+
+# These crates concatenate several licences and attribution sections. Retain
+# their complete upstream files rather than cargo-about's generic SPDX text.
+# Hashes are from the exact crates in Cargo.lock; a changed file requires review.
+[aws-lc-sys.clarify]
+license = "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)"
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+checksum = "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
+
+[aws-lc-rs.clarify]
+license = "ISC AND (Apache-2.0 OR ISC)"
+[[aws-lc-rs.clarify.files]]
+path = "LICENSE"
+checksum = "b50b376e7d24a0598488b730c3034ffcd0b58dd36c0913a24b9903a3cfd04bf7"
+
+# These crates omit repository-root licences from their published packages.
+# The parent asn1-rs crate includes the exact same upstream licence (verified
+# against asn1-rs-impl's a20e5f7319c896737ad0f2557037817b91ad854f source commit).
+# Use that locked local file because cargo-about 0.9.3 does not normalize the
+# implementation crate's repository URL ending in .git when fetching licences.
+[asn1-rs-impl.clarify]
+license = "MIT OR Apache-2.0"
+[[asn1-rs-impl.clarify.files]]
+path = "../asn1-rs-0.7.2/LICENSE-MIT"
+license = "MIT"
+checksum = "a5c61b93b6ee1d104af9920cf020ff3c7efe818e31fe562c72261847a728f513"
+
+[async-compression.clarify]
+license = "MIT OR Apache-2.0"
+# Resolve each compression licence at its crate's .cargo_vcs_info.json commit.
+[[async-compression.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "88d1e3160df48926ad3310a8ec5699b502889565908f1be7e77cd21282c7a709"
+
+# Our workspace crates share the project's root grant.
+[sigrift-gateway.clarify]
+license = "MIT"
+[[sigrift-gateway.clarify.files]]
+path = "../../../../LICENSE"
+checksum = "37f7d24c512ed525df70a3dbc9b2cb0434865cd9e58c86aa812eccb48556d3f0"
+
+[sigrift-gateway-core.clarify]
+license = "MIT"
+[[sigrift-gateway-core.clarify.files]]
+path = "../../../../LICENSE"
+checksum = "37f7d24c512ed525df70a3dbc9b2cb0434865cd9e58c86aa812eccb48556d3f0"
+
+[compression-codecs.clarify]
+license = "MIT OR Apache-2.0"
+[[compression-codecs.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "88d1e3160df48926ad3310a8ec5699b502889565908f1be7e77cd21282c7a709"
+
+[compression-core.clarify]
+license = "MIT OR Apache-2.0"
+[[compression-core.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "88d1e3160df48926ad3310a8ec5699b502889565908f1be7e77cd21282c7a709"

@@ -1,0 +1,1460 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — The Bridge</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v=29">
+    <link rel="stylesheet" href="{{ url_for('static', path='panel_help.css') }}?v=1">
+</head>
+<body>
+    <script src="/static/auth_guard.js?v=31"></script>
+    <div id="app-content" style="display:none">
+    <!-- Header -->
+    <header class="dashboard-header">
+        <div class="header-top">
+            <div class="header-left">
+                <h1 class="header-title">
+                    <span class="header-logo">RF</span> Admin Panel
+                </h1>
+                <a href="/dashboard" class="btn btn-sm btn-secondary">&larr; Back to Dashboard</a>
+            </div>
+            <div class="header-right">
+                <div class="docs-dropdown" style="position:relative;display:inline-block;">
+                    <button class="help-icon" title="Documentation" aria-label="Help and documentation">?</button>
+                    <div class="docs-dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-card,#1e1e2e);border:1px solid var(--border,#333);border-radius:6px;min-width:180px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+                        <a href="/static/docs/api_reference.html" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;border-bottom:1px solid var(--border,#333);">API Reference</a>
+                        <a href="/static/docs/operations_guide.html" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;border-bottom:1px solid var(--border,#333);">Operations Guide</a>
+                        <a href="/static/docs/deployment_guide.html" target="_blank" style="display:block;padding:8px 14px;font-size:13px;color:var(--text,#ccc);text-decoration:none;">Deployment Guide</a>
+                    </div>
+                </div>
+                <style>.docs-dropdown-menu a:hover{background:rgba(88,166,255,0.1)!important;color:var(--accent,#58a6ff)!important;}.docs-dropdown-open{display:block!important;}</style>
+                <script src="{{ url_for('static', path='docs_dropdown.js') }}?v=1"></script>
+                <span id="admin-session-info" class="admin-session-info" aria-live="polite" style="display:none;font-size:0.85em;color:var(--text-secondary);margin-right:8px;">
+                    <span id="admin-session-user"></span>
+                    <span id="admin-session-expiry" style="margin-left:6px;"></span>
+                </span>
+                <span id="admin-status" class="connection-indicator disconnected" role="status" aria-live="polite">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Not Authenticated</span>
+                </span>
+                <button id="admin-auth-retry" class="btn btn-sm btn-secondary" type="button" style="display:none" hidden>Retry connection</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="admin-layout">
+        <!-- Sidebar -->
+        <!--
+            PR-19 (dashboard cog review §2.1, §2.2): 17 flat nav items grouped into
+            5 labeled clusters to respect Cowan's 4±1 working-memory limit. ARIA
+            tablist semantics mirror index.html:77-96.
+            TODO(PR-19): arrow-key navigation in admin.js (Up/Down within cluster,
+            Home/End across all tabs). Structure + ARIA only in this PR.
+        -->
+        <nav class="admin-sidebar" role="tablist" aria-orientation="vertical" aria-label="Admin sections">
+            <fieldset class="admin-nav-cluster">
+                <legend class="admin-nav-cluster-label">Identity</legend>
+                <a id="keys-link" href="#keys" class="admin-nav-item active" data-tab="keys" role="tab" aria-selected="true" aria-current="page" aria-controls="tab-keys">API Keys</a>
+                <a id="crypto-link" href="#crypto" class="admin-nav-item" data-tab="crypto" role="tab" aria-selected="false" aria-controls="tab-crypto">Crypto Keys</a>
+            </fieldset>
+            <fieldset class="admin-nav-cluster">
+                <legend class="admin-nav-cluster-label">Fleet</legend>
+                <a id="nodes-link" href="#nodes" class="admin-nav-item" data-tab="nodes" role="tab" aria-selected="false" aria-controls="tab-nodes">Nodes</a>
+                <a id="notifications-link" href="#notifications" class="admin-nav-item" data-tab="notifications" role="tab" aria-selected="false" aria-controls="tab-notifications">Notifications</a>
+                <a id="training-link" href="#training" class="admin-nav-item" data-tab="training" role="tab" aria-selected="false" aria-controls="tab-training">Training</a>
+            </fieldset>
+            <fieldset class="admin-nav-cluster">
+                <legend class="admin-nav-cluster-label">Operations</legend>
+                <a id="alerts-link" href="#alerts" class="admin-nav-item" data-tab="alerts" role="tab" aria-selected="false" aria-controls="tab-alerts">Alerts</a>
+                <a id="wifi-security-link" href="#wifi-security" class="admin-nav-item" data-tab="wifi-security" role="tab" aria-selected="false" aria-controls="tab-wifi-security">WiFi Security</a>
+                <a id="protocols-link" href="#protocols" class="admin-nav-item" data-tab="protocols" role="tab" aria-selected="false" aria-controls="tab-protocols">Protocols</a>
+            </fieldset>
+            <fieldset class="admin-nav-cluster">
+                <legend class="admin-nav-cluster-label">Diagnostics</legend>
+                <a id="audit-link" href="#audit" class="admin-nav-item" data-tab="audit" role="tab" aria-selected="false" aria-controls="tab-audit">Audit Log</a>
+                <a id="logs-link" href="#logs" class="admin-nav-item" data-tab="logs" role="tab" aria-selected="false" aria-controls="tab-logs">Logs</a>
+                <a id="ml-advisor-link" href="#ml-advisor" class="admin-nav-item" data-tab="ml-advisor" role="tab" aria-selected="false" aria-controls="tab-ml-advisor">ML Advisor</a>
+                <a id="reports-link" href="#reports" class="admin-nav-item" data-tab="reports" role="tab" aria-selected="false" aria-controls="tab-reports">Reports</a>
+            </fieldset>
+            <fieldset class="admin-nav-cluster">
+                <legend class="admin-nav-cluster-label">System</legend>
+                <a id="database-link" href="#database" class="admin-nav-item" data-tab="database" role="tab" aria-selected="false" aria-controls="tab-database">Database</a>
+                <a id="system-link" href="#system" class="admin-nav-item" data-tab="system" role="tab" aria-selected="false" aria-controls="tab-system">System</a>
+                <a id="scorer-link" href="#scorer" class="admin-nav-item" data-tab="scorer" role="tab" aria-selected="false" aria-controls="tab-scorer">Scorer Weights</a>
+                <a id="advanced-link" href="#advanced" class="admin-nav-item" data-tab="advanced" role="tab" aria-selected="false" aria-controls="tab-advanced">Advanced</a>
+                <a id="version-link" href="#version" class="admin-nav-item" data-tab="version" role="tab" aria-selected="false" aria-controls="tab-version">Config Versions</a>
+            </fieldset>
+            <div class="admin-nav-divider"></div>
+            <a href="/static/docs/api_reference.html" target="_blank" class="admin-nav-item admin-nav-docs" title="API Reference">API Docs</a>
+            <a href="/static/docs/operations_guide.html" target="_blank" class="admin-nav-item admin-nav-docs" title="Operations Guide">Ops Guide</a>
+            <a href="/static/docs/deployment_guide.html" target="_blank" class="admin-nav-item admin-nav-docs" title="Deployment Guide">Deploy Guide</a>
+        </nav>
+        <!-- TODO(PR-19 follow-up, style.css): style .admin-nav-cluster + .admin-nav-cluster-label
+             (reset fieldset border/padding, render legend as small-caps cluster header). -->
+        <!-- TODO(PR-19 follow-up, admin.js): on tab switch, update aria-selected
+             (true/false) and aria-current ("page"/remove) on all .admin-nav-item[role=tab];
+             add keydown handler for ArrowUp/ArrowDown/Home/End on role=tablist. -->
+
+
+        <!-- Content -->
+        <main class="admin-content">
+            <!-- Tab Panels -->
+            <div id="admin-panels">
+                <!-- Keys Panel -->
+                <section id="tab-keys" class="admin-tab-panel" role="tabpanel" aria-labelledby="keys-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="API Key Management" data-help="Create scoped credentials for agents and API users. Choose the least privilege needed, bind scanner keys to their node, and keep the one-time raw key private.">API Key Management</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="admin-form" id="create-key-form">
+                                <input type="text" id="new-key-desc" class="form-input" placeholder="Description">
+                                <select id="new-key-role" class="form-input">
+                                    <option value="sensor">Sensor</option>
+                                    <option value="node">Node</option>
+                                    <option value="viewer">Viewer</option>
+                                    <option value="analyst">Analyst</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                                <input type="number" id="new-key-expires" class="form-input" placeholder="Expires (days)" min="1" max="3650" step="1" title="Days until the key expires, 1 to 3650, capped at the server's maximum key lifetime (BRIDGE_MAX_KEY_LIFETIME_DAYS, 365 by default). Leave blank for that default lifetime." style="width:130px;">
+                                <button class="btn btn-primary btn-sm" id="create-key-btn">Create Key</button>
+                            </div>
+                            <div id="key-created-display" style="display:none;" class="key-created-display"></div>
+                            <div id="key-rotate-result" style="display:none;" class="key-created-display"></div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="keys-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Key ID</th>
+                                            <th>Role</th>
+                                            <th>Node</th>
+                                            <th>Description</th>
+                                            <th>Created</th>
+                                            <th>Expires</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="keys-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="keys-empty">No API keys</p>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Client Certificates (mTLS)" data-help="Issue and manage client certificates for agents configured to use mTLS. Protect private keys and confirm the receiving service enforces the intended certificate policy.">Client Certificates (mTLS)</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="admin-form" id="mint-cert-form">
+                                <input type="text" id="new-cert-identity" class="form-input" placeholder="Identity (e.g. local-edge)">
+                                <select id="new-cert-role" class="form-input">
+                                    <option value="sensor">Sensor</option>
+                                    <option value="node" selected>Node</option>
+                                    <option value="viewer">Viewer</option>
+                                    <option value="analyst">Analyst</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                                <input type="number" id="new-cert-ttl" class="form-input" placeholder="Lifetime (days)" min="1" max="825" value="90" style="width:150px;">
+                                <button class="btn btn-primary btn-sm" id="mint-cert-btn">Mint Certificate</button>
+                            </div>
+                            <div id="cert-minted-display" style="display:none;" class="key-created-display"></div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="certs-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Identity</th>
+                                            <th>Role</th>
+                                            <th>Serial</th>
+                                            <th>Issued</th>
+                                            <th>Expires</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="certs-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="certs-empty">No client certificates</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Nodes Panel -->
+                <section id="tab-nodes" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="nodes-link" tabindex="0">
+                    <!-- Fleet Overview Card -->
+                    <div class="card" style="margin-bottom:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Fleet Overview" data-help="Summarizes registered nodes and their reported health. Connectivity does not establish that a radio scanner is capturing.">Fleet Overview</h2>
+                            <button class="btn btn-sm btn-secondary" id="admin-fleet-refresh">Refresh</button>
+                        </div>
+                        <div class="card-content">
+                            <div class="fleet-overview" id="admin-fleet-overview">
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-total">--</div>
+                                    <div class="fleet-stat-label">Total Nodes</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-online" style="color:var(--accent-green);">--</div>
+                                    <div class="fleet-stat-label">Online</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-stale" style="color:var(--accent-yellow);">--</div>
+                                    <div class="fleet-stat-label">Stale</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-offline" style="color:var(--accent-red);">--</div>
+                                    <div class="fleet-stat-label">Offline</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-degraded" style="color:var(--accent-yellow);">--</div>
+                                    <div class="fleet-stat-label">Degraded</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-det-rate">--</div>
+                                    <div class="fleet-stat-label">Det/min</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-avg-cpu">--</div>
+                                    <div class="fleet-stat-label">Avg CPU %</div>
+                                </div>
+                                <div class="fleet-stat">
+                                    <div class="fleet-stat-value" id="fleet-avg-mem">--</div>
+                                    <div class="fleet-stat-label">Avg Mem MB</div>
+                                </div>
+                            </div>
+                            <div id="fleet-alerts-container"></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Node Management" data-help="Manage node records and configured locations. Compare heartbeat status with explicit scanner activity before troubleshooting missing observations.">Node Management</h2>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="sub-heading" data-help-label="Floor Plan — Click to Place Node" data-help="Assign an operator-selected position on the floor plan. Select the intended node before clicking; this does not measure its physical location.">Floor Plan — Click to Place Node</h3>
+                            <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                <select id="admin-fp-node-select" class="form-input" style="width:220px;">
+                                    <option value="">-- select node to place --</option>
+                                </select>
+                                <input type="text" id="admin-fp-floor-label" class="form-input" placeholder="Floor label (e.g. Floor 1)" style="width:180px;">
+                                <span id="admin-fp-coords" style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);min-width:120px;">--</span>
+                            </div>
+                            <div style="position:relative;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary);overflow:hidden;margin-bottom:16px;">
+                                <canvas id="admin-floorplan-canvas" width="700" height="400" style="display:block;width:100%;cursor:crosshair;"></canvas>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-nodes-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Health</th>
+                                            <th>Node ID</th>
+                                            <th>Host</th>
+                                            <th>Status</th>
+                                            <th>Det/min</th>
+                                            <th>CPU %</th>
+                                            <th>Mem MB</th>
+                                            <th>Temp</th>
+                                            <th>Uptime</th>
+                                            <th>Last Seen</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-nodes-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-nodes-empty">No nodes registered</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Alerts Panel -->
+                <section id="tab-alerts" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="alerts-link" tabindex="0">
+                    <!-- Condition-Based Rule Builder -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Condition-Based Alert Rules" data-help="Match detections using the rule&#x27;s selected all/any condition logic. Review the scope and cooldown before enabling a rule to control notification volume.">Condition-Based Alert Rules</h2>
+                            <button class="btn btn-primary btn-sm" id="admin-create-condition-rule-btn">New Condition Rule</button>
+                        </div>
+                        <div class="card-content">
+                            <!-- Rule Builder Form (hidden until activated) -->
+                            <div id="condition-rule-form" style="display:none;margin-bottom:16px;padding:16px;background:var(--bg-secondary);border-radius:6px;">
+                                <input type="hidden" id="condition-rule-edit-id" value="">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px;">
+                                    <div style="flex:2;min-width:180px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Rule Name</label>
+                                        <input type="text" id="condition-rule-name" class="form-input" placeholder="e.g. High-power BPSK alert">
+                                    </div>
+                                    <div style="flex:1;min-width:120px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Severity</label>
+                                        <select id="condition-rule-severity" class="form-input">
+                                            <option value="info">Info</option>
+                                            <option value="warning" selected>Warning</option>
+                                            <option value="critical">Critical</option>
+                                        </select>
+                                    </div>
+                                    <div style="flex:1;min-width:100px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Cooldown (sec)</label>
+                                        <input type="number" id="condition-rule-cooldown" class="form-input" value="300" min="0" max="86400">
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:8px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">
+                                            <input type="checkbox" id="condition-rule-enabled" checked> Enabled
+                                        </label>
+                                        <label style="font-size:12px;color:var(--text-secondary);">
+                                            <input type="checkbox" id="condition-rule-webhook" checked> Webhook
+                                        </label>
+                                    </div>
+                                </div>
+                                <div style="margin-bottom:8px;">
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Conditions (all must match):</label>
+                                    <div id="condition-rows"></div>
+                                    <button class="btn btn-sm" id="add-condition-row-btn" style="margin-top:4px;">+ Add Condition</button>
+                                </div>
+                                <div style="display:flex;gap:8px;margin-top:12px;">
+                                    <button class="btn btn-primary btn-sm" id="condition-rule-save-btn">Save Rule</button>
+                                    <button class="btn btn-sm" id="condition-rule-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+                            <!-- Condition Rules Table -->
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="condition-rules-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Rule ID</th>
+                                            <th>Name</th>
+                                            <th>Severity</th>
+                                            <th>Conditions</th>
+                                            <th>Enabled</th>
+                                            <th>Cooldown</th>
+                                            <th>Triggers</th>
+                                            <th>Last Triggered</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="condition-rules-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="condition-rules-empty">No condition-based rules</p>
+                        </div>
+                    </div>
+                    <!-- Legacy Alert Rules -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Legacy Alert Rules" data-help="Configure threshold rules for node health reports, such as resource use. Use detection rules for conditions on received signals.">Legacy Alert Rules</h2>
+                            <button class="btn btn-primary btn-sm" id="admin-create-alert-btn">Create Legacy Rule</button>
+                        </div>
+                        <div class="card-content">
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-alerts-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Alert ID</th>
+                                            <th>Name</th>
+                                            <th>Severity</th>
+                                            <th>Message</th>
+                                            <th>Triggered</th>
+                                            <th>Ack</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-alerts-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-alerts-empty">No legacy alert rules</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Notifications Panel -->
+                <section id="tab-notifications" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="notifications-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Webhook Endpoints" data-help="Configure HTTP destinations for alert notifications. Verify the endpoint and inspect the delivery log; an alert being created does not guarantee delivery.">Webhook Endpoints</h2>
+                            <button class="btn btn-primary btn-sm" id="admin-add-webhook-btn">Add Webhook</button>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:12px;">
+                                Webhooks fire HTTP POST requests when alerts are created (RF anomalies, WiFi anomalies, node health).
+                            </p>
+                            <div id="admin-webhook-form" style="display:none;margin-bottom:16px;padding:12px;background:var(--bg-secondary);border-radius:6px;">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+                                    <div style="flex:2;min-width:200px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">URL</label>
+                                        <input type="url" id="webhook-url-input" class="form-input" placeholder="https://hooks.slack.com/...">
+                                    </div>
+                                    <div style="flex:1;min-width:120px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Name</label>
+                                        <input type="text" id="webhook-name-input" class="form-input" placeholder="Slack #alerts">
+                                    </div>
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Severity Filter</label>
+                                        <select id="webhook-severity-input" class="form-input" multiple size="2">
+                                            <option value="critical" selected>Critical</option>
+                                            <option value="warning" selected>Warning</option>
+                                        </select>
+                                    </div>
+                                    <button class="btn btn-primary btn-sm" id="webhook-save-btn">Save</button>
+                                    <button class="btn btn-sm" id="webhook-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-webhooks-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>URL</th>
+                                            <th>Severity</th>
+                                            <th>Enabled</th>
+                                            <th>Deliveries</th>
+                                            <th>Failures</th>
+                                            <th>Last Delivery</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-webhooks-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-webhooks-empty">No webhooks configured</p>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Delivery Log" data-help="Check recorded notification delivery attempts and results. Use failures to diagnose the destination without assuming the original alert was lost.">Delivery Log</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-delivery-log-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Webhook</th>
+                                            <th>Alert</th>
+                                            <th>Severity</th>
+                                            <th>Status</th>
+                                            <th>Error</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-delivery-log-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-delivery-empty">No deliveries yet</p>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Syslog Forwarding" data-help="Configure remote syslog delivery and filters. Choose transport and destination deliberately, then verify receipt on the remote system.">Syslog Forwarding</h2>
+                            <button class="btn btn-primary btn-sm" id="admin-add-syslog-btn">Add Target</button>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:12px;">
+                                Syslog targets receive RFC 5424 formatted alert messages. Supports UDP (fire-and-forget), TCP (persistent connection), and TLS (encrypted).
+                            </p>
+                            <div id="admin-syslog-form" style="display:none;margin-bottom:16px;padding:12px;background:var(--bg-secondary);border-radius:6px;">
+                                <input type="hidden" id="syslog-edit-id" value="">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:8px;">
+                                    <div style="flex:2;min-width:180px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Host</label>
+                                        <input type="text" id="syslog-host-input" class="form-input" placeholder="syslog.example.com">
+                                    </div>
+                                    <div style="flex:0 0 90px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Port</label>
+                                        <input type="number" id="syslog-port-input" class="form-input" value="514" min="1" max="65535">
+                                    </div>
+                                    <div style="flex:0 0 100px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Protocol</label>
+                                        <select id="syslog-protocol-input" class="form-input">
+                                            <option value="udp" selected>UDP</option>
+                                            <option value="tcp">TCP</option>
+                                            <option value="tls">TLS</option>
+                                        </select>
+                                    </div>
+                                    <div style="flex:0 0 120px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Facility</label>
+                                        <select id="syslog-facility-input" class="form-input">
+                                            <option value="local0" selected>local0</option>
+                                            <option value="local1">local1</option>
+                                            <option value="local2">local2</option>
+                                            <option value="local3">local3</option>
+                                            <option value="local4">local4</option>
+                                            <option value="local5">local5</option>
+                                            <option value="local6">local6</option>
+                                            <option value="local7">local7</option>
+                                            <option value="user">user</option>
+                                            <option value="daemon">daemon</option>
+                                            <option value="auth">auth</option>
+                                            <option value="security">security</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:8px;">
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Severity Filter</label>
+                                        <select id="syslog-severity-input" class="form-input" multiple size="3">
+                                            <option value="critical" selected>Critical</option>
+                                            <option value="warning" selected>Warning</option>
+                                            <option value="info">Info</option>
+                                        </select>
+                                    </div>
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Signal Class Filter (comma-sep)</label>
+                                        <input type="text" id="syslog-class-input" class="form-input" placeholder="e.g. wifi,bluetooth,bpsk">
+                                    </div>
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Node Filter (comma-sep)</label>
+                                        <input type="text" id="syslog-node-input" class="form-input" placeholder="e.g. node-01,node-02">
+                                    </div>
+                                </div>
+                                <div id="syslog-tls-fields" style="display:none;">
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:8px;">
+                                        <div style="flex:1;min-width:180px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">CA Bundle Path</label>
+                                            <input type="text" id="syslog-ca-input" class="form-input" placeholder="/etc/ssl/certs/ca.pem">
+                                        </div>
+                                        <div style="flex:1;min-width:180px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Client Cert Path</label>
+                                            <input type="text" id="syslog-cert-input" class="form-input" placeholder="/etc/ssl/client.pem">
+                                        </div>
+                                        <div style="flex:1;min-width:180px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Client Key Path</label>
+                                            <input type="text" id="syslog-key-input" class="form-input" placeholder="/etc/ssl/client.key">
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:4px;">
+                                            <span style="font-size:12px;color:var(--text-secondary);">TLS verification is always enabled. Use CA Bundle field for internal PKI.</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:8px;">
+                                    <button class="btn btn-primary btn-sm" id="syslog-save-btn">Save</button>
+                                    <button class="btn btn-sm" id="syslog-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-syslog-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Host</th>
+                                            <th>Port</th>
+                                            <th>Protocol</th>
+                                            <th>Facility</th>
+                                            <th>Severity</th>
+                                            <th>Enabled</th>
+                                            <th>Sent</th>
+                                            <th>Fails</th>
+                                            <th>Last Delivery</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-syslog-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-syslog-empty">No syslog targets configured</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- WiFi Security Panel -->
+                <section id="tab-wifi-security" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="wifi-security-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Authorized AP Whitelist" data-help="Mark access points you recognize so Wi-Fi scoring can account for them. Review the exact BSSID; authorization does not make every observation safe or mute every alert.">Authorized AP Whitelist</h2>
+                            <button class="btn btn-primary btn-sm" id="admin-add-ap-btn">Add AP</button>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:12px;">
+                                Whitelisted access points have reduced anomaly sensitivity. Known APs will not trigger "new network" alerts and have a 70% score reduction.
+                            </p>
+                            <div id="admin-ap-form" style="display:none;margin-bottom:16px;padding:12px;background:var(--bg-secondary);border-radius:6px;">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+                                    <div style="flex:1;min-width:180px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">BSSID</label>
+                                        <input type="text" id="ap-bssid-input" class="form-input" placeholder="AA:BB:CC:DD:EE:FF">
+                                    </div>
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">SSID (optional)</label>
+                                        <input type="text" id="ap-ssid-input" class="form-input" placeholder="Corporate-WiFi">
+                                    </div>
+                                    <div style="flex:1;min-width:140px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Notes (optional)</label>
+                                        <input type="text" id="ap-notes-input" class="form-input" placeholder="Floor 3 conference room">
+                                    </div>
+                                    <button class="btn btn-primary btn-sm" id="ap-save-btn">Add</button>
+                                    <button class="btn btn-sm" id="ap-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="admin-whitelist-table">
+                                    <thead>
+                                        <tr>
+                                            <th>BSSID</th>
+                                            <th>SSID</th>
+                                            <th>Notes</th>
+                                            <th>Added</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-whitelist-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="admin-whitelist-empty">No authorized APs configured</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Training Panel -->
+                <section id="tab-training" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="training-link" tabindex="0">
+                    <!-- Training Health (existing admin content) -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Training Health" data-help="Reviews reported model training status. A healthy training process does not by itself demonstrate model accuracy in your environment.">Training Health</h2>
+                            <button class="btn btn-sm" id="training-health-refresh">Refresh</button>
+                        </div>
+                        <div class="card-content">
+                            <div id="training-health-cards" class="metrics-grid"></div>
+                            <p class="empty-state" id="training-health-empty">No training runs detected</p>
+                        </div>
+                    </div>
+
+                    <!-- Training Runs (moved from dashboard) -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Training Runs" data-help="Inspect recorded training runs and outcomes. Compare evaluation data before choosing a model for deployment.">Training Runs <span class="count-badge" id="training-run-count">0</span></h2>
+                            <button class="btn btn-sm btn-secondary" id="training-refresh-btn">Refresh</button>
+                        </div>
+                        <div class="card-content">
+                            <div id="training-runs-list"></div>
+                            <p class="empty-state" id="training-runs-empty" style="display:none;">No training runs found</p>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Suggested Improvements" data-help="Reviews suggested training improvements. Validate a suggestion against representative data before changing a deployed model.">Suggested Improvements</h2>
+                            <span class="card-badge" id="training-suggestions-badge">--</span>
+                        </div>
+                        <div class="card-content" id="training-suggestions-body">
+                            <p class="empty-state" id="training-suggestions-empty">Select a training run to see suggestions</p>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Accuracy Chart" data-help="Compares recorded evaluation results. Scores depend on the evaluation dataset and do not guarantee live performance.">Accuracy Chart</h2>
+                            <span class="text-muted" id="training-chart-label"></span>
+                        </div>
+                        <div class="card-content">
+                            <canvas id="training-acc-canvas" width="800" height="200"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Training Log" data-help="Inspect training messages to understand progress or failures. An empty log can mean no recorded run is available.">Training Log</h2>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span class="text-muted" id="training-log-label"></span>
+                                <button class="btn btn-sm" id="training-log-pause">Pause</button>
+                                <button class="btn btn-sm btn-secondary" id="training-log-top">Scroll to Top</button>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <pre class="training-log-viewer" id="training-log-output"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Training Operations Log -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Training Operations Log" data-help="Review recorded training operations and their outcomes. Use timestamps to connect operations with model changes.">Training Operations Log</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="training-ops-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Timestamp</th>
+                                            <th>Action</th>
+                                            <th>Run</th>
+                                            <th>Operator</th>
+                                            <th>Note</th>
+                                            <th>Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="training-ops-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="training-ops-empty">No training operations logged</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Audit Log Panel -->
+                <section id="tab-audit" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="audit-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Audit Log" data-help="Reviews recorded administrative actions and operators. Use it for accountability and investigation; it is not a complete record of all network activity.">Audit Log</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="audit-filters">
+                                <select id="audit-action-filter" class="form-input audit-filter-select" aria-label="Filter by action">
+                                    <option value="">All Actions</option>
+                                    <option value="training">Training</option>
+                                </select>
+                                <select id="audit-operator-filter" class="form-input audit-filter-select" aria-label="Filter by operator">
+                                    <option value="">All Operators</option>
+                                </select>
+                                <select id="audit-node-filter" class="form-input audit-filter-select" aria-label="Filter by node">
+                                    <option value="">All Nodes</option>
+                                </select>
+                                <select id="audit-severity-filter" class="form-input audit-filter-select" aria-label="Filter by severity">
+                                    <option value="">All Severities</option>
+                                    <option value="critical">Critical</option>
+                                    <option value="warning">Warning</option>
+                                    <option value="info">Info</option>
+                                </select>
+                                <input type="text" id="audit-search-filter" class="form-input audit-filter-select" placeholder="Search..." aria-label="Search audit log">
+                            </div>
+                            <div class="audit-filters audit-date-row">
+                                <label class="audit-date-label">From:</label>
+                                <input type="datetime-local" id="audit-start-filter" class="form-input audit-filter-date" aria-label="Start date">
+                                <label class="audit-date-label">To:</label>
+                                <input type="datetime-local" id="audit-end-filter" class="form-input audit-filter-date" aria-label="End date">
+                                <div class="audit-filter-actions">
+                                    <button class="btn btn-sm" id="audit-filter-btn">Filter</button>
+                                    <button class="btn btn-sm" id="audit-clear-btn" style="color:var(--text-dim);">Clear</button>
+                                    <span class="audit-spacer"></span>
+                                    <button class="btn btn-sm" id="audit-prev-btn" disabled>&larr; Prev</button>
+                                    <button class="btn btn-sm" id="audit-next-btn">Next &rarr;</button>
+                                </div>
+                            </div>
+                            <div class="table-wrap audit-table-wrap">
+                                <table class="data-table admin-table audit-log-table" id="audit-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Timestamp</th>
+                                            <th>Sev</th>
+                                            <th>Action</th>
+                                            <th>Target</th>
+                                            <th>Operator</th>
+                                            <th>Note</th>
+                                            <th>Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="audit-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="audit-empty">No audit entries</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Logs Panel -->
+                <section id="tab-logs" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="logs-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Server Logs" data-help="Inspect available service messages for troubleshooting. Log retention and service configuration determine what is available.">Server Logs</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="audit-filters" style="margin-bottom:12px;">
+                                <select id="log-level-filter" class="form-input audit-filter-select" aria-label="Filter by level">
+                                    <option value="">All Levels</option>
+                                    <option value="ERROR">ERROR</option>
+                                    <option value="WARNING">WARNING</option>
+                                    <option value="INFO">INFO</option>
+                                    <option value="DEBUG">DEBUG</option>
+                                </select>
+                                <select id="log-logger-filter" class="form-input audit-filter-select" aria-label="Filter by logger">
+                                    <option value="">All Loggers</option>
+                                </select>
+                                <input type="text" id="log-search" class="form-input audit-filter-select" placeholder="Search logs...">
+                                <button class="btn btn-sm" id="log-refresh-btn">Refresh</button>
+                                <label style="font-weight:400;font-size:12px;color:var(--text-secondary);align-self:center;">
+                                    <input type="checkbox" id="log-auto-refresh"> Auto (5s)
+                                </label>
+                            </div>
+                            <div id="log-entries" class="log-viewer"></div>
+                            <p class="empty-state" id="log-empty">No log entries</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Database Panel -->
+                <section id="tab-database" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="database-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Database" data-help="Review storage statistics, retention and maintenance actions. Back up important data before destructive cleanup or recovery work.">Database</h2>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="sub-heading" data-help-label="Job Activity" data-help="Shows recorded maintenance job progress and outcomes. Wait for completion and inspect errors before assuming an operation succeeded.">Job Activity
+                                <button class="btn btn-sm" id="jobs-refresh-btn" style="margin-left:12px;">Refresh</button>
+                            </h3>
+                            <div id="db-jobs"></div>
+
+                            <h3 class="sub-heading" data-help-label="Retention Policy" data-help="Controls how long eligible observations are retained. Review the scope before reducing retention, because removed data cannot be recovered without a backup.">Retention Policy</h3>
+                            <div id="retention-policy-card" class="admin-info-card" style="margin-bottom:16px;padding:12px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);">
+                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                                    <span style="font-size:14px;font-weight:600;color:var(--text-primary);">Data Retention</span>
+                                    <span id="retention-source-badge" class="badge" style="font-size:10px;"></span>
+                                </div>
+                                <div style="font-size:13px;color:var(--text-secondary);">
+                                    Detections, anomalies, and audit entries older than
+                                    <strong id="retention-days-value" style="color:var(--accent-blue);">--</strong> days
+                                    are automatically purged during scheduled cleanup.
+                                </div>
+                                <div style="font-size:11px;color:var(--text-tertiary);margin-top:6px;">
+                                    Set <code>BRIDGE_RETENTION_DAYS</code> environment variable to change (default: 90).
+                                </div>
+                            </div>
+
+                            <h3 class="sub-heading" data-help-label="Maintenance" data-help="Run storage housekeeping operations. Read the confirmation carefully; cleanup can delete data, while other tasks only inspect or reorganize it.">Maintenance</h3>
+                            <!--
+                                PR-20 (dashboard cog review §3.1): split risk-tiered maintenance
+                                surface. Destructive cleanup tasks now require type-to-confirm
+                                (data-destructive + data-confirm-phrase). Low-risk DB / aggregation
+                                tasks use a one-click confirmModal. Backend task identifiers in
+                                data-task are unchanged for server compatibility.
+                            -->
+                            <div id="system-maintenance">
+                                <div class="admin-form" style="margin-bottom:12px;align-items:center;gap:8px;">
+                                    <label for="maint-retention" style="font-size:12px;color:var(--text-secondary);">
+                                        Retention window
+                                    </label>
+                                    <input type="number" id="maint-retention" class="form-input" value="7" min="1" max="365" style="width:90px;" title="Retention (days) — applies to purge tasks that accept a custom window">
+                                    <span style="font-size:12px;color:var(--text-secondary);">days (applies to purge tasks that accept a custom window)</span>
+                                </div>
+
+                                <section class="maint-tier-card maint-tier-destructive" aria-labelledby="maint-cleanup-heading" style="margin-bottom:16px;padding:12px;border:1px solid var(--accent-red, #e5534b);border-radius:6px;background:rgba(229,83,75,0.06);">
+                                    <h4 id="maint-cleanup-heading" style="margin:0 0 4px 0;font-size:14px;color:var(--accent-red, #e5534b);">
+                                        Cleanup (destructive)
+                                    </h4>
+                                    <p style="margin:0 0 10px 0;font-size:12px;color:var(--text-secondary);">
+                                        These delete data permanently. Each button requires typing a confirmation phrase before running.
+                                    </p>
+                                    <div class="maint-button-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_old_data" data-label="Purge Old Data" data-destructive="1" data-confirm-phrase="purge" data-uses-retention="1">Purge Old Data (retention policy)</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="full_cleanup" data-label="Full Cleanup" data-destructive="1" data-confirm-phrase="full cleanup" data-uses-retention="1">Full Cleanup (all purges + vacuum)</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_detections" data-label="Purge Detections" data-destructive="1" data-confirm-phrase="detections" data-uses-retention="1">Purge Detections</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_rf_anomalies" data-label="Purge RF Anomalies" data-destructive="1" data-confirm-phrase="rf anomalies" data-uses-retention="1">Purge RF Anomalies</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_wifi_anomalies" data-label="Purge WiFi Anomalies" data-destructive="1" data-confirm-phrase="wifi anomalies" data-uses-retention="1">Purge WiFi Anomalies</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_wifi_metadata" data-label="Purge WiFi Metadata" data-destructive="1" data-confirm-phrase="wifi metadata" data-uses-retention="1">Purge WiFi Metadata</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_wifi_hourly" data-label="Purge WiFi Hourly Summaries" data-destructive="1" data-confirm-phrase="wifi hourly" data-uses-retention="1">Purge WiFi Hourly Summaries</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_iq_captures" data-label="Purge IQ Captures" data-destructive="1" data-confirm-phrase="iq captures" data-uses-retention="1">Purge IQ Captures</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="purge_pcap_captures" data-label="Purge Pcap Captures" data-destructive="1" data-confirm-phrase="pcap captures" data-uses-retention="1">Purge Pcap Captures</button>
+                                    </div>
+                                </section>
+
+                                <section class="maint-tier-card maint-tier-safe" aria-labelledby="maint-safe-heading" style="margin-bottom:12px;padding:12px;border:1px solid var(--border-primary, #444);border-radius:6px;background:var(--bg-secondary);">
+                                    <h4 id="maint-safe-heading" style="margin:0 0 4px 0;font-size:14px;color:var(--text-primary);" data-help-label="Maintenance" data-help="Run storage housekeeping operations. Read the confirmation carefully; cleanup can delete data, while other tasks only inspect or reorganize it.">
+                                        Maintenance (safe)
+                                    </h4>
+                                    <p style="margin:0 0 10px 0;font-size:12px;color:var(--text-secondary);">
+                                        Aggregation, anomaly resolution, and DB housekeeping. Single-click confirm; non-destructive.
+                                    </p>
+                                    <div class="maint-button-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+                                        <button class="btn btn-sm maint-task-btn" data-task="aggregate_wifi" data-label="WiFi Hourly Summarization">WiFi Hourly Summarization</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="aggregate_detections" data-label="Detection Hourly Aggregation">Detection Hourly Aggregation</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="reeval_dismiss_rf" data-label="Re-evaluate &amp; Dismiss Resolved RF">Re-evaluate &amp; Dismiss Resolved RF</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="reeval_dismiss_wifi" data-label="Re-evaluate &amp; Dismiss Resolved WiFi">Re-evaluate &amp; Dismiss Resolved WiFi</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="dismiss_all_rf" data-label="Dismiss All RF Anomalies">Dismiss All RF Anomalies</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="dismiss_all_wifi" data-label="Dismiss All WiFi Anomalies">Dismiss All WiFi Anomalies</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="vacuum" data-label="VACUUM (reclaim disk)">VACUUM (reclaim disk)</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="wal_checkpoint" data-label="WAL Checkpoint">WAL Checkpoint</button>
+                                        <button class="btn btn-sm maint-task-btn" data-task="optimize" data-label="Optimize (ANALYZE)">Optimize (ANALYZE)</button>
+                                    </div>
+                                </section>
+
+                                <div id="maint-result" style="display:none;" class="key-created-display"></div>
+                            </div>
+
+                            <h3 class="sub-heading" data-help-label="Backup" data-help="Create or manage the backups offered here. A full disaster recovery also needs the required configuration, credentials and certificates.">Backup</h3>
+                            <div id="system-backup">
+                                <div class="admin-form" style="margin-bottom:8px;">
+                                    <button class="btn btn-primary btn-sm" id="backup-create-btn">Create Backup</button>
+                                    <button class="btn btn-sm" id="backup-refresh-btn">Refresh List</button>
+                                </div>
+                                <div id="backup-result" style="display:none;" class="key-created-display"></div>
+                                <div id="backup-list"></div>
+                            </div>
+
+                            <h3 class="sub-heading" data-help-label="Statistics" data-help="Shows available storage counts and sizes. Compare changes over time to plan retention and capacity.">Statistics
+                                <select id="db-stats-period" class="form-input" style="font-weight:400;font-size:12px;margin-left:12px;width:auto;display:inline-block;padding:2px 6px;">
+                                    <option value="0">No growth column</option>
+                                    <option value="1">Growth: 1h</option>
+                                    <option value="4">Growth: 4h</option>
+                                    <option value="12">Growth: 12h</option>
+                                    <option value="24" selected>Growth: 24h</option>
+                                    <option value="48">Growth: 48h</option>
+                                    <option value="168">Growth: 7d</option>
+                                </select>
+                            </h3>
+                            <div id="system-db-stats"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- System Panel -->
+                <section id="tab-system" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="system-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="System Information" data-help="Reviews service configuration and runtime information. Use it to confirm the environment before making operational changes.">System Information</h2>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="sub-heading" data-help-label="Metrics" data-help="Shows reported service measurements. Missing or unsupported measurements are not equivalent to zero resource use.">Metrics
+                                <label style="font-weight:400;font-size:12px;margin-left:12px;color:var(--text-secondary);">
+                                    <input type="checkbox" id="metrics-auto-refresh"> Auto-refresh (10s)
+                                </label>
+                            </h3>
+                            <div id="system-metrics" class="metrics-grid"></div>
+
+                            <h3 class="sub-heading" data-help-label="Configuration" data-help="Displays the settings exposed by the service. Confirm which settings are persistent before relying on them after a restart.">Configuration</h3>
+                            <div id="system-config"></div>
+
+                            <h3 class="sub-heading" data-help-label="Active Sessions" data-help="Reviews current login sessions. End sessions you no longer recognize or need; do not share session credentials.">Active Sessions</h3>
+                            <div id="system-sessions"></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Session Binding" data-help="Controls how a session is compared with its original client, using the selected IP and browser policy. Stricter binding can reject legitimate clients when their network changes.">Session Binding</h2>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);font-size:0.9em;margin-bottom:12px;">
+                                The gateway reads <code>BRIDGE_SESSION_BINDING</code> at startup, so a stack
+                                restart is required to apply changes here. This toggle persists your preference
+                                and flags any drift between what you've saved and what the gateway is actually
+                                enforcing.
+                            </p>
+                            <div class="admin-form" style="align-items:center;gap:12px;flex-wrap:wrap;">
+                                <label for="session-binding-mode" style="font-size:12px;color:var(--text-secondary);">
+                                    Mode
+                                </label>
+                                <select id="session-binding-mode" class="form-input" style="min-width:200px;">
+                                    <option value="strict">strict (IP + User-Agent)</option>
+                                    <option value="ip">ip (IP only)</option>
+                                    <option value="warn">warn (log mismatches, allow)</option>
+                                    <option value="none">none (disabled)</option>
+                                </select>
+                                <button class="btn btn-primary" id="session-binding-save-btn">Save</button>
+                            </div>
+                            <div id="session-binding-status" style="margin-top:12px;font-size:0.85em;color:var(--text-secondary);"></div>
+                            <div id="session-binding-restart-banner" style="display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--accent-yellow, #d4a72c);border-radius:4px;background:rgba(212,167,44,0.08);font-size:0.85em;">
+                                <strong>Restart required:</strong>
+                                Gateway is enforcing <code id="session-binding-gateway-value">?</code>; saved
+                                preference is <code id="session-binding-saved-value">?</code>. Run
+                                <code>docker compose restart gateway</code> (or update
+                                <code>BRIDGE_SESSION_BINDING</code> in your <code>.env</code> and
+                                <code>docker compose up -d</code>) to apply.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Scorer Weights Panel -->
+                <section id="tab-scorer" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="scorer-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Anomaly Scorer Weights" data-help="Adjusts the contribution of scoring dimensions. Compare results on known observations before relying on a changed score.">Anomaly Scorer Weights</h2>
+                            <button class="btn btn-sm btn-primary" id="scorer-save-btn">Save Weights</button>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);font-size:0.85em;margin-bottom:16px;">
+                                Each weight controls how much that dimension contributes to the final anomaly score.
+                                <strong>SIGNATURE_MATCH</strong> must be &gt;0 for threat signature detection to be active.
+                                Total: <span id="scorer-total" style="font-weight:bold;">--</span>
+                            </p>
+                            <div id="scorer-weights-container" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"></div>
+                            <p id="scorer-status" style="margin-top:12px;font-size:0.85em;display:none;"></p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Advanced Panel -->
+                <section id="tab-advanced" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="advanced-link" tabindex="0">
+
+                    <div class="card" id="advanced-warning-card">
+                        <div class="card-content" style="padding:0;">
+                            <div id="advanced-warning" style="background:var(--accent-red);color:#fff;padding:12px 16px;border-radius:6px;font-size:13px;line-height:1.5;">
+                                <strong>WARNING: Advanced Configuration</strong> &mdash;
+                                Modifying detection thresholds and scoring weights can significantly impact anomaly detection accuracy.
+                                Changes take effect immediately and apply to all incoming data.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SDR Scoring Panel -->
+                    <div class="card" id="sdr-scoring-card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="SDR Scoring Engine" data-help="Tune RF scoring thresholds and weights. Use observed false positives and missed detections as evidence; a high score is not physical threat confirmation.">SDR Scoring Engine</h2>
+                        </div>
+                        <div class="card-content">
+                            <div id="sdr-config-loading" style="color:var(--text-secondary);padding:12px 0;">Loading SDR config...</div>
+                            <div id="sdr-config-fields" style="display:none;">
+
+                                <h3 class="sub-heading" data-help-label="RF Alert Thresholds" data-help="Sets RF scoring thresholds used to prioritize observations. Lower thresholds can increase review volume and false positives.">RF Alert Thresholds</h3>
+                                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px;">Controls which anomaly scores trigger alerts and at what severity. Detections below the insert threshold are discarded entirely.</p>
+                                <div class="admin-form" style="flex-wrap:wrap;gap:12px;">
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Insert Threshold <span id="sdr-def-insert" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-insert-threshold" class="form-input" step="0.01" min="0" max="1" value="0.3">
+                                    </div>
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Alert Threshold <span id="sdr-def-alert" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-alert-threshold" class="form-input" step="0.01" min="0" max="1" value="0.7">
+                                    </div>
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Critical Threshold <span id="sdr-def-critical" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-critical-threshold" class="form-input" step="0.01" min="0" max="1" value="0.85">
+                                    </div>
+                                </div>
+
+                                <h3 class="sub-heading" data-help-label="Noise Reduction" data-help="Tunes how RF scoring treats lower-confidence or early learning observations. Review what may be suppressed before changing these controls.">Noise Reduction</h3>
+                                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px;">Confidence floor filters out low-quality detections before scoring. Higher values reduce noise but may discard valid weak signals. Learning detections threshold controls how long baselines stay in learning mode (scores dampened 50%).</p>
+                                <div class="admin-form" style="flex-wrap:wrap;gap:12px;">
+                                    <div style="min-width:200px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Min Confidence Floor <span id="sdr-def-conf-floor" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-confidence-floor" class="form-input" step="0.01" min="0" max="1" value="0.0">
+                                    </div>
+                                    <div style="min-width:200px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Min Learning Detections <span id="sdr-def-learning" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-learning-detections" class="form-input" step="50" min="50" max="10000" value="300">
+                                    </div>
+                                </div>
+
+                                <h3 class="sub-heading" data-help-label="RF Auto-Snooze" data-help="Controls automatic snoozing of recurring RF anomaly results. Check the selected duration and scope; this is not a global alert mute.">RF Auto-Snooze</h3>
+                                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px;">Automatically snooze RF anomalies that have been seen many times with low scores. Anomalies absorbed into baseline (score &lt;0.4, seen &ge;5, status=stable) are auto-resolved by periodic cleanup.</p>
+                                <div class="admin-form" style="flex-wrap:wrap;gap:12px;">
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Seen Count <span id="sdr-def-rf-snooze-count" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-snooze-count" class="form-input" step="1" min="0" value="10">
+                                    </div>
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Max Score <span id="sdr-def-rf-snooze-score" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-snooze-score" class="form-input" step="0.01" min="0" max="1" value="0.55">
+                                    </div>
+                                    <div style="min-width:160px;">
+                                        <label style="font-size:12px;color:var(--text-secondary);">Snooze Hours <span id="sdr-def-rf-snooze-hours" style="opacity:0.5;"></span></label>
+                                        <input type="number" id="sdr-rf-snooze-hours" class="form-input" step="1" min="1" value="24">
+                                    </div>
+                                </div>
+
+                                <h3 class="sub-heading" data-help-label="RF Dimension Weights" data-help="Balances RF anomaly scoring components. Change weights deliberately and compare against representative observations.">RF Dimension Weights <span id="sdr-rf-weight-sum" style="font-weight:400;font-size:12px;color:var(--text-secondary);"></span></h3>
+                                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px;">Each dimension contributes to the composite anomaly score. Weights should sum to 1.0. Reduce timing_anomaly and rare_class to cut noise from sparse baselines.</p>
+                                <div style="margin-bottom:12px;">
+                                    <label style="font-size:12px;color:var(--text-secondary);">Weight Preset</label>
+                                    <select id="sdr-weight-preset" class="form-input" style="max-width:240px;margin-top:4px;">
+                                        <option value="custom">Custom</option>
+                                        <option value="balanced">Balanced (defaults)</option>
+                                        <option value="low_noise">Low Noise</option>
+                                        <option value="novel_signal">Novel Signal Focus</option>
+                                        <option value="power_anomaly">Power Anomaly Focus</option>
+                                    </select>
+                                </div>
+                                <div id="sdr-rf-weights-container"></div>
+
+                                <div style="margin-top:20px;display:flex;gap:12px;align-items:center;">
+                                    <button class="btn btn-primary" id="sdr-config-save-btn">Save SDR Config</button>
+                                    <button class="btn btn-danger" id="sdr-config-reset-btn" style="background:transparent;border:1px solid var(--accent-red);color:var(--accent-red);">Reset to Defaults</button>
+                                    <button class="btn btn-secondary" id="sdr-simulate-btn">Simulate Rescore</button>
+                                    <span class="btn-rescore"><button class="btn" id="sdr-rescore-btn" disabled title="Run simulation first">Rescore Anomalies</button></span>
+                                    <span id="sdr-rescore-status" style="font-size:12px;color:var(--text-secondary);"></span>
+                                </div>
+                                <div id="sdr-config-result" style="display:none;margin-top:12px;" class="key-created-display"></div>
+                                <div id="sdr-simulate-results" style="display:none;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="WiFi Scoring Engine" data-help="Tune Wi-Fi anomaly scoring. Review network context and known access points before interpreting a changed score.">WiFi Scoring Engine</h2>
+                        </div>
+                        <div class="card-content">
+
+                            <div id="detection-config-form">
+                                <div id="det-config-loading" style="color:var(--text-secondary);padding:12px 0;">Loading WiFi config...</div>
+                                <div id="det-config-fields" style="display:none;">
+                                    <h3 class="sub-heading" data-help-label="WiFi Thresholds" data-help="Sets thresholds used to flag Wi-Fi observations for review. Adjust using representative traffic, not a single surprising result.">WiFi Thresholds</h3>
+                                    <div class="admin-form" style="flex-wrap:wrap;gap:12px;">
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Insert Threshold <span id="def-wifi-insert" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-insert-threshold" class="form-input" step="0.01" min="0" max="1" value="0.4">
+                                        </div>
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Alert Threshold <span id="def-wifi-alert" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-alert-threshold" class="form-input" step="0.01" min="0" max="1" value="0.7">
+                                        </div>
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Critical Threshold <span id="def-wifi-critical" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-critical-threshold" class="form-input" step="0.01" min="0" max="1" value="0.85">
+                                        </div>
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Cooldown (seconds) <span id="def-wifi-cooldown" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-cooldown" class="form-input" step="1" min="0" value="300">
+                                        </div>
+                                    </div>
+
+                                    <h3 class="sub-heading" data-help-label="WiFi Auto-Snooze" data-help="Controls snoozing of recurring Wi-Fi anomaly results. Review the configured duration and scope before reducing visible alerts.">WiFi Auto-Snooze</h3>
+                                    <div class="admin-form" style="flex-wrap:wrap;gap:12px;">
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Seen Count <span id="def-wifi-snooze-count" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-snooze-count" class="form-input" step="1" min="0" value="50">
+                                        </div>
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Max Score <span id="def-wifi-snooze-score" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-snooze-score" class="form-input" step="0.01" min="0" max="1" value="0.5">
+                                        </div>
+                                        <div style="min-width:160px;">
+                                            <label style="font-size:12px;color:var(--text-secondary);">Snooze Hours <span id="def-wifi-snooze-hours" style="opacity:0.5;"></span></label>
+                                            <input type="number" id="det-wifi-snooze-hours" class="form-input" step="1" min="0" value="24">
+                                        </div>
+                                    </div>
+
+                                    <h3 class="sub-heading" data-help-label="WiFi Dimension Weights" data-help="Balances Wi-Fi scoring components. Compare results before and after changes to understand their effect.">WiFi Dimension Weights <span id="wifi-weight-sum" style="font-weight:400;font-size:12px;color:var(--text-secondary);"></span></h3>
+                                    <div id="wifi-weights-container" class="admin-form" style="flex-wrap:wrap;gap:12px;"></div>
+
+                                    <div style="margin-top:20px;display:flex;gap:12px;">
+                                        <button class="btn btn-primary" id="det-config-save-btn">Save WiFi Config</button>
+                                        <button class="btn btn-danger" id="det-config-reset-btn" style="background:transparent;border:1px solid var(--accent-red);color:var(--accent-red);">Reset to Defaults</button>
+                                    </div>
+                                    <div id="det-config-result" style="display:none;margin-top:12px;" class="key-created-display"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ML Advisor Panel -->
+                <section id="tab-ml-advisor" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="ml-advisor-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="ML Advisor" data-help="Reviews recommendations derived from available model and observation information. Treat suggestions as prompts for evaluation, not verified improvements.">ML Advisor</h2>
+                            <button class="btn btn-sm btn-primary" id="ml-advisor-refresh">Analyze Platform</button>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:16px;">
+                                Platform-wide ML analysis covering model performance, data quality, anomaly detection tuning, and expansion opportunities.
+                            </p>
+                            <div id="ml-advisor-metrics" class="metrics-grid" style="margin-bottom:16px;"></div>
+                            <p class="empty-state" id="ml-advisor-empty">Click "Analyze Platform" to generate ML recommendations</p>
+                        </div>
+                    </div>
+                    <!-- Signal Classification -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Signal Classification" data-help="Reviews classification information and suggestions. Confirm performance on representative signals before changing models.">Signal Classification</h2>
+                            <span class="card-badge" id="ml-cls-badge">--</span>
+                        </div>
+                        <div class="card-content" id="ml-cls-body">
+                            <p class="empty-state">Awaiting analysis</p>
+                        </div>
+                    </div>
+                    <!-- Anomaly Detection -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Anomaly Detection" data-help="Reviews anomaly-related recommendations. Validate proposed changes against both expected activity and known problems.">Anomaly Detection</h2>
+                            <span class="card-badge" id="ml-anom-badge">--</span>
+                        </div>
+                        <div class="card-content" id="ml-anom-body">
+                            <p class="empty-state">Awaiting analysis</p>
+                        </div>
+                    </div>
+                    <!-- Data Quality -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Data Quality &amp; Coverage" data-help="Reviews available data quality and coverage information. Missing observations can limit the reliability of later analysis.">Data Quality & Coverage</h2>
+                            <span class="card-badge" id="ml-data-badge">--</span>
+                        </div>
+                        <div class="card-content" id="ml-data-body">
+                            <p class="empty-state">Awaiting analysis</p>
+                        </div>
+                    </div>
+                    <!-- Expansion Opportunities -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="ML Expansion Opportunities" data-help="Lists proposed areas for model development. Availability here does not mean a trained, validated model is already deployed.">ML Expansion Opportunities</h2>
+                            <span class="card-badge" id="ml-expand-badge">--</span>
+                        </div>
+                        <div class="card-content" id="ml-expand-body">
+                            <p class="empty-state">Awaiting analysis</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Config Versions Panel -->
+                <section id="tab-version" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="version-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Config Versions" data-help="Create, inspect and restore configuration snapshots. These snapshots cover supported configuration files, not a full database and secret backup; review the restore result.">Config Versions</h2>
+                            <button class="btn btn-primary btn-sm" id="config-snap-create-btn">Create Snapshot</button>
+                        </div>
+                        <div class="card-content">
+                            <div id="config-snap-result" style="display:none;margin-bottom:12px;" class="key-created-display"></div>
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="config-snap-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:36px;"></th>
+                                            <th>ID</th>
+                                            <th>Timestamp</th>
+                                            <th>Trigger</th>
+                                            <th>Description</th>
+                                            <th>Files</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="config-snap-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="config-snap-empty">No config snapshots</p>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Snapshot Detail" data-help="Inspect the selected configuration snapshot before restoring it. Confirm its time and content match the change you intend.">Snapshot Detail</h2>
+                        </div>
+                        <div class="card-content">
+                            <div id="config-snap-detail">
+                                <p class="empty-state">Select a snapshot to view its contents</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Compare Versions" data-help="Compare snapshots or a snapshot with current configuration. Review differences before choosing a restore target.">Compare Versions</h2>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="btn btn-sm" id="config-cmp-current-btn" disabled>Compare Selected vs Current</button>
+                                <button class="btn btn-sm btn-primary" id="config-cmp-btn" disabled>Compare Selected</button>
+                                <button class="btn btn-sm" id="config-cmp-clear-btn">Clear</button>
+                                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:4px;"><input type="checkbox" id="config-cmp-ignore-ts" checked> Ignore timestamps</label>
+                                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="config-cmp-ignore-metrics" checked> Ignore metrics</label>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <div id="config-cmp-sel" style="margin-bottom:12px;color:var(--text-secondary);font-size:13px;">
+                                Select up to two snapshots using the <strong>Compare</strong> buttons in the table above.
+                            </div>
+                            <div id="config-cmp-result"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Reports Panel -->
+                <section id="tab-reports" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="reports-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Report Generation" data-help="Generate a report for the selected time range and available observations. Reports reflect captured data and filters, not complete RF coverage.">Report Generation</h2>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:16px;">
+                                Generate a comprehensive report covering RF detections, anomalies, spectrum activity, node health, and alert history.
+                            </p>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:16px;">
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;">Time Window</label>
+                                    <select id="report-hours" class="form-input" style="width:160px;">
+                                        <option value="1">Last 1 hour</option>
+                                        <option value="4">Last 4 hours</option>
+                                        <option value="12">Last 12 hours</option>
+                                        <option value="24" selected>Last 24 hours</option>
+                                        <option value="48">Last 48 hours</option>
+                                        <option value="168">Last 7 days</option>
+                                        <option value="720">Last 30 days</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;">Format</label>
+                                    <select id="report-format" class="form-input" style="width:120px;">
+                                        <option value="html" selected>HTML</option>
+                                        <option value="json">JSON</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;">Sections</label>
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                        <label style="font-size:12px;"><input type="checkbox" class="report-section" value="detections" checked> Detections</label>
+                                        <label style="font-size:12px;"><input type="checkbox" class="report-section" value="anomalies" checked> Anomalies</label>
+                                        <label style="font-size:12px;"><input type="checkbox" class="report-section" value="spectrum" checked> Spectrum</label>
+                                        <label style="font-size:12px;"><input type="checkbox" class="report-section" value="nodes" checked> Nodes</label>
+                                        <label style="font-size:12px;"><input type="checkbox" class="report-section" value="alerts" checked> Alerts</label>
+                                    </div>
+                                </div>
+                                <button class="btn btn-primary" id="generate-report-btn">Generate Report</button>
+                            </div>
+                            <div id="report-status" style="display:none;padding:12px;background:var(--bg-secondary);border-radius:6px;margin-top:8px;">
+                                <p id="report-status-text" style="color:var(--text-secondary);"></p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Protocols Panel -->
+                <section id="tab-protocols" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="protocols-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Protocol Detection" data-help="Manage the protocol detection settings exposed by the service. A configured protocol is not proof that a compatible live scanner is running.">Protocol Detection</h2>
+                        </div>
+                        <div class="card-content">
+                            <p style="color:var(--text-secondary);margin-bottom:16px;">
+                                Toggle individual protocols on or off. Disabled protocols are still recorded in the database for audit purposes, but anomaly scoring and alerting are suppressed.
+                            </p>
+                            <div id="protocol-toggles" class="protocol-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
+                            <button id="save-protocols" class="btn btn-primary" style="margin-top:16px">Save Protocol Settings</button>
+                            <div id="protocol-save-result" style="display:none;margin-top:12px;" class="key-created-display"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Crypto Keys Panel -->
+                <section id="tab-crypto" class="admin-tab-panel" style="display:none;" role="tabpanel" aria-labelledby="crypto-link" tabindex="0">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Crypto Key Management" data-help="Manage supported protocol decryption keys. Keep key material private and use it only for traffic you are authorized to inspect.">Crypto Key Management</h2>
+                        </div>
+                        <div class="card-content">
+                            <div class="table-wrap">
+                                <table class="data-table admin-table" id="crypto-keys-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Protocol</th>
+                                            <th>Name</th>
+                                            <th>Algorithm</th>
+                                            <th>Source</th>
+                                            <th>Created</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="crypto-keys-tbody"></tbody>
+                                </table>
+                            </div>
+                            <p class="empty-state" id="crypto-keys-empty">No crypto keys</p>
+                        </div>
+                    </div>
+
+                    <!-- Import Key -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Import Key" data-help="Import a supported decryption key using the required format. Check its protocol and ownership before saving sensitive material.">Import Key</h2>
+                        </div>
+                        <div class="card-content">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Protocol</label>
+                                    <select id="crypto-import-protocol" class="form-input" style="width:140px;">
+                                        <option value="Meshtastic">Meshtastic</option>
+                                        <option value="DMR">DMR</option>
+                                        <option value="P25">P25</option>
+                                        <option value="LoRa">LoRa</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Name</label>
+                                    <input type="text" id="crypto-import-name" class="form-input" placeholder="Key name" style="width:160px;">
+                                </div>
+                                <div style="flex:1;min-width:200px;">
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Key (hex)</label>
+                                    <input type="text" id="crypto-import-hex" class="form-input" placeholder="0123456789abcdef..." style="font-family:var(--font-mono);font-size:0.9em;">
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Algorithm</label>
+                                    <select id="crypto-import-algorithm" class="form-input" style="width:140px;">
+                                        <option value="AES-128-CTR">AES-128-CTR</option>
+                                        <option value="AES-256-CTR">AES-256-CTR</option>
+                                        <option value="AES-128-CBC">AES-128-CBC</option>
+                                        <option value="AES-256-CBC">AES-256-CBC</option>
+                                        <option value="DES-OFB">DES-OFB</option>
+                                        <option value="RC4">RC4</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                </div>
+                                <button class="btn btn-primary btn-sm" id="crypto-import-btn">Import</button>
+                            </div>
+                            <div id="crypto-import-result" style="display:none;margin-top:12px;" class="key-created-display"></div>
+                        </div>
+                    </div>
+
+                    <!-- Manual Decrypt -->
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-header">
+                            <h2 class="card-title" data-help-label="Manual Decrypt" data-help="Attempt decryption with available supported keys. A failure can mean the key, protocol or captured data is unsuitable.">Manual Decrypt</h2>
+                        </div>
+                        <div class="card-content">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px;">
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Protocol</label>
+                                    <select id="crypto-decrypt-protocol" class="form-input" style="width:140px;">
+                                        <option value="Meshtastic">Meshtastic</option>
+                                        <option value="DMR">DMR</option>
+                                        <option value="P25">P25</option>
+                                        <option value="LoRa">LoRa</option>
+                                    </select>
+                                </div>
+                                <div style="flex:1;min-width:200px;">
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Payload (hex)</label>
+                                    <input type="text" id="crypto-decrypt-payload" class="form-input" placeholder="Encrypted payload hex..." style="font-family:var(--font-mono);font-size:0.9em;">
+                                </div>
+                                <div>
+                                    <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Key ID (optional)</label>
+                                    <input type="text" id="crypto-decrypt-key-id" class="form-input" placeholder="Auto-detect" style="width:140px;">
+                                </div>
+                                <button class="btn btn-primary btn-sm" id="crypto-decrypt-btn">Decrypt</button>
+                            </div>
+                            <div id="crypto-decrypt-result" style="display:none;margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:6px;">
+                                <strong>Result:</strong>
+                                <pre id="crypto-decrypt-output" style="margin-top:8px;font-size:0.85em;word-break:break-all;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Audit detail modal (outside tab panels so it works from any tab) -->
+    <div id="audit-detail-modal" class="modal-overlay" style="display:none;" role="dialog" aria-label="Audit entry details" tabindex="-1">
+        <div class="modal-dialog modal-wide">
+            <div class="modal-header">
+                <h3 id="audit-detail-title">Audit Entry</h3>
+                <button class="btn btn-sm" id="audit-detail-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="audit-detail-body" style="max-height:60vh;overflow-y:auto;">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-sm" id="audit-detail-copy">Copy JSON</button>
+                <button class="btn btn-sm" id="audit-detail-dismiss">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Node Detail Modal -->
+    <div id="node-detail-modal" class="modal-overlay" style="display:none;" role="dialog" aria-label="Node diagnostics" tabindex="-1">
+        <div class="modal-dialog modal-wide">
+            <div class="modal-header">
+                <h3 id="node-detail-title">Node Diagnostics</h3>
+                <button class="btn btn-sm" id="node-detail-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="node-detail-body" style="max-height:70vh;overflow-y:auto;">
+                <div class="loading-container"><div class="loading-spinner"></div>Loading diagnostics...</div>
+            </div>
+            <div class="modal-footer" id="node-detail-footer">
+                <button class="btn btn-sm" id="node-detail-dismiss">Close</button>
+            </div>
+        </div>
+    </div>
+
+    </div><!-- /app-content -->
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+    <script src="{{ url_for('static', path='chart_utils.js') }}?v=31"></script>
+    <!-- cog-review PR-14: severity dual-coding helper (window.severityIcon).
+         Must load before admin.js so audit/webhook/alert badges can prepend
+         the shape glyph. -->
+    <script src="{{ url_for('static', path='severity.js') }}?v=1"></script>
+    <script src="{{ url_for('static', path='html_text.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='admin.js') }}?v=47"></script>
+    <script src="{{ url_for('static', path='training.js') }}?v=30"></script>
+    <script src="{{ url_for('static', path='protocol_admin.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='crypto_admin.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='scorer_weights.js') }}?v=2"></script>
+    <script src="{{ url_for('static', path='panel_help.js') }}?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+{
+  "captured_at": "2026-11-08T01:25:36.246913+00:00",
+  "synthetic_data": true,
+  "method": "Real disposable production TLS app; actual authenticated fixture ingest and shipped UI, original PNGs, no response/DOM substitutions or postcapture image edits.",
+  "publication_scope": "Approved by the owner on 2026-11-21 for the public repository README/docs/assets, with synthetic-data captions; not a claim of scanner or model accuracy.",
+  "scope_limits": [
+    "Synthetic fixture observations and leases; no attached radio, physical scan or model-accuracy claim.",
+    "No Grafana UI is deployed; the application metrics endpoint is actual runtime data.",
+    "Protocol Summary groups require fresh scanner leases; this fixture enables only SDR and Wi-Fi, with System always visible.",
+    "SDR Active Freqs is the server count of positive raw frequencies in 100 kHz bins over the fixed last hour, independent of the bounded recent feed. Summary detection total/rate use their existing 24-hour window; other Summary metrics retain their own scopes.",
+    "The Wi-Fi anomaly tile matches the current default active anomaly queue, including a verified zero. It is not a count of all retained anomaly history.",
+    "SDR views fully show KPIs, timeline and class distribution; the lower heatmap continues below the viewport.",
+    "Historical RF graphs come from submitted timestamps; Wi-Fi observation times are actual ingest times.",
+    "Browser accepts the disposable self-signed TLS certificate; the API client verifies the matching CA.",
+    "The visible Connected indicator means at least one dashboard WebSocket is open; it does not establish physical scanner readiness."
+  ],
+  "screenshots": [
+    {
+      "file": "frequency-hero-full.png",
+      "sha256": "a27366d8e64746755df38dcdbd9ebc346715ac98c0e0d9ce874d2177062d1ee4",
+      "pixel_dimensions": [
+        1920,
+        425
+      ],
+      "feature": "frequency-hero",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": true,
+      "caption": "Fourteen bands of labeled synthetic RF observations, with actual stored counts and mean received power. Frequency labels do not prove protocol identity."
+    },
+    {
+      "file": "summary-metrics-full.png",
+      "sha256": "078384961e98a9a16199632b071f989bea447a7ec394a8b7486b727a9a394a1a",
+      "pixel_dimensions": [
+        1752,
+        319
+      ],
+      "feature": "summary-metrics",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": true,
+      "caption": "Actual API aggregates for the synthetic RF/Wi-Fi fixture. The rate is the application's window average, not a physical receiver throughput benchmark."
+    },
+    {
+      "file": "sdr-analytics-full.png",
+      "sha256": "80acc7b5d4e14740269f14938a245a248af44e452d635e8345d98b177abfad4c",
+      "pixel_dimensions": [
+        1920,
+        1080
+      ],
+      "feature": "sdr-analytics",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": false,
+      "caption": "Real timeline, class distribution and fixed last-hour active-frequency count from timestamped synthetic detections; no chart or response substitution."
+    },
+    {
+      "file": "wifi-networks-full.png",
+      "sha256": "72563ad07d989bdfcf0096d188ab796d03b8724ee9eca4bd63f4cce62095a004",
+      "pixel_dimensions": [
+        1920,
+        1080
+      ],
+      "feature": "wifi-networks",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": false,
+      "caption": "Eight synthetic networks and twenty-four locally administered client identities across three bands; no nearby private network data."
+    },
+    {
+      "file": "alerts-full.png",
+      "sha256": "3a34ba4196a3744a258446895259a267c5c19f4f322a07561b5f824866860936",
+      "pixel_dimensions": [
+        1920,
+        1080
+      ],
+      "feature": "alerts",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": false,
+      "caption": "Alerts created by the actual condition-rule engine from labeled synthetic RF input; no outbound webhook is configured."
+    },
+    {
+      "file": "known-pattern-full.png",
+      "sha256": "2881666a5118b5255674e10515057190e79366b523bd97e0a9e20fb9f18535ae",
+      "pixel_dimensions": [
+        640,
+        807
+      ],
+      "feature": "known-pattern",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": true,
+      "caption": "The real known-RF review flow, scoped to one synthetic node and frequency interval; stored detections remain intact."
+    },
+    {
+      "file": "setup-checklist-full.png",
+      "sha256": "636bf0040d611c4fc665fce75ebb691eac834f100e232891fc5c84f7fcbe6eb4",
+      "pixel_dimensions": [
+        1920,
+        1080
+      ],
+      "feature": "setup-checklist",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": false,
+      "caption": "The shipped checklist distinguishes synthetic capture reports and stored observations from unreported physical host readiness."
+    },
+    {
+      "file": "panel-help-full.png",
+      "sha256": "764302de5df438786e3e8859b3275a8fad26fc96c582b9584cb45f78ef2d62f0",
+      "pixel_dimensions": [
+        1920,
+        1080
+      ],
+      "feature": "panel-help",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "cropped": false,
+      "caption": "Accessible contextual help on the live, populated dashboard; text is shipped product copy."
+    },
+    {
+      "file": "frequency-hero-readme.png",
+      "sha256": "658999535da7c65730285dc954433597beab8f618c4df7a76fc5af78d07549b3",
+      "pixel_dimensions": [
+        1280,
+        541
+      ],
+      "feature": "frequency-hero",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": true,
+      "caption": "Fourteen bands of labeled synthetic RF observations, with actual stored counts and mean received power. Frequency labels do not prove protocol identity."
+    },
+    {
+      "file": "summary-metrics-readme.png",
+      "sha256": "3282bf2c6d54376cd78fa383692db2d1a7f4b4facac975e625d305d232cba24c",
+      "pixel_dimensions": [
+        1232,
+        319
+      ],
+      "feature": "summary-metrics",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": true,
+      "caption": "Actual API aggregates for the synthetic RF/Wi-Fi fixture. The rate is the application's window average, not a physical receiver throughput benchmark."
+    },
+    {
+      "file": "sdr-analytics-readme.png",
+      "sha256": "4399ff04c229ea5c739337d5f2783bf1a745b1b172c05dfed4719795a798b546",
+      "pixel_dimensions": [
+        1280,
+        800
+      ],
+      "feature": "sdr-analytics",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": false,
+      "caption": "Real timeline, class distribution and fixed last-hour active-frequency count from timestamped synthetic detections; no chart or response substitution."
+    },
+    {
+      "file": "wifi-networks-readme.png",
+      "sha256": "a9cb8cd1758c9675f83403a87815db034e2d9e59a40b5cbbafc5dd70ab470507",
+      "pixel_dimensions": [
+        1198,
+        459
+      ],
+      "feature": "wifi-networks",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": true,
+      "caption": "Eight synthetic networks and twenty-four locally administered client identities across three bands; no nearby private network data."
+    },
+    {
+      "file": "alerts-readme.png",
+      "sha256": "6967a23ed7876df4776246df87643c24de9d2e48c70f5682e43b66ab347cc005",
+      "pixel_dimensions": [
+        1280,
+        800
+      ],
+      "feature": "alerts",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": false,
+      "caption": "Alerts created by the actual condition-rule engine from labeled synthetic RF input; no outbound webhook is configured."
+    },
+    {
+      "file": "known-pattern-readme.png",
+      "sha256": "1fc747b2889178fc3306cf6d0873196add05bd72f5e505d4a3b68c469d58a67f",
+      "pixel_dimensions": [
+        640,
+        807
+      ],
+      "feature": "known-pattern",
+      "viewport": {
+        "width": 1280,
+        "height": 1000
+      },
+      "cropped": true,
+      "caption": "The real known-RF review flow, scoped to one synthetic node and frequency interval; stored detections remain intact."
+    },
+    {
+      "file": "setup-checklist-readme.png",
+      "sha256": "6420610a9e4b5cf1e6d37392ab0f970267c74837d84b45b90abdc4bc8f6f3e10",
+      "pixel_dimensions": [
+        1280,
+        800
+      ],
+      "feature": "setup-checklist",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": false,
+      "caption": "The shipped checklist distinguishes synthetic capture reports and stored observations from unreported physical host readiness."
+    },
+    {
+      "file": "panel-help-readme.png",
+      "sha256": "4184b3b649e2b31baa73003eedb700e5b8c6720888a03e63a7c8f5175998b8eb",
+      "pixel_dimensions": [
+        1280,
+        800
+      ],
+      "feature": "panel-help",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "cropped": false,
+      "caption": "Accessible contextual help on the live, populated dashboard; text is shipped product copy."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "_comment": "Ratchet floors for the release coverage gates, as percentages. A gate passes when measured line % >= lines AND branch % >= branches. Raise a floor (never lower it) when coverage goes up.",
+  "python": {"lines": 89.8, "branches": 77.0},
+  "rust": {"lines": 89.0, "branches": 78.5},
+  "javascript": {"lines": 80.0, "branches": 87.0}
+}

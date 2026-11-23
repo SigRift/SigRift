@@ -1,0 +1,85 @@
+version: 2
+
+# Launch setting: open-pull-requests-limit is 0 for every ecosystem, so
+# Dependabot opens no version-update pull requests yet. Maintainers raise
+# the limits after launch. Review requests come from CODEOWNERS (the
+# `reviewers` option no longer exists).
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      rust-patches:
+        applies-to: version-updates
+        update-types: ["patch"]
+    # RustCrypto majors (aes/sha2/cbc) need a coordinated migration —
+    # bumping any one in isolation conflicts with the others. Re-evaluate
+    # on CVE or when batching with another RustCrypto bump.
+    # applies-to: version-updates keeps these ignores scoped to routine
+    # version bumps only — security updates for aes/sha2/cbc still surface.
+    ignore:
+      - dependency-name: "aes"
+        applies-to: version-updates
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sha2"
+        applies-to: version-updates
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "cbc"
+        applies-to: version-updates
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "pip"
+    directory: "/src/sigrift/bridge"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      python-patches:
+        applies-to: version-updates
+        update-types: ["patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(ci)"
+
+  - package-ecosystem: "docker"
+    directory: "/src/gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(docker)"
+
+  - package-ecosystem: "docker"
+    directory: "/src/sigrift/bridge"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(docker)"
+
+  - package-ecosystem: "docker"
+    directory: "/src/sigrift/edge"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(docker)"

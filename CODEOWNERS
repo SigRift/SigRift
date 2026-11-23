@@ -1,0 +1,48 @@
+# CODEOWNERS — shared / enterprise-adjacent surface
+#
+# GitHub requires an approving review from a listed owner before a PR that
+# touches these paths can merge. The point is NOT to slow contributors down on
+# the community edition — it is to keep the proprietary `sigrift-sentinel`
+# overlay reusable. Sentinel imports these seams in-process (see the plugin
+# points in src/sigrift/bridge and src/sigrift/providers), so changes here
+# need an owner's review to keep that reuse working.
+#
+# Everything not matched below has no owner and follows normal review rules.
+#
+# The supply-chain / deployment section at the end has a second purpose:
+# those files decide what runs with release and registry
+# privileges (workflows, root-run installers, image builds), so a change
+# to them always needs an owner's review.
+
+# --- Rust gateway core: shared proxy/ingest/scoring surface -----------------
+/src/gateway/crates/sigrift-gateway-core/   @SigRift/maintainers
+
+# --- Python plugin seams that sentinel imports at runtime -------------------
+# Bridge modules with `from sigrift_sentinel import ...` (optional imports):
+/src/sigrift/bridge/app.py                      @SigRift/maintainers
+/src/sigrift/bridge/routers/signature_library.py @SigRift/maintainers
+
+# Provider plugin contract sentinel registers against (TDOA, fingerprint, …):
+/src/sigrift/providers/base.py      @SigRift/maintainers
+/src/sigrift/providers/registry.py  @SigRift/maintainers
+
+# Discovery points for the crypto / DSP plugins sentinel ships:
+/src/sigrift/lib/crypto/__init__.py @SigRift/maintainers
+/src/sigrift/lib/dsp/__init__.py    @SigRift/maintainers
+
+# --- Licensing / legal source of truth --------------------------------------
+/LICENSE        @SigRift/maintainers
+/NOTICE         @SigRift/maintainers
+/LEGAL.md       @SigRift/maintainers
+/CODEOWNERS     @SigRift/maintainers
+
+# --- CI/CD, installers, images ---------------------------------------------
+# Workflows run with contents/packages/id-token write; scripts/ holds the
+# root-run installers.
+/.github/                       @SigRift/maintainers
+/scripts/                       @SigRift/maintainers
+/docker-compose*.yml            @SigRift/maintainers
+/.dockerignore                  @SigRift/maintainers
+/src/gateway/Dockerfile         @SigRift/maintainers
+/src/sigrift/bridge/Dockerfile  @SigRift/maintainers
+/src/sigrift/edge/Dockerfile    @SigRift/maintainers

@@ -1,0 +1,38 @@
+[project]
+name = "sigrift"
+version = "0.1.0"
+description = "Distributed RF/TSCM detection and analysis platform"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+markers = [
+    "performance: long-running performance/benchmark tests (deselect with '-m \"not performance\"')",
+    "slow: tests that take more than a few seconds",
+    "xdist_group: group tests for sequential execution under pytest-xdist",
+]
+addopts = "-m 'not performance' --strict-markers --timeout=30"
+pythonpath = ["src"]
+testpaths = ["tests/bridge", "tests/docs"]
+
+# Ruff is pinned in CI (`ruff==0.14.14`, see .github/workflows/ci.yml and
+# CONTRIBUTING.md). The settings below spell out that version's defaults
+# explicitly so a contributor running a newer ruff locally gets the same
+# result: later releases widened the default rule set (0.17 reports ~1000
+# new findings on this tree) and started formatting Markdown files.
+# Widen `select` / `include` deliberately, in a PR of its own.
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+# Python sources only (the ruff 0.14 default). Newer ruff adds "*.md" to the
+# default include list and would reformat READMEs under src/.
+include = ["*.py", "*.pyi", "*.ipynb", "**/pyproject.toml"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[project.entry-points."sigrift.geo_providers"]
+# TDOA geolocation is an enterprise-only plugin; it ships in the
+# commercial SigRift edition, not in this community repository.
+rss = "sigrift.providers.geo_rss:RSSGeoProvider"

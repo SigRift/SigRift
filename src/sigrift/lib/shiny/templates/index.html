@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLRF Gen4 Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+    <!-- Header -->
+    <header class="dashboard-header">
+        <div class="header-left">
+            <h1 class="header-title">
+                <span class="header-logo">RF</span> MLRF Gen4 Dashboard
+            </h1>
+            <span id="connection-status" class="connection-indicator disconnected">
+                <span class="status-dot"></span>
+                <span class="status-text">Disconnected</span>
+            </span>
+        </div>
+        <div class="header-right">
+            <span id="uptime-display" class="uptime-text"></span>
+            <button id="theme-toggle" class="btn btn-icon" title="Toggle theme">
+                <span class="theme-icon">&#9789;</span>
+            </button>
+        </div>
+    </header>
+
+    <main class="dashboard-main">
+        <!-- System Overview Row -->
+        <section class="stat-row">
+            <div class="stat-card" id="stat-nodes">
+                <div class="stat-value" id="stat-node-count">--</div>
+                <div class="stat-label">Nodes</div>
+                <div class="stat-sub" id="stat-node-detail">-- active</div>
+            </div>
+            <div class="stat-card" id="stat-alerts">
+                <div class="stat-value" id="stat-alert-count">--</div>
+                <div class="stat-label">Active Alerts</div>
+                <div class="stat-sub" id="stat-alert-detail"></div>
+            </div>
+            <div class="stat-card" id="stat-jobs">
+                <div class="stat-value" id="stat-job-count">--</div>
+                <div class="stat-label">Running Jobs</div>
+                <div class="stat-sub" id="stat-job-detail">-- queued</div>
+            </div>
+            <div class="stat-card" id="stat-spectrum">
+                <div class="stat-value" id="stat-spectrum-status">--</div>
+                <div class="stat-label">Spectrum</div>
+                <div class="stat-sub" id="stat-spectrum-detail"></div>
+            </div>
+        </section>
+
+        <!-- Node Panel -->
+        <section class="card" id="panel-nodes">
+            <div class="card-header" data-collapse="nodes">
+                <h2 class="card-title">Edge Nodes</h2>
+                <span class="card-badge" id="node-count-badge">0</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="nodes-content">
+                <div class="table-wrap">
+                    <table class="data-table" id="nodes-table">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Monitor</th>
+                                <th>Node ID</th>
+                                <th>Host</th>
+                                <th>Radio</th>
+                                <th>AI HW</th>
+                                <th>Model</th>
+                                <th>Platform</th>
+                                <th>OS</th>
+                                <th>Updates</th>
+                                <th>Last Seen</th>
+                                <th>CPU %</th>
+                                <th>Mem MB</th>
+                                <th>Disk %</th>
+                                <th>Temp</th>
+                                <th>Load</th>
+                                <th>Cls/sec</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nodes-tbody"></tbody>
+                    </table>
+                </div>
+                <p class="empty-state" id="nodes-empty">No nodes registered</p>
+            </div>
+        </section>
+
+        <!-- Training Panel -->
+        <section class="card" id="panel-training">
+            <div class="card-header" data-collapse="training">
+                <h2 class="card-title">Training Monitor</h2>
+                <span class="card-badge" id="training-status-badge">Idle</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="training-content">
+                <div class="training-grid">
+                    <div class="training-status" id="training-current">
+                        <div class="training-row">
+                            <span class="label">Run ID:</span>
+                            <span id="train-run-id">--</span>
+                        </div>
+                        <div class="training-row">
+                            <span class="label">Epoch:</span>
+                            <span id="train-epoch">-- / --</span>
+                        </div>
+                        <div class="training-row">
+                            <span class="label">Best Acc:</span>
+                            <span id="train-best-acc">--%</span>
+                        </div>
+                        <div class="progress-bar-wrap">
+                            <div class="progress-bar" id="train-progress" style="width: 0%"></div>
+                        </div>
+                        <h3 class="sub-heading">Hierarchical Accuracy</h3>
+                        <div class="accuracy-grid" id="accuracy-grid">
+                            <div class="acc-item"><span class="acc-label">Class</span><span class="acc-val" id="acc-cls">--</span></div>
+                            <div class="acc-item"><span class="acc-label">Mod-type</span><span class="acc-val" id="acc-mt">--</span></div>
+                            <div class="acc-item"><span class="acc-label">Family</span><span class="acc-val" id="acc-fam">--</span></div>
+                            <div class="acc-item"><span class="acc-label">Super-fam</span><span class="acc-val" id="acc-sf">--</span></div>
+                        </div>
+                    </div>
+                    <div class="training-chart">
+                        <canvas id="accuracy-chart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+                <h3 class="sub-heading">Models</h3>
+                <div class="table-wrap">
+                    <table class="data-table" id="models-table">
+                        <thead>
+                            <tr><th>Model</th><th>Size</th><th>Modified</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody id="models-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Spectrum Panel -->
+        <section class="card" id="panel-spectrum">
+            <div class="card-header" data-collapse="spectrum">
+                <h2 class="card-title">Spectrum Viewer</h2>
+                <span class="card-badge" id="spectrum-badge">Disconnected</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="spectrum-content">
+                <div class="spectrum-controls">
+                    <div class="form-group">
+                        <label for="spec-host">Host</label>
+                        <input type="text" id="spec-host" value="127.0.0.1" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="spec-port">Port</label>
+                        <input type="number" id="spec-port" value="1234" class="form-input" min="1" max="65535">
+                    </div>
+                    <div class="form-group">
+                        <label for="spec-freq">Freq (MHz)</label>
+                        <input type="number" id="spec-freq" value="433.92" class="form-input" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label for="spec-gain">Gain (dB)</label>
+                        <input type="number" id="spec-gain" value="40" class="form-input" min="0" max="73">
+                    </div>
+                    <div class="form-group form-actions">
+                        <button id="spec-connect" class="btn btn-primary">Connect</button>
+                        <button id="spec-disconnect" class="btn btn-secondary" disabled>Disconnect</button>
+                    </div>
+                </div>
+                <div class="spectrum-display">
+                    <canvas id="spectrum-canvas" width="900" height="200"></canvas>
+                    <canvas id="waterfall-canvas" width="900" height="200"></canvas>
+                </div>
+                <div id="signal-list" class="signal-overlay-list"></div>
+            </div>
+        </section>
+
+        <!-- Alerts Panel -->
+        <section class="card" id="panel-alerts">
+            <div class="card-header" data-collapse="alerts">
+                <h2 class="card-title">Alerts</h2>
+                <span class="card-badge" id="alert-count-badge">0</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="alerts-content">
+                <div class="alert-filters">
+                    <select id="alert-severity-filter" class="form-input">
+                        <option value="">All Severities</option>
+                        <option value="critical">Critical</option>
+                        <option value="warning">Warning</option>
+                        <option value="info">Info</option>
+                    </select>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="alert-hide-acked"> Hide acknowledged
+                    </label>
+                </div>
+                <div id="alerts-list" class="alerts-list"></div>
+                <p class="empty-state" id="alerts-empty">No alerts</p>
+                <h3 class="sub-heading">Alert Rules</h3>
+                <div class="form-inline" id="alert-rule-form">
+                    <input type="text" id="rule-name" placeholder="Rule name" class="form-input">
+                    <select id="rule-severity" class="form-input">
+                        <option value="warning">Warning</option>
+                        <option value="critical">Critical</option>
+                        <option value="info">Info</option>
+                    </select>
+                    <button id="create-rule-btn" class="btn btn-primary">Create Rule</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Signals Panel -->
+        <section class="card" id="panel-signals">
+            <div class="card-header" data-collapse="signals">
+                <h2 class="card-title">Signal Browser</h2>
+                <span class="card-badge">40 classes</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="signals-content">
+                <div id="taxonomy-browser" class="taxonomy-browser">
+                    <div id="sf-buttons" class="taxonomy-level"></div>
+                    <div id="family-list" class="taxonomy-level"></div>
+                    <div id="class-cards" class="class-card-grid"></div>
+                </div>
+                <div class="signal-viewer" id="signal-viewer" style="display:none;">
+                    <div class="signal-viewer-header">
+                        <h3 id="sig-class-name"></h3>
+                        <div class="form-group">
+                            <label for="sig-snr">SNR (dB)</label>
+                            <input type="number" id="sig-snr" value="15" class="form-input" min="-20" max="40">
+                            <button id="sig-generate" class="btn btn-primary">Generate</button>
+                            <button id="sig-compare" class="btn btn-secondary">Compare</button>
+                        </div>
+                    </div>
+                    <div class="signal-canvases">
+                        <div class="canvas-panel">
+                            <h4>IQ Constellation</h4>
+                            <canvas id="constellation-canvas" width="300" height="300"></canvas>
+                        </div>
+                        <div class="canvas-panel">
+                            <h4>Power Spectral Density</h4>
+                            <canvas id="psd-canvas" width="400" height="200"></canvas>
+                        </div>
+                        <div class="canvas-panel">
+                            <h4>DSP Features</h4>
+                            <canvas id="features-canvas" width="400" height="200"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Jobs Panel -->
+        <section class="card" id="panel-jobs">
+            <div class="card-header" data-collapse="jobs">
+                <h2 class="card-title">Job Queue</h2>
+                <span class="card-badge" id="job-count-badge">0</span>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="jobs-content">
+                <div class="form-inline" id="job-create-form">
+                    <input type="text" id="job-name" placeholder="Job name" class="form-input">
+                    <select id="job-preset" class="form-input">
+                        <option value="">No preset</option>
+                    </select>
+                    <input type="number" id="job-priority" placeholder="Priority" class="form-input" min="0" max="100" value="0">
+                    <button id="create-job-btn" class="btn btn-primary">Create Job</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="data-table" id="jobs-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>State</th>
+                                <th>Priority</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobs-tbody"></tbody>
+                    </table>
+                </div>
+                <h3 class="sub-heading">Schedules</h3>
+                <div class="table-wrap">
+                    <table class="data-table" id="schedules-table">
+                        <thead>
+                            <tr><th>Name</th><th>Node</th><th>Interval</th><th>Enabled</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody id="schedules-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Keys Panel -->
+        <section class="card" id="panel-keys">
+            <div class="card-header" data-collapse="keys">
+                <h2 class="card-title">API Keys</h2>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="keys-content">
+                <div class="form-inline" id="key-create-form">
+                    <input type="text" id="key-id-input" placeholder="Key ID" class="form-input">
+                    <input type="text" id="key-desc-input" placeholder="Description" class="form-input">
+                    <input type="text" id="key-node-input" placeholder="Node ID (edge node keys only)" title="Fill in for a key an edge node will use: it is bound to that node. Leave empty for a dashboard key, which cannot heartbeat as a node." class="form-input">
+                    <select id="key-role-input" class="form-input" aria-label="Role" title="Viewer: read-only. Analyst: also alert rules, acknowledgements, jobs, schedules, model evaluations and the spectrum connection. Admin: also node registration and node commands.">
+                        <option value="viewer" selected>Viewer (read-only)</option>
+                        <option value="analyst">Analyst</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <button id="create-key-btn" class="btn btn-primary">Create Key</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="data-table" id="keys-table">
+                        <thead>
+                            <tr><th>Key ID</th><th>Description</th><th>Created</th><th>Expires</th><th>Node</th><th>Role</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody id="keys-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Export Panel -->
+        <section class="card" id="panel-export">
+            <div class="card-header" data-collapse="export">
+                <h2 class="card-title">Export Reports</h2>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="export-content">
+                <div class="export-grid">
+                    <div class="export-item">
+                        <h4>Node Data</h4>
+                        <button class="btn btn-secondary" data-export="nodes" data-format="json">JSON</button>
+                        <button class="btn btn-secondary" data-export="nodes" data-format="csv">CSV</button>
+                    </div>
+                    <div class="export-item">
+                        <h4>Training History</h4>
+                        <button class="btn btn-secondary" data-export="training" data-format="json">JSON</button>
+                        <button class="btn btn-secondary" data-export="training" data-format="csv">CSV</button>
+                    </div>
+                    <div class="export-item">
+                        <h4>Alert History</h4>
+                        <button class="btn btn-secondary" data-export="alerts" data-format="json">JSON</button>
+                        <button class="btn btn-secondary" data-export="alerts" data-format="csv">CSV</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Activity Log -->
+        <section class="card" id="panel-activity">
+            <div class="card-header" data-collapse="activity">
+                <h2 class="card-title">Activity Log</h2>
+                <button class="collapse-btn" aria-label="Toggle panel">&#9660;</button>
+            </div>
+            <div class="card-content" id="activity-content">
+                <div id="activity-log" class="activity-log"></div>
+                <p class="empty-state" id="activity-empty">No activity recorded</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <button id="modal-close" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer"></div>
+        </div>
+    </div>
+
+    <!-- Auth Prompt (shown on 401) -->
+    <div id="auth-overlay" class="modal-overlay" style="display:none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>API Key Required</h3>
+            </div>
+            <div class="modal-body">
+                <p>Enter your API key to access the dashboard.</p>
+                <input type="password" id="auth-key-input" class="form-input" placeholder="API Key" autocomplete="off">
+            </div>
+            <div class="modal-footer">
+                <button id="auth-submit" class="btn btn-primary">Authenticate</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', path='dashboard.js') }}"></script>
+    <script src="{{ url_for('static', path='spectrum.js') }}"></script>
+    <script src="{{ url_for('static', path='signals.js') }}"></script>
+</body>
+</html>

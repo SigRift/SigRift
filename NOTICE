@@ -1,0 +1,22 @@
+SigRift — distributed RF/TSCM detection and analysis platform
+Copyright (c) 2026 Deepak Mahbubani
+
+Licensed under the MIT License (SPDX: MIT).
+
+See the LICENSE file in this repository for the full licence text.
+
+Third-party components retain their own licences; the MIT licence above
+does not replace them. The vendored Leaflet 1.9.4 JavaScript, stylesheet,
+and images in src/sigrift/bridge/static/vendor/ are distributed under the
+BSD 2-Clause License. Their complete upstream copyright notice, licence
+conditions, and disclaimer are in that directory's LEAFLET-LICENSE file.
+Upstream: https://github.com/Leaflet/Leaflet/tree/v1.9.4
+
+The gateway's Rust and bundled native dependency licence texts are in
+licenses/gateway/THIRD-PARTY-NOTICES.txt. Gateway images and binary/installer
+release archives include that file as THIRD-PARTY-NOTICES.txt alongside
+this NOTICE (in /app for the gateway image).
+
+Private preview builds made before the change to MIT were licensed under the
+GNU Affero General Public License, version 3 only (AGPL-3.0-only); anyone who
+obtained a copy under those terms keeps it under those terms.

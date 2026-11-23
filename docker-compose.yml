@@ -1,0 +1,402 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: src/sigrift/bridge/Dockerfile
+    expose:
+      - "8001"
+    # Only on the `backend` network, which only the gateway shares: no
+    # other container (edge agents, scanners) can reach the bridge
+    # directly — they all go through https://gateway:8444.
+    networks:
+      - backend
+    volumes:
+      - bridge_data:/app/src/sigrift/bridge/data
+      # The CA private key (and any future bridge-only secret). Mounted
+      # on the bridge ONLY: the internet-facing gateway mounts
+      # bridge_data (detections.db, keys.json, the CA certificate) but
+      # never this volume. On start-up the bridge moves a CA key an older
+      # version left in bridge_data into it.
+      - bridge_secrets:/app/secrets
+    environment:
+      - BRIDGE_ENV=${BRIDGE_ENV:-production}
+      - BRIDGE_SECRETS_DIR=/app/secrets
+      # Refuse every request that does not carry the gateway's
+      # X-Rust-Proxy: <UC_PROXY_SECRET> header (loopback health checks
+      # excepted), so nothing that reaches port 8001 can skip the
+      # gateway's TLS, authentication and rate limits.
+      - BRIDGE_REQUIRE_PROXY=true
+      - BRIDGE_AUDIT_KEY=${BRIDGE_AUDIT_KEY:-}
+      - BRIDGE_MFA_KEY=${BRIDGE_MFA_KEY:-}
+      - BRIDGE_MASTER_KEY=${BRIDGE_MASTER_KEY:-}
+      - BRIDGE_ADMIN_PASSWORD=${BRIDGE_ADMIN_PASSWORD:-}
+      - BRIDGE_SESSION_BINDING=${BRIDGE_SESSION_BINDING:-none}
+      # The gateway sits in front and proxies every request. Trust its
+      # X-Forwarded-For — and only its — so the bridge's per-IP rate
+      # limiters (WS auth, detection ingest, audit) see the real
+      # browser/scanner IP rather than the gateway's container IP. The
+      # gateway has a fixed address on the `backend` network (below).
+      - BRIDGE_TRUSTED_PROXIES=${BRIDGE_TRUSTED_PROXIES:-${SIGRIFT_GATEWAY_BACKEND_IP:-10.203.84.2}}
+      # Required in EVERY mode, development too: with
+      # BRIDGE_REQUIRE_PROXY=true the bridge refuses every request
+      # without it, and the healthcheck below reports the bridge
+      # unhealthy (so the gateway never starts) while it is empty. Same
+      # value as the gateway — both ends of the trust header.
+      - UC_PROXY_SECRET=${UC_PROXY_SECRET:-}
+      # Node API keys that are not bound to a node (no node_id in
+      # keys.json) are bound to the first node they report for — by the
+      # bridge's node routes and by the gateway's detection ingest. "1"
+      # restores the old behaviour (an unbound key may act for any
+      # node); set it for the gateway too (below), never on its own.
+      - BRIDGE_ALLOW_UNBOUND_NODE_KEYS=${BRIDGE_ALLOW_UNBOUND_NODE_KEYS:-}
+      # Pre-seed an in-stack NODE API key so the edge service can
+      # heartbeat on first boot without an out-of-band key mint step.
+      # See bridge/app.py lifespan ("Seed local edge node key").
+      - BRIDGE_LOCAL_NODE_KEY=${BRIDGE_LOCAL_NODE_KEY:-}
+      # Pre-register the local-edge node row under the SAME id that
+      # the in-stack scanners post heartbeats / detections from
+      # (MLRF_NODE_ID; bootstrap-staging.sh defaults it to `hostname -s`).
+      # Without this, the lifespan registers "local-edge" but scanners
+      # send the actual host hostname → /api/nodes/heartbeat 404s and
+      # the node never appears in the Edge-nodes UI.
+      - BRIDGE_LOCAL_NODE_ID=${MLRF_NODE_ID:-local-edge}
+      # First-boot anomaly-baseline preset (urban-dense|suburban-residential|
+      # rural-quiet|office-commercial|none). Applied only when no learned state
+      # exists yet; see docs/bundle-format.md.
+      - SIGRIFT_PRESET=${SIGRIFT_PRESET:-}
+    restart: unless-stopped
+    # Time between SIGTERM and SIGKILL (Docker's default is 10 s). On
+    # SIGTERM the bridge saves its state, then waits — bounded — for
+    # running analysis jobs (BRIDGE_JOB_STOP_TIMEOUT_S, 5 s), the
+    # detection write queue (up to 10 s) and other worker threads
+    # (BRIDGE_SHUTDOWN_THREAD_WAIT_S, 5 s), saves what changed meanwhile
+    # and closes the database. 10 s can kill it before that last save.
+    stop_grace_period: 30s
+    healthcheck:
+      # Unhealthy while UC_PROXY_SECRET is empty (or the old public
+      # default): the bridge would answer only this probe and refuse
+      # everything the gateway proxies to it with 403.
+      test: ["CMD", "python3", "-c", "import os, sys, urllib.request; sys.exit('UC_PROXY_SECRET is empty: the bridge refuses every proxied request (BRIDGE_REQUIRE_PROXY=true). Set it in .env, see .env.example') if os.environ.get('UC_PROXY_SECRET', '') in ('', 'uppercrust-internal') else urllib.request.urlopen('http://localhost:8001/api/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: src/gateway/Dockerfile
+    # Published on the host's loopback interface only, unless the
+    # operator opts in to LAN exposure with SIGRIFT_BIND=0.0.0.0 (every
+    # interface) in .env. The host-network scanners (wifi-scan, bt-scan)
+    # use https://127.0.0.1:${UC_PORT}, which both settings serve; any
+    # other single address needs their MLRF_BRIDGE_URL changed too.
+    ports:
+      - "${SIGRIFT_BIND:-127.0.0.1}:${UC_PORT:-8444}:8444"
+    networks:
+      default: {}
+      backend:
+        # Fixed, so the bridge can trust exactly this address for
+        # X-Forwarded-For (BRIDGE_TRUSTED_PROXIES above). It lies outside
+        # the network's ip_range (below), so docker never hands it to the
+        # bridge, which starts first.
+        ipv4_address: ${SIGRIFT_GATEWAY_BACKEND_IP:-10.203.84.2}
+    environment:
+      - UC_PYTHON_URL=http://bridge:8001
+      # Inside the container: listen on its own interfaces. What the
+      # host exposes is decided by the `ports:` mapping above.
+      - UC_HOST=0.0.0.0
+      - UC_PORT=8444
+      - UC_PROXY_SECRET=${UC_PROXY_SECRET:-}
+      - UC_DB_PATH=/app/data/detections.db
+      - UC_KEYS_PATH=/app/data/keys.json
+      - BRIDGE_ENV=${BRIDGE_ENV:-production}
+      # Content-Security-Policy: strict (the default). report-only or
+      # disabled turn the protection off to diagnose a page (.env.example).
+      - UC_CSP_MODE=${UC_CSP_MODE:-strict}
+      # Same values as the bridge — both services read and write the
+      # same audit chain and user rows. BRIDGE_AUDIT_KEY keys the audit
+      # HMAC chain; BRIDGE_MFA_KEY is the Fernet key for the TOTP
+      # secrets (44 characters: 43 base64 characters, then '='). In
+      # production the gateway refuses to start without either.
+      # BRIDGE_MASTER_KEY — the admin API key — is deliberately NOT
+      # passed: only the bridge needs it, and this is the internet-
+      # facing container.
+      - BRIDGE_AUDIT_KEY=${BRIDGE_AUDIT_KEY:-}
+      - BRIDGE_MFA_KEY=${BRIDGE_MFA_KEY:-}
+      - UC_TLS_CERT=${UC_TLS_CERT:-}
+      - UC_TLS_KEY=${UC_TLS_KEY:-}
+      # Same value as the bridge's: unless it is "1", the gateway's
+      # detection ingest binds an unbound node key to the batch's node
+      # (through the bridge) before it accepts the batch.
+      - BRIDGE_ALLOW_UNBOUND_NODE_KEYS=${BRIDGE_ALLOW_UNBOUND_NODE_KEYS:-}
+      # PKI Phase A (mTLS client-cert auth) is enabled via the
+      # docker-compose.pki.yml overlay, which sets UC_TLS_CLIENT_CA and
+      # UC_CA_REGISTRY_PATH to real paths. They are deliberately NOT
+      # declared here: clap rejects a set-but-empty env var, so an
+      # empty default would crash the gateway whenever PKI is off.
+    volumes:
+      - bridge_data:/app/data
+    depends_on:
+      bridge:
+        condition: service_healthy
+    restart: unless-stopped
+    # On SIGTERM the gateway gives requests in progress up to 3 s, the
+    # post-ingest hooks still queued up to 5 s to reach the bridge, then
+    # writes the rest (up to 64 MiB) to its hook spool in /app/data,
+    # replayed at the next start. That leaves little of Docker's default
+    # 10 s for the spool write on slow storage (an SD card).
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Edge node agent — heartbeats system metrics to the bridge so the
+  # dashboard shows the deploy host as a live node. SDR ingest (rf_scan)
+  # is a future addition; this baseline keeps the dashboard from looking
+  # dead on a fresh install. USB device passthrough is mounted so a
+  # future rf_scan mode can read an attached SDR without a host install.
+  edge:
+    build:
+      context: .
+      dockerfile: src/sigrift/edge/Dockerfile
+    environment:
+      # Gateway terminates TLS on 8444 (UC_TLS_CERT/UC_TLS_KEY). The
+      # edge agents (edge, scan, wifi-scan, bt-scan) VERIFY that cert:
+      # against MLRF_CA_CERT / MLRF_CA_BUNDLE when set, else the system
+      # trust store. The in-stack cert is self-signed, so whatever wires
+      # the gateway's cert also mounts it read-only into these services
+      # at /app/tls/cert.pem and points MLRF_CA_CERT at it — the
+      # docker-compose.override.yml that scripts/quickstart.sh writes
+      # (./tls/cert.pem) and docker-compose.staging.yml
+      # (/opt/sigrift/tls/cert.pem). Without that they fail closed.
+      # MLRF_INSECURE_TLS=1 disables verification: dev-only escape
+      # hatch, never set it here.
+      - MLRF_API_URL=https://gateway:8444
+      - MLRF_API_KEY=${BRIDGE_LOCAL_NODE_KEY:-}
+      - MLRF_NODE_ID=${MLRF_NODE_ID:-local-edge}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # rtl_tcp daemon — owns the USB SDR, exposes it as a TCP stream
+  # internal to the compose network. Same image as `edge` (rtl-sdr
+  # apt package ships rtl_tcp); the entrypoint override swaps from
+  # node_agent to the supervisor, which runs rtl_tcp as its child,
+  # stops it when the receiver is unplugged and starts it again when
+  # the same receiver comes back. It answers its state ("running",
+  # "starting", "sensor_absent", "sensor_changed") on port 1235, which
+  # `scan` asks when it cannot capture. Exit code 75 means "restart me"
+  # so Docker reads the USB device nodes again.
+  rtl-tcp:
+    build:
+      context: .
+      dockerfile: src/sigrift/edge/Dockerfile
+    entrypoint: []
+    command: ["python3", "-m", "sigrift.edge.rtl_tcp_supervisor"]
+    expose:
+      - "1234"
+      - "1235"
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    # gid 46 = plugdev on Debian/Ubuntu. The rtl-sdr apt package's
+    # udev rule sets the dongle's /dev/bus/usb/<bus>/<dev> entry to
+    # root:plugdev mode 0660 — without this supplementary group the
+    # container's appuser (uid 1500) gets EACCES opening the device.
+    # Numeric gid (rather than a name) sidesteps needing plugdev to
+    # exist inside the container's /etc/group.
+    group_add:
+      - "46"
+    healthcheck:
+      # rtl_tcp is a single-client server — it closes its listen socket
+      # once `scan` connects, so a TCP-connect probe times out as soon
+      # as the consumer is attached (false unhealthy). Ask the supervisor
+      # instead: exit 0 only while rtl_tcp runs on the selected receiver.
+      test: ["CMD", "python3", "-m", "sigrift.edge.rtl_tcp_supervisor", "--check"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Classification worker — reads IQ from rtl-tcp, runs ONNX
+  # inference against an open-default classifier mounted from the
+  # host (compose bind-mount in docker-compose.staging.yml), POSTs
+  # detections back to the gateway. Same MLRF_API_KEY as the
+  # heartbeat agent — the pre-seeded NODE-role key.
+  scan:
+    build:
+      context: .
+      dockerfile: src/sigrift/edge/Dockerfile
+    entrypoint: []
+    command: ["python3", "-m", "sigrift.edge.rf_scan"]
+    environment:
+      - MLRF_BRIDGE_URL=https://gateway:8444
+      - MLRF_BRIDGE_KEY=${BRIDGE_LOCAL_NODE_KEY:-}
+      - MLRF_NODE_ID=${MLRF_NODE_ID:-local-edge}
+      - MLRF_RTL_HOST=rtl-tcp
+      - MLRF_RTL_PORT=1234
+      # rtl-tcp's supervisor state, asked when capture fails, so the
+      # scanner reports why (receiver absent or replaced).
+      - MLRF_RTL_STATUS_PORT=1235
+      - MLRF_CAPTURE_MODE=rtltcp
+      - MLRF_MODEL_PATH=${MLRF_MODEL_PATH:-/app/models/open-default.onnx}
+      # The open-default model is trained at 8192 IQ samples; legacy
+      # models default to 4096. Set the per-deployment value here.
+      - MLRF_INPUT_SAMPLES=${MLRF_INPUT_SAMPLES:-8192}
+      - MLRF_LOG_DIR=/app/logs
+      - MLRF_AGENT_DIR=/app/models
+      # Persist learned anomaly baselines across restarts (edge_data volume).
+      # Without MLRF_DATA_DIR the node relearns from zero on every restart.
+      - MLRF_DATA_DIR=/app/data
+    volumes:
+      - edge_data:/app/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+      rtl-tcp:
+        # service_started, not service_healthy: rtl-tcp is healthy only
+        # while the receiver is attached, and scan must still start when
+        # it is away so it can report "sensor_absent" and resume by
+        # itself. scan waits quietly between reconnection attempts.
+        condition: service_started
+    restart: unless-stopped
+
+  # WiFi monitor-mode scanner — puts a wlan interface into monitor
+  # mode (defaults to wlan1 — a USB adapter; on-board wlan0 typically
+  # doesn't support monitor mode), hops channels, decodes 802.11
+  # beacons + probes with tcpdump, batch-POSTs to /api/wifi/ingest.
+  #
+  # Needs the host network namespace because monitor mode is a per-
+  # netns property and Docker's default bridge net hides host wlans.
+  # Same MLRF_BRIDGE_KEY (pre-seeded NODE key) as the scan service.
+  #
+  # This container parses attacker-controlled over-the-air frames, so
+  # it gets only the capabilities it needs instead of `privileged:
+  # true` (which also handed it every host device, all capabilities
+  # and no seccomp/AppArmor confinement):
+  #   NET_ADMIN        `ip link set` + `iw dev … set type monitor` /
+  #                    `set channel` (nl80211 netlink)
+  #   NET_RAW          tcpdump's AF_PACKET capture socket
+  #   SETUID, SETGID   Debian's tcpdump drops root to its `tcpdump`
+  #                    user right after opening the capture socket
+  #                    (initgroups/setgid/setuid); without these it
+  #                    exits with "Couldn't change to 'tcpdump' uid=…"
+  # NOTE: derived from the code paths in wifi_scan.py, not hardware-
+  # tested. If a particular adapter/driver needs more (e.g. rfkill via
+  # /dev/rfkill), add that specific capability/device here rather than
+  # going back to privileged.
+  wifi-scan:
+    build:
+      context: .
+      dockerfile: src/sigrift/edge/Dockerfile
+    entrypoint: []
+    command: ["python3", "/app/src/sigrift/edge/wifi_scan.py"]
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, SETUID, SETGID]
+    # Runs as root (below), so forbid any further privilege gain via
+    # setuid binaries / file capabilities. Nothing in this service
+    # relies on either.
+    security_opt:
+      - no-new-privileges:true
+    # Override the Dockerfile's USER appuser → root. Capabilities are
+    # only effective for uid 0 here — a non-root process can't claim
+    # them, so `ip link set <iface> down` returns RTNETLINK "Operation
+    # not permitted" (exit 2) for uid 1500. cap_drop/cap_add above keep
+    # this root confined to the listed capabilities.
+    user: "0:0"
+    environment:
+      # network_mode: host means we can't resolve `gateway` via
+      # compose DNS — hit it via the host's published port instead.
+      # TLS trust (cert mount + MLRF_CA_CERT) comes from the overlay —
+      # see the note on the `edge` service.
+      - MLRF_BRIDGE_URL=https://127.0.0.1:${UC_PORT:-8444}
+      - MLRF_BRIDGE_KEY=${BRIDGE_LOCAL_NODE_KEY:-}
+      - MLRF_NODE_ID=${MLRF_NODE_ID:-local-edge}
+      - MLRF_WIFI_IFACE=${MLRF_WIFI_IFACE:-wlan1}
+      - MLRF_WIFI_BANDS=${MLRF_WIFI_BANDS:-both}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Bluetooth scanner — uses BlueZ (hcitool / bluetoothctl) to
+  # discover Classic + BLE devices, posts to /api/bluetooth/ingest.
+  # MLRF_BT_ENABLED=1 because bt_scanner defaults the gate to 0.
+  #
+  # network_mode: host so the BlueZ system DBus + raw HCI sockets
+  # work as if running on the host (Bluetooth sockets only exist in
+  # the host network namespace).
+  #
+  # Parses attacker-controlled advertisements, so no `privileged:
+  # true`. The scanner runs as uid 1500 and gets HCI access from the
+  # file capabilities the edge image sets on hcitool
+  # (`setcap cap_net_raw,cap_net_admin+eip`, src/sigrift/edge/
+  # Dockerfile). File capabilities can only grant what is in the
+  # container's bounding set, so keep exactly NET_ADMIN + NET_RAW
+  # there and drop everything else.
+  #
+  # Deliberately NO `security_opt: [no-new-privileges:true]` here:
+  # no-new-privileges makes the kernel ignore file capabilities on
+  # exec, which would silently break the hcitool fallback path (and
+  # the scanner as uid 1500 has nothing else to escalate with).
+  # NOTE: not hardware-tested in CI; if an adapter needs more than
+  # this, add the specific capability rather than privileged.
+  bt-scan:
+    build:
+      context: .
+      dockerfile: src/sigrift/edge/Dockerfile
+    entrypoint: []
+    command: ["python3", "-m", "sigrift.lib.bt_scanner"]
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      - MLRF_BRIDGE_URL=https://127.0.0.1:${UC_PORT:-8444}
+      - MLRF_API_KEY=${BRIDGE_LOCAL_NODE_KEY:-}
+      - MLRF_NODE_ID=${MLRF_NODE_ID:-local-edge}
+      - MLRF_BT_ADAPTER=${MLRF_BT_ADAPTER:-hci0}
+      - MLRF_BT_SCAN_INTERVAL=${MLRF_BT_SCAN_INTERVAL:-30}
+      - MLRF_BT_ENABLED=1
+    volumes:
+      # BlueZ runs over the system DBus; bind-mount the host socket
+      # so the container can use `bluetoothctl` and the python BlueZ
+      # bindings without spinning up its own bus.
+      - /var/run/dbus:/var/run/dbus
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  # The default network carries gateway ↔ edge agents/scanners. `backend`
+  # carries gateway ↔ bridge only. Its subnet is fixed so the gateway can
+  # have a fixed address. Docker gives every other container on it (the
+  # bridge) an address from ip_range only — without that it would hand
+  # the bridge the lowest free address, the gateway's, and the gateway
+  # would fail to start with "Address already in use". The default lies
+  # outside Docker's default address pools (172.17-31.0.0/16 and
+  # 192.168.0.0/16), so networks docker numbers itself never take it.
+  # If it still clashes ("Pool overlaps with other one on this address
+  # space": another SigRift stack on this host, or a network the host
+  # uses), the installers pick a free /28 and write all three to .env;
+  # by hand, set SIGRIFT_BACKEND_SUBNET, SIGRIFT_BACKEND_IP_RANGE (inside
+  # the subnet) and SIGRIFT_GATEWAY_BACKEND_IP (inside the subnet,
+  # outside the range).
+  default: {}
+  backend:
+    ipam:
+      config:
+        - subnet: ${SIGRIFT_BACKEND_SUBNET:-10.203.84.0/28}
+          ip_range: ${SIGRIFT_BACKEND_IP_RANGE:-10.203.84.8/29}
+
+volumes:
+  bridge_data:
+  # Bridge-only secrets (the CA private key). Never mount it on the gateway.
+  bridge_secrets:
+  edge_data:

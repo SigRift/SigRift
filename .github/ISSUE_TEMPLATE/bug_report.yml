@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a reproducible problem in SigRift (community edition).
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Please do **not** use this form
+        for security vulnerabilities — follow the process in
+        [SECURITY.md](https://github.com/SigRift/SigRift/security/policy) instead. Enterprise edition
+        issues should go through your support contract, not here.
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I am running the community edition (not the commercial SigRift Enterprise build).
+          required: true
+        - label: I searched existing issues and discussions for a duplicate.
+          required: true
+        - label: This is not a security vulnerability (if it is, see SECURITY.md).
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: SigRift version
+      description: Output of `sigrift-gateway --version` or the git commit SHA if building from source.
+      placeholder: "e.g. v0.1.0 or 3d98600"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Distribution and version (e.g. Ubuntu 24.04, Debian 12, Raspberry Pi OS Bookworm).
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      multiple: false
+      options:
+        - Rust gateway (sigrift-gateway / sigrift-gateway-core)
+        - Python bridge (FastAPI backend)
+        - Edge node agent
+        - Dashboard / frontend
+        - CLI tooling (signal_tester, license_tool, etc.)
+        - Installation / packaging
+        - Docs
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, numbered steps. Include commands, config files, and hardware if relevant.
+      placeholder: |
+        1. Run `sigrift-gateway --port 8444 ...`
+        2. In another terminal, `curl -k https://localhost:8444/api/...`
+        3. Observe …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste any relevant log lines (scrub secrets, PII, and anything sensitive).
+      render: text
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware (if relevant)
+      description: "SDR model, edge node platform, etc. (e.g. HackRF One, RPi 5, RTL-SDR v3)"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, config snippets, related issues, workarounds tried.

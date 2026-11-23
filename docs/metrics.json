@@ -1,0 +1,21 @@
+{
+  "code": {
+    "bridge_routers": 47,
+    "bridge_storage": 39,
+    "edge_modules": 13
+  },
+  "commit": "c9362ef3135f7dcfd40fed5e2d7b742cd0626857",
+  "generated_at": "2026-11-16T12:30:57Z",
+  "scoring": {
+    "python_anomaly_dimensions": 12,
+    "python_anomaly_dimensions_opt_in": 2,
+    "rust_gateway_dimensions": 10
+  },
+  "signatures": {
+    "tscm_threat_signatures": 82
+  },
+  "tests": {
+    "python_bridge": 7505,
+    "rust_workspace": 1093
+  }
+}

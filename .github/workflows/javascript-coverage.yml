@@ -1,0 +1,111 @@
+name: JavaScript line and branch coverage
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: javascript-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    name: Coverage gate scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # paths-filter lists the PR's changed files through the API.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      security: ${{ steps.filter.outputs.security }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            security:
+              - 'src/gateway/crates/sigrift-gateway-core/src/auth/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/middleware/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/proxy/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/ws/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/storage/**'
+              - 'src/sigrift/bridge/dependencies.py'
+              - 'src/sigrift/bridge/routers/admin.py'
+              - 'src/sigrift/bridge/routers/auth.py'
+              - 'src/sigrift/bridge/routers/internal.py'
+              - 'src/sigrift/bridge/routers/keys.py'
+              - 'src/sigrift/bridge/routers/mfa.py'
+              - 'src/sigrift/bridge/storage/audit.py'
+              - 'src/sigrift/bridge/storage/users.py'
+              - 'src/sigrift/lib/crypto/**'
+              - 'src/sigrift/lib/security/**'
+              - 'src/sigrift/bridge/static/auth_guard.js'
+              - 'src/sigrift/bridge/static/login.js'
+              - 'scripts/install-release.sh'
+              - 'scripts/quickstart.sh'
+              - 'scripts/pki_bootstrap.py'
+              - '.github/workflows/**'
+
+  javascript-coverage:
+    needs: scope
+    # Gate for release evidence (pushes to main, checked by release.yml's
+    # coverage preflight), manual runs, and security-related pull requests
+    # (security paths in the scope job, or the `security` label). Other pull
+    # requests skip it instead of failing.
+    if: >-
+      github.event_name != 'pull_request'
+      || needs.scope.outputs.security == 'true'
+      || contains(github.event.pull_request.labels.*.name, 'security')
+    name: Release coverage — JavaScript (floor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install locked measurement tooling
+        run: npm ci --prefix tests/bridge/js --ignore-scripts
+      - name: Inventory static branches including unloaded and inline source
+        run: |
+          node tests/bridge/js/static_coverage.cjs --output=reports/coverage/javascript-static/baseline.json
+          node tests/bridge/js/static_coverage.cjs --verify-baseline=reports/coverage/javascript-static/baseline.json
+      - name: Require complete source inventory and coverage at or above the floor
+        run: node tests/bridge/js/coverage.cjs
+      - name: Record toolchain and source
+        if: always()
+        run: |
+          mkdir -p reports/coverage/javascript
+          {
+            git rev-parse HEAD
+            node --version
+            npm --version
+            python --version
+          } > reports/coverage/javascript/provenance.txt
+      - name: Preserve uncovered source evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: javascript-line-branch-coverage
+          path: reports/coverage/javascript/
+          if-no-files-found: error
+      - name: Preserve static zero-execution inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: javascript-static-inventory
+          path: reports/coverage/javascript-static/
+          if-no-files-found: error

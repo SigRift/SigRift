@@ -1,0 +1,658 @@
+name: CI
+
+# Pull requests have no path filter: a workflow skipped by path filtering
+# leaves its checks Pending, which would block a docs-only PR that requires
+# `CI ok`. The `changes` job below skips the heavy jobs instead, and ci-ok
+# accepts those skips. Pushes to main keep the filter — no merge waits on a
+# push run — but a docs-only commit on main then has no CI run, and
+# release.yml's coverage preflight refuses to release such a commit.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # PR pushes: group by PR number so a force-push supersedes the prior
+  # run. `push: main` runs use the ref (main) but DO NOT cancel — a
+  # release needs this workflow's jobs to have passed on its exact commit
+  # (scripts/check-release-coverage.py), and a cancelled main run leaves
+  # that commit without them.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# dorny/paths-filter@v4 needs pull-requests:read to call listFiles on
+# PR events; the default GITHUB_TOKEN permissions may not grant it, and
+# then the call fails with "Resource not accessible by integration"
+# without this explicit block. contents:read covers checkout for the rest.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Path-based change detection. Heavy language-specific jobs gate on
+  # these outputs so a Rust-only PR doesn't burn ~40 GH-min running the
+  # 4-shard Python test matrix (and vice versa). Lint + docker-build
+  # always run because they're cheap and broad.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      rust: ${{ steps.filter.outputs.rust }}
+      security: ${{ steps.filter.outputs.security }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'src/sigrift/**'
+              - 'scripts/**'
+              - 'training/**'
+              - 'tests/bridge/**'
+              - 'tests/docs/**'
+              - '.coveragerc'
+              - 'pyproject.toml'
+              - 'src/sigrift/bridge/requirements*.txt'
+              - 'src/sigrift/bridge/requirements*.in'
+              - '.github/workflows/ci.yml'
+              # The bridge half of the bridge/gateway key-role parity
+              # check (tests/bridge/test_key_role_parity.py) reads these
+              # gateway files: a gateway-only PR that edits the shared
+              # table or effective_role must run it too, or the two
+              # sides drift apart with every job green.
+              - 'src/gateway/crates/sigrift-gateway-core/testdata/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/auth/api_key.rs'
+            security:
+              - 'src/gateway/crates/sigrift-gateway-core/src/auth/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/middleware/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/proxy/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/ws/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/storage/**'
+              - 'src/sigrift/bridge/dependencies.py'
+              - 'src/sigrift/bridge/routers/admin.py'
+              - 'src/sigrift/bridge/routers/auth.py'
+              - 'src/sigrift/bridge/routers/internal.py'
+              - 'src/sigrift/bridge/routers/keys.py'
+              - 'src/sigrift/bridge/routers/mfa.py'
+              - 'src/sigrift/bridge/storage/audit.py'
+              - 'src/sigrift/bridge/storage/users.py'
+              - 'src/sigrift/lib/crypto/**'
+              - 'src/sigrift/lib/security/**'
+              - 'src/sigrift/bridge/static/auth_guard.js'
+              - 'src/sigrift/bridge/static/login.js'
+              - 'scripts/install-release.sh'
+              - 'scripts/quickstart.sh'
+              - 'scripts/pki_bootstrap.py'
+              - '.github/workflows/**'
+            rust:
+              - 'src/gateway/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              # Dockerfile / compose changes can break the gateway
+              # release-build path that the rust job verifies.
+              - '**/Dockerfile'
+              - 'docker-compose*.yml'
+              - '.github/workflows/ci.yml'
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Exact pin: new ruff releases change the default rule set and what
+      # `ruff format` touches (0.17 reports ~1000 new findings here). The
+      # rule selection is also frozen in pyproject.toml [tool.ruff], so a
+      # newer local ruff behaves the same. Bump deliberately, in its own
+      # PR, together with CONTRIBUTING.md.
+      - name: Install ruff
+        run: pip install "ruff==0.14.14"
+
+      - name: Ruff check
+        run: cd src/sigrift && ruff check .
+
+      - name: Ruff format check
+        run: cd src/sigrift && ruff format --check .
+
+  # Installer shell scripts. Cheap, so it always runs: these scripts
+  # rewrite operators' secrets (quickstart.sh / install-release.sh), and
+  # nothing else exercises them before a deploy.
+  scripts:
+    name: Install/deploy scripts (shellcheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test tooling
+        run: |
+          pip install --require-hashes -r src/sigrift/bridge/requirements-test.txt
+          pip install "pyyaml>=6"
+
+      - name: bash -n + shellcheck
+        run: |
+          set -e
+          for f in scripts/*.sh src/sigrift/bridge/scripts/*.sh src/gateway/*.sh; do
+            bash -n "$f"
+          done
+          shellcheck --version
+          shellcheck -S warning scripts/*.sh src/sigrift/bridge/scripts/*.sh src/gateway/*.sh
+
+      - name: Compose files resolve (every overlay combination)
+        run: |
+          set -e
+          for overlays in "" \
+              "-f docker-compose.pki.yml"; do
+            # shellcheck disable=SC2086  # word-split on purpose
+            docker compose -f docker-compose.yml $overlays config -q
+          done
+
+      - name: Install locked JavaScript measurement tooling for regression tests
+        run: npm ci --prefix tests/bridge/js --ignore-scripts
+
+      - name: Script, license-packaging and release-notes regression tests
+        env:
+          COVERAGE_FILE: .coverage.scripts
+        run: |
+          python3 scripts/gateway-notices.py --check
+          python3 -m pytest scripts/tests tests/docs/test_license_packaging.py \
+            tests/docs/test_changelog_unreleased.py -q -p no:cacheprovider \
+            --cov --cov-branch --cov-report=
+
+      - name: Record script coverage provenance
+        if: always()
+        run: python scripts/python-coverage.py --record-part 'scripts'
+
+      - name: Preserve script coverage partition
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-coverage-part-scripts
+          path: |
+            .coverage.scripts
+            .coverage.scripts.metadata.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  rust:
+    name: Rust gateway (workspace + community binary)
+    # Run on Rust changes OR Python changes — the boundary-check step
+    # below greps Python source for forbidden imports, so Python-only
+    # PRs still need to hit this job.
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.python == 'true'
+    # Heavy job: hosted by default (free on public repos). A private repo
+    # may set the CI_HEAVY_RUNNER repo variable (JSON label array, e.g.
+    # ["self-hosted","<label>"]) to run it on its own runners instead —
+    # never on a public repo without a restricted runner group (fork PRs).
+    runs-on: ${{ vars.CI_HEAVY_RUNNER && fromJSON(vars.CI_HEAVY_RUNNER) || 'ubuntu-latest' }}
+    # The 415-test suite plus a fresh community release build took 19m35s
+    # on a hosted runner. Preserve full-cost credential hashing and allow
+    # ordinary host variation without losing a passing run at 20 minutes.
+    timeout-minutes: 30
+    # No sccache here: a persistent runner keeps its target/ between runs,
+    # so incremental compilation already provides what sccache would, and
+    # runner instances that share one HOME race on the sccache-action
+    # install/cleanup path (one job's post-step can delete the binary
+    # mid-build for another: "could not execute process `sccache ...
+    # rustc`"). The GHA cache backend also logged many write errors per run.
+    steps:
+      - uses: actions/checkout@v7
+
+      # Toolchain pinned so a new stable release (with new clippy lints)
+      # can't break CI unannounced now that clippy runs with -D warnings.
+      # Keep in step with release.yml; bump deliberately. (No
+      # rust-toolchain.toml on purpose — it would also pin the Docker
+      # builds.)
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.97.0
+          components: clippy, rustfmt
+
+      # No Swatinem/rust-cache either — same reasoning as sccache
+      # above: a persistent runner's target/ survives between runs, and
+      # the cache restore/save writes into HOME, which runner instances
+      # may share, racing concurrent jobs.
+
+      - name: Format check (workspace)
+        run: cargo fmt --all --check
+
+      # -D (deny), not -W: `-W warnings` only re-states the default and
+      # can never fail the job.
+      - name: Clippy (workspace, all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests (workspace)
+        run: cargo test --workspace
+
+      - name: Release build — community (sigrift-gateway)
+        run: cargo build --release -p sigrift-gateway
+
+      - name: Community-build boundary check (Rust)
+        # Ensure the community crate's source carries no HS256 or
+        # feature-route names. If these strings appear in community code,
+        # the split has regressed.
+        run: |
+          set -e
+          echo "Scanning sigrift-gateway and sigrift-gateway-core for enterprise names..."
+          forbidden=(Hs256LicenseResolver LEGACY_FEATURE_ROUTES load_license_file verify_hs256_jwt)
+          for name in "${forbidden[@]}"; do
+            if grep -r --include='*.rs' "$name" \
+                 src/gateway/crates/sigrift-gateway-core/ \
+                 src/gateway/crates/sigrift-gateway/; then
+              echo "::error::Found '$name' in community crate sources — split has leaked"
+              exit 1
+            fi
+          done
+          echo "Community sources clean: no enterprise-only symbols found."
+
+      - name: Python community-source boundary check
+        # Community sigrift package must not import enterprise modules
+        # except through try/except ImportError (graceful degradation).
+        # Any unconditional import of a forbidden module path fails the
+        # build.
+        run: |
+          set -e
+          echo "Scanning src/sigrift/ for enterprise-module names..."
+          forbidden_modules=(
+            "sigrift_sentinel.fingerprint.phy"
+            "sigrift.lib.dsp.phy_fingerprint"
+            "sigrift.lib.dsp.fingerprint_encoder"
+            "sigrift.lib.dsp.fingerprint_trainer"
+            "sigrift.lib.dsp.apb_fingerprint"
+            "sigrift.lib.dsp.wifi_fingerprint"
+            "sigrift.lib.dsp.wifi_phy_features"
+            "sigrift.lib.models.device_fingerprint_head"
+            "sigrift.lib.models.phy_fingerprint_model"
+            "sigrift.bridge.fingerprint_service"
+            "sigrift.bridge.routers.fingerprints"
+            "sigrift.bridge.routers.phy_fingerprints"
+            "sigrift.bridge.storage.fingerprints"
+            "sigrift.bridge.storage.phy_fingerprints"
+            "sigrift.lib.crypto.fuzz_mutator"
+            "sigrift.bridge.routers.fuzzing"
+            "sigrift.bridge.storage.fuzz_sessions"
+            "sigrift.bridge.routers.oidc"
+            "sigrift.bridge.routers.stix"
+            "sigrift.bridge.stix_output"
+            "sigrift.edge.wifi_phy_capture"
+          )
+          leaks=0
+          for mod in "${forbidden_modules[@]}"; do
+            hits=$(grep -rn --include='*.py' "from $mod \|import $mod\b" src/sigrift/ || true)
+            if [ -n "$hits" ]; then
+              echo "Found references to '$mod':"
+              echo "$hits"
+              unconditional=$(echo "$hits" | awk -F: '{print $1":"$2}' | while read loc; do
+                f=$(echo "$loc" | cut -d: -f1)
+                ln=$(echo "$loc" | cut -d: -f2)
+                if ! sed -n "$((ln - 5)),${ln}p" "$f" | grep -q "^\s*try:"; then
+                  echo "  unconditional at $loc"
+                fi
+              done)
+              if [ -n "$unconditional" ]; then
+                echo "$unconditional"
+                leaks=$((leaks + 1))
+              fi
+            fi
+          done
+          if [ "$leaks" -ne 0 ]; then
+            echo "::error::Unconditional imports of enterprise modules found in community source."
+            exit 1
+          fi
+          echo "Community Python sources clean (only guarded imports of sentinel modules)."
+
+  bridge-tests-shard:
+    # Sharded across 4 parallel jobs via pytest-split. Each shard runs
+    # ~1/4 of the suite on a dedicated runner with `-n 4` xdist, so
+    # effective parallelism is ~16. An aggregation job below
+    # ("Python bridge tests") gates merges via a single required
+    # check name unchanged from before sharding.
+    name: Python bridge tests (shard ${{ matrix.shard }}/4)
+    # Heavy job: hosted by default, CI_HEAVY_RUNNER opts into other
+    # runners — see runs-on note on the rust job.
+    runs-on: ${{ vars.CI_HEAVY_RUNNER && fromJSON(vars.CI_HEAVY_RUNNER) || 'ubuntu-latest' }}
+    # pytest-split falls back to an even-by-count split, so the shard with
+    # the heaviest suites set the pace (about 20 min on hosted runners).
+    timeout-minutes: 30
+    # Gate on Python paths. Rust-only PRs skip the ~40 GH-min shard
+    # matrix entirely; the aggregation job below treats skipped shards
+    # as a pass so branch protection's "Python bridge tests" required
+    # check still resolves.
+    needs: [lint, changes]
+    if: needs.changes.outputs.python == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          # No `cache: pip` here: on a persistent runner ~/.cache/pip
+          # survives between runs, and the GitHub cache-service upload
+          # in the post step can be slow enough from such a runner to
+          # exceed the job timeout.
+
+      - name: Install dependencies (CPU-only torch + test tooling)
+        run: |
+          python3 -m pip install --upgrade pip
+          # Hash-checked locks (scripts/lock-requirements.sh): runtime +
+          # test tooling from PyPI, then the torch CPU wheel from the
+          # PyTorch index only, without its (already locked) dependencies.
+          python3 -m pip install --require-hashes \
+            -r src/sigrift/bridge/requirements.txt \
+            -r src/sigrift/bridge/requirements-test.txt
+          python3 -m pip install --require-hashes --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu \
+            -r src/sigrift/bridge/requirements-torch-cpu.txt
+
+      - name: Run bridge tests (shard ${{ matrix.shard }}/4)
+        env:
+          COVERAGE_FILE: .coverage.bridge-${{ matrix.shard }}
+        # --timeout and marker defaults come from pyproject.toml addopts.
+        # --splits 4 --group N: pytest-split partitions the test suite
+        # by historical durations (.test_durations if present, else
+        # alphabetical even-by-count fallback) and runs only group N.
+        # -n 4 --dist=loadgroup: per-shard xdist parallelism honours
+        # @pytest.mark.xdist_group markers (tests in the same group run
+        # on one worker for shared process-level env state).
+        # --durations=20 surfaces the slowest tests in the log so we
+        # can target the worst offenders for further speedups.
+        run: |
+          PYTHONPATH=src python3 -m pytest tests/bridge/ \
+            --splits 4 --group ${{ matrix.shard }} \
+            -n 4 --dist=loadgroup \
+            --durations=20 --no-header --cov --cov-branch --cov-report=
+
+      - name: Record bridge coverage provenance
+        if: always()
+        run: python scripts/python-coverage.py --record-part 'bridge-${{ matrix.shard }}'
+
+      - name: Preserve bridge coverage partition
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-coverage-part-bridge-${{ matrix.shard }}
+          path: |
+            .coverage.bridge-${{ matrix.shard }}
+            .coverage.bridge-${{ matrix.shard }}.metadata.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  bridge-tests:
+    # Aggregation job. Branch protection's required check name was
+    # previously "Python bridge tests"; this preserves that name so
+    # the sharding rollout doesn't require a branch-protection edit.
+    #
+    # A skipped shard matrix passes ONLY when the change detector ran
+    # successfully and reported no Python changes. The shards are also
+    # skipped when `lint` or `changes` fails or is cancelled, and GitHub
+    # counts a skipped required check as passing — so "skipped" on its
+    # own must never turn this check green.
+    name: Python bridge tests
+    runs-on: ubuntu-latest
+    needs: [changes, bridge-tests-shard]
+    if: always()
+    steps:
+      - name: Verify all shards passed
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          PYTHON_CHANGED: ${{ needs.changes.outputs.python }}
+          SHARDS_RESULT: ${{ needs.bridge-tests-shard.result }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::change detection did not succeed (got: $CHANGES_RESULT), so a skip cannot be trusted"
+            exit 1
+          fi
+          if [ "$SHARDS_RESULT" = "skipped" ] && [ "$PYTHON_CHANGED" != "true" ]; then
+            echo "Bridge tests skipped — no Python-relevant changes in this PR."
+            exit 0
+          fi
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::bridge-tests shards did not pass (got: $SHARDS_RESULT; Python changed: $PYTHON_CHANGED)"
+            exit 1
+          fi
+          echo "All bridge-tests shards passed."
+
+  shiny-tests:
+    # The Shiny signal-browser dashboard (src/sigrift/lib/shiny) ships
+    # its own test suite that is NOT under pyproject's testpaths
+    # (["tests/bridge"]), so it never ran in CI and silently rotted —
+    # the signal-taxonomy count assertions drifted from 41/10/7 to the
+    # real 76/16/9 unnoticed. This dedicated job keeps it honest.
+    name: Shiny dashboard tests
+    needs: [lint, changes]
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ${{ vars.CI_HEAVY_RUNNER && fromJSON(vars.CI_HEAVY_RUNNER) || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (CPU-only torch + test tooling)
+        run: |
+          python3 -m pip install --upgrade pip
+          # Hash-checked locks (scripts/lock-requirements.sh): runtime +
+          # test tooling from PyPI, then the torch CPU wheel from the
+          # PyTorch index only, without its (already locked) dependencies.
+          python3 -m pip install --require-hashes \
+            -r src/sigrift/bridge/requirements.txt \
+            -r src/sigrift/bridge/requirements-test.txt
+          python3 -m pip install --require-hashes --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu \
+            -r src/sigrift/bridge/requirements-torch-cpu.txt
+
+      - name: Run shiny dashboard tests
+        env:
+          COVERAGE_FILE: .coverage.shiny
+        run: |
+          PYTHONPATH=src python3 -m pytest src/sigrift/lib/shiny/tests/ \
+            -n 4 --durations=20 --no-header --cov --cov-branch --cov-report=
+
+      - name: Record Shiny coverage provenance
+        if: always()
+        run: python scripts/python-coverage.py --record-part 'shiny'
+
+      - name: Preserve Shiny coverage partition
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-coverage-part-shiny
+          path: |
+            .coverage.shiny
+            .coverage.shiny.metadata.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  python-coverage-report:
+    name: Python coverage inventory and baseline
+    needs: [changes, scripts, bridge-tests-shard, shiny-tests]
+    if: always() && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Require every measured suite to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          if any(job['result'] != 'success' for job in results.values()):
+              raise SystemExit('Coverage baseline requires every input suite to pass.')
+          PY
+      - name: Install hash-locked coverage tooling
+        run: python -m pip install --require-hashes -r src/sigrift/bridge/requirements-test.txt
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: python-coverage-part-*
+          path: coverage-data
+      - name: Combine all partitions and verify source inventory
+        run: python scripts/python-coverage.py --data-dir coverage-data
+      - name: Publish Python baseline
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-coverage-report
+          path: reports/coverage/python
+          include-hidden-files: true
+          if-no-files-found: error
+
+  python-coverage-release-gate:
+    name: Release coverage — Python (floor)
+    needs: [changes, python-coverage-report]
+    # A gate for release evidence (pushes to main, checked by release.yml's
+    # coverage preflight) and for security-related pull requests: those that
+    # touch the "security" paths above or carry the `security` label. Other
+    # pull requests still produce the coverage report but skip this gate.
+    if: >-
+      github.event_name != 'pull_request'
+      || needs.changes.outputs.security == 'true'
+      || contains(github.event.pull_request.labels.*.name, 'security')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Independent from CI ok: this is an explicit release requirement. It
+    # fails when line or branch coverage drops below the committed ratchet
+    # floor in scripts/coverage-floors.json, or on any provenance problem.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --require-hashes -r src/sigrift/bridge/requirements-test.txt
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-coverage-report
+          path: reports/coverage/python
+      - name: Require Python coverage at or above the committed floor
+        run: python scripts/python-coverage.py --check reports/coverage/python/coverage.json
+
+  docs-vs-metrics:
+    # Asserts numeric claims in human-written docs (README, CHANGELOG,
+    # ARCHITECTURE, CONTRIBUTING) match docs/metrics.json — the truth
+    # file .github/workflows/metrics.yml regenerates (committed to main
+    # by a manual run of that workflow), so documented numbers cannot
+    # silently drift from the code.
+    #
+    # Marked continue-on-error so stale documentation surfaces in the
+    # PR checks panel without blocking merges. Promote to a required
+    # check via branch protection once the docs are clean.
+    name: Docs vs metrics (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: pip install "pytest>=7" "pytest-timeout>=2"
+
+      - name: Run docs-vs-metrics assertions
+        run: |
+          PYTHONPATH=src python3 -m pytest tests/docs/ \
+            -v --tb=short --no-header -p no:cacheprovider
+
+  docker-build:
+    name: Docker images (compose build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Builds every image defined in docker-compose.yml. Catches
+      # Dockerfile regressions (wrong COPY paths, stale package names,
+      # missing build deps) that unit tests never see.
+      - name: docker compose build
+        run: docker compose build --progress=plain
+
+  ci-ok:
+    # One check to require in branch protection. It depends on every job
+    # and runs even when they fail, and it fails on any failure or
+    # cancellation — and on any skip the change detector does not
+    # explain: rust is skipped only when neither Rust nor Python changed,
+    # the Python jobs only when Python did not change. (docs-vs-metrics is
+    # informational and left out.)
+    name: CI ok
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - lint
+      - scripts
+      - rust
+      - bridge-tests-shard
+      - bridge-tests
+      - shiny-tests
+      - docker-build
+      - python-coverage-report
+    if: always()
+    steps:
+      - name: Check every job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["RESULTS"])
+          result = {job: info["result"] for job, info in needs.items()}
+          changed = needs["changes"].get("outputs", {})
+          python = changed.get("python") == "true"
+          rust = changed.get("rust") == "true"
+          # Jobs the change detector may legitimately skip, and when.
+          may_skip = {
+              "rust": not (rust or python),
+              "bridge-tests-shard": not python,
+              "shiny-tests": not python,
+              "python-coverage-report": not python,
+          }
+          bad = []
+          if result.get("changes") != "success":
+              bad.append(f"changes: {result.get('changes')}")
+          for job, res in sorted(result.items()):
+              if res == "success" or job == "changes":
+                  continue
+              if res == "skipped" and result.get("changes") == "success" and may_skip.get(job):
+                  print(f"{job}: skipped (no relevant changes)")
+                  continue
+              bad.append(f"{job}: {res}")
+          if bad:
+              for b in bad:
+                  print(f"::error::{b}")
+              sys.exit(1)
+          print("All CI jobs passed (or were skipped because nothing they test changed).")
+          PY

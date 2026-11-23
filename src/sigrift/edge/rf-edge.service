@@ -1,0 +1,29 @@
+[Unit]
+Description=RF Signal Detection Edge Node
+After=network.target rtl-tcp.service
+Wants=rtl-tcp.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/rf-edge
+ExecStart=/usr/bin/python3 /opt/rf-edge/bin/monitor.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=HAILO_MONITOR=1
+# Persist learned anomaly baselines across restarts (rf_scan ingest path).
+# StateDirectory makes systemd create/chown /var/lib/sigrift-edge for User=pi.
+Environment=MLRF_DATA_DIR=/var/lib/sigrift-edge
+StateDirectory=sigrift-edge
+# Reads the SDR over rtl_tcp and the Hailo NPU through its device node:
+# no capabilities, no privilege gain.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+StandardOutput=append:/opt/rf-edge/logs/output.log
+StandardError=append:/opt/rf-edge/logs/output.log
+
+[Install]
+WantedBy=multi-user.target

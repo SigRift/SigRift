@@ -1,0 +1,24 @@
+[run]
+branch = True
+relative_files = True
+source =
+    src/sigrift
+    scripts
+    training
+    tests
+# Authored test bodies and embedded fixtures/helpers are measured too.
+# Release measurement requires POSIX fork support (Linux/macOS).
+# Save real child-process arcs before low-level os._exit skips normal shutdown.
+patch = subprocess,fork,_exit
+
+[report]
+precision = 2
+show_missing = True
+# Include never-imported helpers in directories without __init__.py.
+include_namespace_packages = True
+# Keep platform/error paths visible, including existing no-cover pragmas.
+exclude_lines =
+partial_branches =
+
+[html]
+directory = reports/coverage/python/html

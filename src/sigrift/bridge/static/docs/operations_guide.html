@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Guide — The Bridge v4.0.0</title>
+<style>
+:root {
+  --bg: #0d1117; --bg-card: #161b22; --bg-sidebar: #0d1117;
+  --border: #30363d; --text: #c9d1d9; --text-secondary: #8b949e;
+  --accent: #58a6ff; --accent-hover: #79c0ff;
+  --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff;
+  --code-bg: #1c2129; --code-border: #30363d;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; bottom: 0; overflow-y: auto; padding: 20px 0; z-index: 10; }
+.sidebar-header { padding: 0 20px 16px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.sidebar-header h2 { font-size: 16px; color: var(--text); margin-bottom: 4px; }
+.sidebar-header .version { font-size: 12px; color: var(--text-secondary); }
+.sidebar-nav a { display: block; padding: 6px 20px; font-size: 13px; color: var(--text-secondary); border-left: 3px solid transparent; }
+.sidebar-nav a:hover { color: var(--text); background: rgba(88,166,255,0.05); text-decoration: none; }
+.sidebar-nav .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); padding: 12px 20px 4px; font-weight: 600; }
+.content { margin-left: 260px; padding: 32px 40px; max-width: 900px; flex: 1; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 22px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 17px; margin: 28px 0 12px; }
+h4 { font-size: 14px; margin: 16px 0 8px; color: var(--text-secondary); }
+p, li { margin-bottom: 8px; }
+ul, ol { padding-left: 24px; margin-bottom: 16px; }
+.subtitle { color: var(--text-secondary); margin-bottom: 24px; font-size: 15px; }
+code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; background: var(--code-bg); padding: 2px 5px; border-radius: 3px; }
+pre { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 6px; padding: 12px 16px; overflow-x: auto; margin: 8px 0 16px; font-size: 12px; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+th { text-align: left; padding: 6px 10px; background: var(--code-bg); color: var(--text-secondary); font-weight: 600; border: 1px solid var(--border); }
+td { padding: 6px 10px; border: 1px solid var(--border); vertical-align: top; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+.warning { background: rgba(210,153,34,0.08); border-left: 3px solid var(--yellow); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+.danger { background: rgba(248,81,73,0.08); border-left: 3px solid var(--red); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+.flow-diagram { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 6px; padding: 16px 20px; margin: 12px 0 16px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; line-height: 1.8; white-space: pre; overflow-x: auto; }
+@media (max-width: 900px) { .sidebar { display: none; } .content { margin-left: 0; padding: 20px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h2>Operations Guide</h2>
+    <span class="version">The Bridge v4.0.0</span>
+    <div style="margin-top:8px"><a href="api_reference.html">API Ref</a> &middot; <a href="deployment_guide.html">Deployment</a></div>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-group">Architecture</div>
+    <a href="#system-overview">System Overview</a>
+    <a href="#data-flow">Data Flow</a>
+    <a href="#storage-model">Storage Model</a>
+    <div class="nav-group">Edge Nodes</div>
+    <a href="#edge-deployment">Deployment</a>
+    <a href="#edge-updating">Updating Nodes</a>
+    <a href="#edge-monitoring">Monitoring</a>
+    <a href="#edge-saf">Store-and-Forward</a>
+    <div class="nav-group">Summarization</div>
+    <a href="#summary-overview">Pipeline Overview</a>
+    <a href="#summary-enable">Enabling</a>
+    <a href="#summary-monitor">Monitoring</a>
+    <a href="#summary-troubleshoot">Troubleshooting</a>
+    <div class="nav-group">Detection &amp; Anomaly</div>
+    <a href="#det-flow">Detection Flow</a>
+    <a href="#scoring-pipeline">Scoring Pipeline</a>
+    <a href="#anomaly-review">Anomaly Review</a>
+    <a href="#baseline-learning">Baseline Learning</a>
+    <div class="nav-group">Threats &amp; Incidents</div>
+    <a href="#threat-signatures">Threat Signatures</a>
+    <a href="#threat-matching">Matching Process</a>
+    <a href="#incident-lifecycle">Incident Lifecycle</a>
+    <div class="nav-group">Security Config</div>
+    <a href="#mfa-setup">MFA / TOTP Setup</a>
+    <a href="#session-security">Session Security</a>
+    <a href="#csrf-protection">CSRF Protection</a>
+    <a href="#encryption-dar">Data-at-Rest Encryption</a>
+    <a href="#audit-hmac">Audit Chain Integrity</a>
+    <div class="nav-group">Background Tasks</div>
+    <a href="#bg-overview">Task Overview</a>
+    <a href="#bg-cleanup">Periodic Cleanup</a>
+    <a href="#bg-materializer">Spectrum Materializer</a>
+    <a href="#bg-other">Other Tasks</a>
+    <a href="#bg-config">Configuration</a>
+    <div class="nav-group">Common Tasks</div>
+    <a href="#add-node">Add/Remove Nodes</a>
+    <a href="#manage-keys">Manage API Keys</a>
+    <a href="#manage-alerts">Manage Alerts</a>
+    <a href="#export-data">Export Data</a>
+    <a href="#wifi-ops">WiFi Operations</a>
+    <div class="nav-group">Spectrum &amp; Geo</div>
+    <a href="#spectrum-waterfall">Spectrum Waterfall</a>
+    <a href="#band-occupancy">Band Occupancy</a>
+    <a href="#node-locations">Node Locations</a>
+    <a href="#coverage-overlays">Coverage &amp; Heatmaps</a>
+    <div class="nav-group">Troubleshooting</div>
+    <a href="#ts-node-disconnect">Node Disconnected</a>
+    <a href="#ts-high-anomalies">High Anomaly Scores</a>
+    <a href="#ts-db-growth">Database Growth</a>
+    <a href="#ts-ws-issues">WebSocket Issues</a>
+    <a href="#ts-auth-failures">Auth Failures</a>
+    <a href="#ts-slow-queries">Slow Queries</a>
+    <a href="#ts-map-not-loading">Map Not Loading</a>
+    <a href="#ts-spectrum-empty">Spectrum Data Empty</a>
+    <div class="nav-group">Maintenance</div>
+    <a href="#db-vacuum">Database Vacuum</a>
+    <a href="#wal-checkpoint">WAL Checkpoint</a>
+    <a href="#retention-cleanup">Retention Cleanup</a>
+    <a href="#log-rotation">Log Rotation</a>
+    <a href="#backup-schedule">Backup Schedule</a>
+    <div class="nav-group">Security Ops</div>
+    <a href="#key-rotation">Key Rotation</a>
+    <a href="#audit-review">Audit Log Review</a>
+    <a href="#webhook-mgmt">Webhook Management</a>
+    <a href="#wifi-whitelist">WiFi Whitelist</a>
+    <div class="nav-group">Performance</div>
+    <a href="#cache-config">Cache Configuration</a>
+    <a href="#rate-limits">Rate Limits</a>
+    <a href="#ws-limits">WS Connection Limits</a>
+    <a href="#sqlite-tuning">SQLite Tuning</a>
+  </div>
+</nav>
+
+<main class="content">
+<h1>Operations Guide</h1>
+<p class="subtitle">System architecture, operational workflows, background tasks, security configuration, and day-to-day procedures for The Bridge.</p>
+
+<!-- ======== ARCHITECTURE ======== -->
+<h2 id="architecture">System Overview &amp; Architecture</h2>
+
+<h3 id="system-overview">System Overview</h3>
+<p>The Bridge is the central controller in a distributed RF signal intelligence platform. Edge nodes perform RF scanning and send detection data to The Bridge, which stores, scores, correlates, and presents the results through a web dashboard and REST/WebSocket APIs.</p>
+
+<div class="flow-diagram">
+  Edge Node(s)                        The Bridge (Central)
+ +-----------------+                +-------------------------------+
+ | RTL-SDR / HackRF|                |  FastAPI Application          |
+ | rf_scan.py      |---detections-->|  /api/detections/batch        |
+ | node_agent.py   |---heartbeat--->|  /api/nodes/heartbeat         |
+ | detection_      |---summaries--->|  /api/detections/ingest-summary|
+ |   reporter.py   |                |                               |
+ |                  |<--commands----|  Node command queue            |
+ | SAF Buffer      |                |                               |
+ | (SQLite WAL)    |                |  +---------------------------+ |
+ +-----------------+                |  | DetectionStore (SQLite)   | |
+                                    |  |  - detections             | |
+                                    |  |  - rf_anomalies           | |
+                                    |  |  - wifi_metadata          | |
+                                    |  |  - bt_devices             | |
+                                    |  |  - threat_signatures      | |
+                                    |  |  - incidents              | |
+                                    |  |  - audit_log              | |
+                                    |  +---------------------------+ |
+                                    |                               |
+                                    |  Anomaly Scoring Pipeline     |
+                                    |  Background Tasks             |
+                                    |  WebSocket Feeds              |
+                                    |  Dashboard UI                 |
+                                    +-------------------------------+</div>
+
+<h4>Key Components</h4>
+<table>
+<tr><th>Component</th><th>Location</th><th>Purpose</th></tr>
+<tr><td>Node Agent</td><td><code>sigrift/edge/node_agent.py</code></td><td>Edge node lifecycle: registration, heartbeat, command polling</td></tr>
+<tr><td>RF Scanner</td><td><code>sigrift/edge/rf_scan.py</code></td><td>SDR-based RF scanning and detection</td></tr>
+<tr><td>Detection Reporter</td><td><code>sigrift/edge/detection_reporter.py</code></td><td>Batching, compression, upload to Bridge with SAF buffer</td></tr>
+<tr><td>FastAPI App</td><td><code>sigrift/bridge/app.py</code></td><td>Central server: API routing, background tasks, lifespan</td></tr>
+<tr><td>DetectionStore</td><td><code>sigrift/bridge/storage/</code></td><td>SQLite storage facade with domain-specific sub-stores</td></tr>
+<tr><td>Anomaly Scoring</td><td><code>sigrift/bridge/anomaly/</code></td><td>Composite scorer, Isolation Forest, CUSUM, MAD</td></tr>
+<tr><td>Dashboard</td><td><code>sigrift/bridge/templates/</code> + <code>static/</code></td><td>Single-page dashboard with tabbed interface</td></tr>
+</table>
+
+<h3 id="data-flow">Data Flow</h3>
+<p>Understanding the end-to-end detection pipeline is critical for troubleshooting and tuning:</p>
+<ol>
+<li><strong>Edge scanning:</strong> <code>rf_scan.py</code> captures IQ samples from SDR hardware, runs signal classification, and produces detection records (frequency, power, SNR, signal class, confidence).</li>
+<li><strong>Batching &amp; upload:</strong> <code>detection_reporter.py</code> accumulates detections into batches, gzip-compresses them, and uploads via <a href="api_reference.html#det-batch"><code>POST /api/detections/batch</code></a>. If the Bridge is unreachable, the SAF buffer stores batches locally for later replay.</li>
+<li><strong>Ingest processing:</strong> The Bridge validates the batch, verifies the API key and node binding, inserts rows into the <code>detections</code> table, and runs the anomaly scoring pipeline.</li>
+<li><strong>Anomaly scoring:</strong> Each detection is evaluated against per-frequency baselines using a composite scorer with configurable dimension weights (power deviation, SNR anomaly, class rarity, time-of-day, Isolation Forest, CUSUM changepoints, MAD scores).</li>
+<li><strong>Alerting:</strong> Detections exceeding the anomaly threshold trigger alert rules, WebSocket broadcasts to <a href="api_reference.html#det-ws-anomalies"><code>/ws/anomalies</code></a>, and optional webhook delivery.</li>
+<li><strong>Correlation:</strong> Cross-protocol correlations (WiFi + BT + RF + Zigbee) are computed to identify multi-band activity from the same source.</li>
+<li><strong>Summarization:</strong> Hourly rollups aggregate raw detections into compact summaries for long-term trend analysis.</li>
+</ol>
+
+<h3 id="storage-model">Storage Model</h3>
+<p>The Bridge uses a single SQLite database (<code>detections.db</code>) in WAL mode, managed through a <code>SharedContext</code> that handles connection pooling, migrations, and PRAGMA configuration.</p>
+<p>The <code>DetectionStore</code> is a facade that delegates to domain-specific sub-stores:</p>
+<table>
+<tr><th>Sub-Store</th><th>Tables</th><th>Purpose</th></tr>
+<tr><td>Core detections</td><td><code>detections</code>, <code>hourly_summaries</code></td><td>Raw detections and hourly aggregations</td></tr>
+<tr><td>RF anomalies</td><td><code>rf_anomalies</code></td><td>Scored anomaly events</td></tr>
+<tr><td>WiFi metadata</td><td><code>wifi_metadata</code>, <code>wifi_hourly</code>, <code>wifi_anomalies</code></td><td>WiFi network and AP tracking</td></tr>
+<tr><td>Bluetooth</td><td><code>bt_devices</code>, <code>bt_anomalies</code></td><td>BT/BLE device tracking</td></tr>
+<tr><td>Zigbee</td><td><code>zigbee_devices</code>, <code>zigbee_channel_energy</code></td><td>Zigbee PAN and device enumeration</td></tr>
+<tr><td>Threat signatures</td><td><code>threat_signatures</code>, <code>signature_matches</code></td><td>Known-threat matching</td></tr>
+<tr><td>Incidents</td><td><code>incidents</code>, <code>incident_timeline</code>, <code>incident_detections</code></td><td>Security incident management</td></tr>
+<tr><td>Audit</td><td><code>audit_log</code></td><td>HMAC-chained audit trail</td></tr>
+<tr><td>Cross-correlations</td><td><code>cross_correlations</code></td><td>Multi-protocol entity linking</td></tr>
+<tr><td>Summarization</td><td><code>detection_summaries_hourly</code>, <code>fhss_event_summaries</code></td><td>Compact rollup tables</td></tr>
+</table>
+<div class="note"><strong>Migrations:</strong> Schema changes are applied automatically at startup via numbered migrations in <code>storage/base.py</code>. A <code>.pre-migration</code> backup is created before each migration run. See <a href="deployment_guide.html">Deployment Guide</a> for upgrade procedures.</div>
+
+<!-- ======== EDGE NODE OPERATIONS ======== -->
+<h2 id="edge-operations">Edge Node Operations</h2>
+
+<h3 id="edge-deployment">Deploying an Edge Node</h3>
+<p>Each edge node runs a lightweight Python agent that manages SDR hardware, detection, and communication with The Bridge.</p>
+<h4>Prerequisites</h4>
+<ul>
+<li>Linux host (Raspberry Pi 4/5, x86, or similar) with Python 3.11+</li>
+<li>RTL-SDR or HackRF hardware connected via USB</li>
+<li>Network connectivity to The Bridge server (port 8443/TCP)</li>
+<li>API key with <code>sensor</code> role (created via <a href="api_reference.html#keys-create"><code>POST /api/keys</code></a>)</li>
+</ul>
+<h4>Configuration</h4>
+<pre><code># Required environment variables
+export MLRF_BRIDGE_URL=https://bridge.example.com:8443
+export MLRF_API_KEY=&lt;sensor_api_key&gt;
+export MLRF_NODE_ID=edge-01
+
+# Optional tuning
+export MLRF_SCAN_INTERVAL=5           # seconds between scans (default: 5)
+export MLRF_BATCH_SIZE=50             # detections per upload batch (default: 50)
+export MLRF_SPECTRUM=1                # enable spectrum data reporting
+export MLRF_BRIDGE_CA_BUNDLE=/etc/ssl/bridge-ca.pem  # custom CA for self-signed certs</code></pre>
+<h4>Starting the Agent</h4>
+<pre><code># Start the edge node agent
+python -m sigrift.edge.node_agent
+
+# Or via systemd (recommended for production)
+sudo systemctl enable mlrf-edge
+sudo systemctl start mlrf-edge</code></pre>
+
+<h3 id="edge-updating">Updating Edge Nodes</h3>
+<p>Edge nodes can be updated remotely via the node command system:</p>
+<pre><code># Push an update command to a specific node
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"command":"update","params":{"version":"4.1.0"}}' \
+  https://bridge.example.com/api/nodes/edge-01/command</code></pre>
+<p>For ONNX model updates, the Bridge serves edge-optimized models via <a href="api_reference.html#admin-protocols"><code>GET /api/admin/edge-models</code></a> with SHA-256 hash verification.</p>
+
+<h3 id="edge-monitoring">Monitoring Edge Nodes</h3>
+<p>Node health is tracked through heartbeats. Status transitions:</p>
+<table>
+<tr><th>Status</th><th>Condition</th></tr>
+<tr><td><code>active</code></td><td>Heartbeat received within the last 2 minutes</td></tr>
+<tr><td><code>stale</code></td><td>No heartbeat for 2&ndash;5 minutes</td></tr>
+<tr><td><code>offline</code></td><td>No heartbeat for more than 5 minutes</td></tr>
+</table>
+<p>Monitor via:</p>
+<ul>
+<li><strong>Dashboard:</strong> Summary tab shows node status counts and the Deployment tab lists all nodes</li>
+<li><strong>API:</strong> <a href="api_reference.html#nodes-list"><code>GET /api/nodes/</code></a> returns all nodes with status</li>
+<li><strong>WebSocket:</strong> <a href="api_reference.html#nodes-ws"><code>/api/nodes/ws/status</code></a> pushes real-time state changes</li>
+<li><strong>Activity log:</strong> <a href="api_reference.html#nodes-activity"><code>GET /api/nodes/activity</code></a> shows recent node events</li>
+</ul>
+
+<h3 id="edge-saf">Store-and-Forward Buffer</h3>
+<p>The edge detection reporter includes a SQLite-backed Store-and-Forward (SAF) buffer that ensures no detections are lost during network outages:</p>
+<ul>
+<li>When upload to The Bridge fails after retries, the batch is written to a local SQLite database (<code>saf_buffer.db</code>) in WAL mode</li>
+<li>A replay loop runs every 60 seconds, attempting to send buffered batches in order</li>
+<li>Replay stops on the first failure to preserve ordering</li>
+<li>Batches older than 72 hours are automatically purged</li>
+</ul>
+<div class="note"><strong>Monitoring SAF:</strong> Check <code>saf_buffer.db</code> file size on the edge node. A growing file indicates persistent connectivity issues. The reporter logs SAF buffer depth at each replay attempt.</div>
+
+<!-- ======== SUMMARIZATION PIPELINE ======== -->
+<h2 id="summarization">Summarization Pipeline</h2>
+
+<h3 id="summary-overview">Pipeline Overview</h3>
+<p>The summarization pipeline reduces storage requirements and improves query performance by rolling up raw detections into hourly aggregates. Two modes are supported:</p>
+<ol>
+<li><strong>Edge-side summarization:</strong> The edge node pre-aggregates detections into hourly summaries and sends them via <a href="api_reference.html#det-ingest-summary"><code>POST /api/detections/ingest-summary</code></a>. This reduces bandwidth usage significantly and is recommended for bandwidth-constrained deployments.</li>
+<li><strong>Server-side rollup:</strong> The Bridge's periodic cleanup task runs <code>rollup_from_raw</code> on the <code>detection_summaries_hourly</code> table, aggregating raw detections from nodes that do not use edge-side summarization. Rollup covers the last 2 hours of data.</li>
+</ol>
+<p>Summary records include: node ID, signal class, frequency bucket, hour timestamp, detection count, min/max/avg power, min/max/avg SNR, max anomaly score, and max confidence.</p>
+
+<h3 id="summary-enable">Enabling Edge-Side Summarization</h3>
+<pre><code># On the edge node:
+export MLRF_SUMMARIZE=1                # enable edge summarization
+export MLRF_SUMMARY_INTERVAL=3600      # rollup interval in seconds (default: 3600)</code></pre>
+<p>When enabled, the edge node sends both raw detections (for real-time alerting) and hourly summaries (for trend analysis). The Bridge deduplicates summary records on the <code>(node_id, signal_class, freq_bucket_hz, hour_ts)</code> composite key.</p>
+
+<h3 id="summary-monitor">Monitoring the Pipeline</h3>
+<ul>
+<li><strong>Ingest status:</strong> <a href="api_reference.html#det-ingest-status"><code>GET /api/detections/ingest-status</code></a> shows per-node ingest rates and whether summary data is being received</li>
+<li><strong>Background task logs:</strong> The periodic cleanup logs <code>det_summary_rollup: N</code> rows rolled up each cycle</li>
+<li><strong>Database stats:</strong> <code>GET /api/admin/stats</code> includes row counts for <code>detection_summaries_hourly</code></li>
+</ul>
+
+<h3 id="summary-troubleshoot">Troubleshooting</h3>
+<table>
+<tr><th>Symptom</th><th>Cause</th><th>Resolution</th></tr>
+<tr><td>Summaries not appearing</td><td>Edge summarization disabled</td><td>Set <code>MLRF_SUMMARIZE=1</code> on edge, or wait for server-side rollup (runs during periodic cleanup)</td></tr>
+<tr><td>Duplicate summary rows</td><td>Edge sends overlapping time windows</td><td>Summaries are upserted on composite key; duplicates are safe but check edge clock sync</td></tr>
+<tr><td>High storage despite summarization</td><td>Raw detections not being purged</td><td>Verify <code>BRIDGE_RETENTION_DAYS</code> is set; run manual cleanup via <a href="api_reference.html#maint-maintenance"><code>POST /api/admin/maintenance</code></a></td></tr>
+</table>
+
+<!-- ======== DETECTION & ANOMALY WORKFLOW ======== -->
+<h2 id="detection-anomaly">Detection &amp; Anomaly Workflow</h2>
+
+<h3 id="det-flow">Detection Flow: Edge to Alert</h3>
+<p>When a batch of detections arrives at <a href="api_reference.html#det-batch"><code>POST /api/detections/batch</code></a>, the following processing occurs:</p>
+<ol>
+<li><strong>Authentication:</strong> API key validated; node ID binding enforced (key must be authorized for the submitting node)</li>
+<li><strong>Decompression:</strong> If gzip-compressed, the payload is decompressed (max 50 MB decompressed)</li>
+<li><strong>Insertion:</strong> Each detection is inserted into the <code>detections</code> table with a timestamp, node ID, and tenant scope</li>
+<li><strong>Anomaly scoring:</strong> The composite scorer evaluates each detection and produces an anomaly score (0.0&ndash;1.0)</li>
+<li><strong>Threshold check:</strong> If the score exceeds the configured threshold, an RF anomaly record is created</li>
+<li><strong>Alert evaluation:</strong> Active alert rules are checked against the new anomaly</li>
+<li><strong>WebSocket broadcast:</strong> Connected dashboard clients receive real-time updates via the detection feed and anomaly stream</li>
+<li><strong>Webhook delivery:</strong> Matching webhook rules trigger HTTP callbacks (with retry queue for failures)</li>
+</ol>
+
+<h3 id="scoring-pipeline">Anomaly Scoring Pipeline</h3>
+<p>The composite scorer combines multiple anomaly dimensions, each with a configurable weight:</p>
+<table>
+<tr><th>Dimension</th><th>Method</th><th>Description</th></tr>
+<tr><td>Power deviation</td><td>MAD / z-score</td><td>How far the signal power deviates from the frequency baseline. Uses MAD when 30+ samples available, z-score otherwise.</td></tr>
+<tr><td>SNR anomaly</td><td>MAD / z-score</td><td>Signal-to-noise ratio deviation from baseline</td></tr>
+<tr><td>Class rarity</td><td>Laplace-smoothed probability</td><td>How uncommon this signal class is at this frequency</td></tr>
+<tr><td>Time-of-day</td><td>Sin/cos encoding</td><td>Whether this signal is unusual for the current hour and day-of-week</td></tr>
+<tr><td>Isolation Forest</td><td>Unsupervised model</td><td>Multi-dimensional outlier detection across all feature dimensions (13-dim feature vector)</td></tr>
+<tr><td>CUSUM</td><td>Cumulative sum</td><td>Detects sustained shifts in power/SNR after the baseline learning phase (300+ samples)</td></tr>
+<tr><td>Correlation</td><td>Cross-protocol</td><td>Optional: boost score when multi-protocol activity correlates (default weight: 0.0)</td></tr>
+</table>
+<div class="note"><strong>Tuning:</strong> Adjust dimension weights via <a href="api_reference.html#cfg-detection"><code>PUT /api/admin/detection-config</code></a>. The <code>wifi_anomaly_alert_threshold</code> controls the score above which anomalies are flagged.</div>
+
+<h4>Score Calibration</h4>
+<p>The score calibrator uses per-band Platt scaling (sigmoid fit via gradient descent) to normalize raw scores into consistent probabilities. Bands: sub-1 GHz, ISM 2.4 GHz, ISM 5 GHz, other. Calibration requires at least 30 labeled samples per band.</p>
+
+<h4>Drift Detection</h4>
+<p>The drift detector monitors Isolation Forest scores over a rolling window. When mean scores shift by more than 2 standard deviations from the reference distribution, it signals that the model may need retraining. A 1-hour cooldown prevents alert storms during transitions.</p>
+
+<h3 id="anomaly-review">Anomaly Review Workflow</h3>
+<ol>
+<li><strong>Check anomaly summary:</strong> <a href="api_reference.html#det-anomalies"><code>GET /api/detections/anomalies/summary</code></a></li>
+<li><strong>List active anomalies:</strong> <code>GET /api/detections/anomalies?sort=score&amp;order=desc</code></li>
+<li><strong>Re-evaluate against current baselines:</strong> Add <code>&amp;reevaluate=true</code></li>
+<li><strong>Review individual anomaly:</strong> Check signal class, frequency, node, confidence</li>
+<li><strong>Take action:</strong>
+  <ul>
+  <li>Dismiss false positives: <code>PUT /api/detections/anomalies/{id}/dismiss</code></li>
+  <li>Snooze temporary: <code>PUT /api/detections/anomalies/{id}/snooze</code> with <code>{"hours": 24}</code></li>
+  <li><strong>Mark as known:</strong> review a linked RF detection, then save <code>PUT /api/detections/anomalies/{detection_id}/baseline</code></li>
+  <li>Submit feedback: <code>POST /api/detections/anomalies/{id}/feedback</code> with label</li>
+  </ul>
+</li>
+<li><strong>Bulk dismiss resolved:</strong> <code>POST /api/detections/anomalies/bulk/reeval-dismiss</code></li>
+</ol>
+<div class="note"><strong>Auto-resolution:</strong> The background stale-anomaly resolver automatically marks low-scoring, frequently-seen anomalies as <code>stale-resolved</code> based on configurable thresholds (<code>rf_auto_snooze_hours</code>, <code>rf_auto_snooze_max_score</code>, <code>rf_auto_snooze_seen_count</code>).</div>
+
+<h3 id="known-rf-patterns">Operator-known RF patterns</h3>
+<p>Open <strong>Alerts → Alert settings</strong> to add a rule even before a detection or alert exists. Choose <strong>Ignore FM broadcast range…</strong> for an editable 88–108 MHz starting range, select a <strong>Named RF band</strong> and choose <strong>Review selected band</strong>, or choose <strong>Add custom frequency range</strong>. Named choices reuse the dashboard’s existing band presets; their displayed MHz bounds are editable starting points, not a statement of regional allocations. These rules suppress RF alerts only. Selecting a WiFi-named range does not change separate Wi-Fi or Bluetooth protocol alerts, and no choice stops capture. Review the band for your region, choose a registered node suggestion (or enter a known node ID) or explicitly select all nodes, then save. Suggestions describe registration, not live capture; a failed suggestion lookup leaves manual entry available. Any modulation is selected by default; power changes do not affect matching. Opening a preset does not enable it. Use Edit to change a saved range or Remove (including the immediate undo action) to enable future matching alerts again.</p>
+<p>In the Alerts tab or a detection's RF detail, choose <strong>Mark as known</strong>. Review the monitored frequency range (initially ±50 kHz), modulation choice, and node. New review forms select <strong>Any modulation (frequency only)</strong>: modulation and power changes still match within that range and node. Uncheck it to match the source signal class instead. Existing patterns keep their saved choice when edited. The current node is selected by default; choosing all nodes explicitly broadens the rule. Add a reason, then save. Only eligible alerts linked to a stored RF detection offer this action; unrelated system, Wi-Fi and Bluetooth alerts do not.</p>
+<p>Scanner frequency is the receiver’s tuned center, not a measured transmitter frequency. This option does not automatically learn known frequencies or identify newly occupied channels.</p>
+<p>A saved pattern suppresses future matching RF anomaly, condition-rule and watch-band alerts, including their notifications. It does not certify the classification or signal as safe, change scores or learned statistics, dismiss existing alerts, or remove any detection or anomaly records. Existing seeded score reductions are separate and unchanged.</p>
+<p>Open <strong>Known RF patterns</strong> in the Alerts tab to review, edit or remove patterns. The save confirmation also offers immediate removal. Changes are committed with an audit record before success is returned; retrying an identical save cannot create duplicates. A concurrent edit requires a refresh before changing or removing the rule. Removing a rule enables future matching alert evaluation again, subject to normal thresholds and cooldowns; it does not recreate past alerts. Analysts and administrators can change patterns; viewers have read-only access.</p>
+<p>Patterns live in the tenant-scoped <code>known_rf_signals</code> table in <code>detections.db</code> and survive restarts and database backups. They are not part of config-only snapshots, the legacy JSON whitelist, or baseline bundle import/export. Rolling back to an older application leaves this additive table and detection data intact, but that application does not enforce the new suppression rules. Legacy bulk baseline requests use the same durable rules and reject an unknown detection without partially saving the batch. The grouped browser action reviews one actual detection, rather than silently applying a rule to every node in an aggregate.</p>
+
+<h3 id="baseline-learning">Baseline Learning Phase</h3>
+<p>When a new frequency is first observed, the scorer enters a <strong>learning phase</strong>:</p>
+<ul>
+<li>The first 300 detections use exact online (Welford) variance calculation</li>
+<li>After 300 samples, the baseline transitions to Exponentially Weighted Moving Average (EWMA) for adaptive tracking</li>
+<li>During learning phase, scores for baseline-dependent dimensions (power, SNR) are dampened to reduce false positives</li>
+<li>CUSUM changepoint detection only activates after the learning phase completes</li>
+<li>MAD scoring requires at least 30 ring buffer samples before becoming the preferred method over z-score</li>
+</ul>
+<p>Adaptive frequency binning is used: sub-GHz signals use 25 kHz bins, while signals at 1 GHz and above use 500 kHz bins.</p>
+
+<!-- ======== THREAT DETECTION ======== -->
+<h2 id="threats">Threat Detection &amp; Incident Response</h2>
+
+<h3 id="threat-signatures">Threat Signatures</h3>
+<p>The Bridge maintains a library of known threat signatures that are matched against incoming detections. Each signature defines:</p>
+<ul>
+<li><strong>Frequency range:</strong> Center frequency with tolerance</li>
+<li><strong>Signal class pattern:</strong> Expected modulation/protocol type</li>
+<li><strong>Power/SNR thresholds:</strong> Minimum power level or SNR range</li>
+<li><strong>Temporal pattern:</strong> Expected duration, periodicity, or burst characteristics</li>
+<li><strong>Severity:</strong> Informational, low, medium, high, critical</li>
+</ul>
+<pre><code># List all threat signatures
+curl -H "X-API-Key: $KEY" https://bridge.example.com/api/threats/list
+
+# Seed the default signature library
+curl -X POST -H "X-API-Key: $MASTER_KEY" https://bridge.example.com/api/threats/seed
+
+# Manually test a detection against signatures
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"freq_hz":433920000,"signal_class":"fsk","power_dbm":-30,"snr_db":25}' \
+  https://bridge.example.com/api/threats/match</code></pre>
+<p>See the <a href="api_reference.html#threats-list">API Reference: Threat Signatures</a> for full endpoint documentation.</p>
+
+<h3 id="threat-matching">Matching Process</h3>
+<p>During detection ingest, each detection is compared against active threat signatures. A match produces a <code>signature_match</code> record linking the detection to the signature. High-severity matches can automatically create incidents.</p>
+
+<h3 id="incident-lifecycle">Incident Lifecycle</h3>
+<p>Incidents follow a state machine: <code>open</code> &rarr; <code>investigating</code> &rarr; <code>resolved</code> (or <code>closed</code>). Each transition is recorded in the incident timeline.</p>
+<pre><code># Create an incident manually
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Unknown 433 MHz transmitter","severity":"high","description":"Persistent FSK signal in secure area"}' \
+  https://bridge.example.com/api/incidents/
+
+# Assign to an analyst
+curl -X PUT -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"assigned_to":"analyst@example.com"}' \
+  https://bridge.example.com/api/incidents/INC-001/assign
+
+# Link detections to the incident
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"detection_ids":["det-abc","det-def"]}' \
+  https://bridge.example.com/api/incidents/INC-001/detections
+
+# Resolve the incident
+curl -X PUT -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"resolution":"Identified as authorized maintenance radio"}' \
+  https://bridge.example.com/api/incidents/INC-001/resolve</code></pre>
+<p>See the <a href="api_reference.html#incidents-list">API Reference: Incidents</a> for full endpoint documentation.</p>
+
+<!-- ======== MFA & SECURITY CONFIGURATION ======== -->
+<h2 id="security-config">MFA &amp; Security Configuration</h2>
+
+<h3 id="mfa-setup">MFA / TOTP Setup</h3>
+<p>The Bridge supports Time-based One-Time Password (TOTP) multi-factor authentication compatible with any TOTP authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+<h4>Enabling MFA for a User</h4>
+<ol>
+<li><strong>Generate secret:</strong> <code>POST /api/mfa/setup</code> &mdash; returns a TOTP secret and QR code URI</li>
+<li><strong>Scan QR code:</strong> User scans with their authenticator app</li>
+<li><strong>Verify setup:</strong> <code>POST /api/mfa/verify-setup</code> with the first TOTP code to confirm enrollment</li>
+<li><strong>Login flow:</strong> After password authentication, a second <code>POST /api/mfa/verify</code> step is required with the current TOTP code</li>
+</ol>
+<h4>Backup Codes</h4>
+<p>Backup codes are generated during MFA setup. Each code can be used once as a fallback when the authenticator app is unavailable. Store them securely offline.</p>
+<h4>Disabling MFA</h4>
+<pre><code># Requires a valid TOTP code or backup code to disable
+curl -X POST -H "X-Session-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"totp_code":"123456"}' \
+  https://bridge.example.com/api/mfa/disable</code></pre>
+<div class="warning"><strong>Production requirement:</strong> Set <code>BRIDGE_MFA_KEY</code> to a valid Fernet key (base64 of 32 bytes: 44 characters ending in <code>=</code>), e.g. <code>python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'</code>. A 43-character <code>secrets.token_urlsafe(32)</code> value is <strong>not</strong> a valid key: append <code>=</code> to it (do not replace it), which keeps TOTP secrets already encrypted with it readable. In production the bridge and gateway refuse to start if the key is missing or invalid; in development TOTP secrets fall back to base64 encoding only (not encrypted) and the health endpoint reports a security warning.</div>
+
+<h3 id="session-security">Session Security</h3>
+<p>Session tokens are SHA-256 hashed before storage in the database. The raw token is returned to the client only once at login.</p>
+<table>
+<tr><th>Setting</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+<tr><td>Session binding</td><td><code>BRIDGE_SESSION_BINDING</code></td><td><code>ip</code></td><td>Bind sessions to client IP. Options: <code>ip</code>, <code>warn</code>, <code>none</code></td></tr>
+<tr><td>Session expiry</td><td><code>BRIDGE_SESSION_TTL</code></td><td>86400 (24h)</td><td>Session lifetime in seconds</td></tr>
+<tr><td>Account lockout</td><td>&mdash;</td><td>10 failures / 30 min</td><td>DB-backed per-account lockout after consecutive failures</td></tr>
+<tr><td>IP rate limit</td><td>&mdash;</td><td>5 failures / window</td><td>Per-IP rate limiting on authentication endpoints</td></tr>
+</table>
+<h4>Password Policy (NIST 800-63B)</h4>
+<ul>
+<li>Minimum 12 characters</li>
+<li>Checked against a common password blocklist</li>
+<li>Character variety check (requires mix of character types)</li>
+</ul>
+
+<h3 id="csrf-protection">CSRF Protection</h3>
+<p>The Bridge implements Double Submit Cookie CSRF protection for session-authenticated mutating requests (POST, PUT, PATCH, DELETE).</p>
+<table>
+<tr><th>Env Var</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>BRIDGE_CSRF</code></td><td><code>enabled</code> in production</td><td>Set to <code>disabled</code> to turn off outside production. Automatically disabled when <code>BRIDGE_ENV</code> is <code>development</code>, <code>dev</code>, or <code>test</code>. In production the bridge (<code>BRIDGE_ENV</code> or <code>BRIDGE_MODE</code> <code>production</code> or <code>prod</code>) and the gateway (<code>BRIDGE_ENV</code> <code>production</code>, <code>prod</code> or unset) refuse to start unless it is unset, empty or <code>enabled</code>. Elsewhere the bridge turns its check off for any other value, the gateway only for exactly <code>disabled</code>.</td></tr>
+</table>
+<p>The CSRF cookie is set at login. The frontend <code>auth_guard.js</code> automatically includes the token in requests. API-key-only requests (no session) are exempt.</p>
+<p>Exempt paths: login, logout, MFA verify, version, health, batch ingest. Login and MFA verify instead refuse a body that is not sent as <code>Content-Type: application/json</code> (the gateway answers 415), so a cross-site form cannot sign a browser in.</p>
+
+<h3 id="encryption-dar">Data-at-Rest Encryption</h3>
+<p><strong>SQLCipher database encryption is not supported in this release.</strong> Do not set <code>BRIDGE_DB_ENCRYPTION_KEY</code>, even though the health warning still suggests it: if the key reaches the bridge, it refuses to start without <code>pysqlcipher3</code> (which the shipped images do not include), and with <code>pysqlcipher3</code> installed it still fails at start-up.</p>
+<ul>
+<li><strong>Volume-level:</strong> Use LUKS/dm-crypt on the storage volume. Then set <code>BRIDGE_ENCRYPTION_KEY</code> in the bridge's environment to acknowledge it and suppress the health warning; with Docker Compose that means an <code>environment:</code> entry in <code>docker-compose.override.yml</code>, because <code>.env</code> alone does not pass it to the bridge.</li>
+</ul>
+<p>Encryption status is reported in the <a href="api_reference.html#health-health"><code>GET /api/health</code></a> response under <code>security_warnings</code>.</p>
+
+<h3 id="audit-hmac">Audit Chain Integrity</h3>
+<p>The audit log uses HMAC-SHA256 chaining: each entry's HMAC covers the previous entry's HMAC plus the current entry's fields (action, target_id, operator, timestamp, details, note, signal_class, freq_hz, node_id). This ensures tamper detection.</p>
+<ul>
+<li>Legacy entries (before HMAC was introduced) use a sentinel value to prevent chain resets</li>
+<li>Archive markers preserve the terminal HMAC when old audit entries are archived</li>
+<li>Verify chain integrity: <code>GET /api/admin/audit/verify</code></li>
+</ul>
+
+<!-- ======== BACKGROUND TASKS ======== -->
+<h2 id="background-tasks">Background Tasks</h2>
+
+<h3 id="bg-overview">Task Overview</h3>
+<p>The Bridge runs several background asyncio tasks during its lifespan. All background tasks can be disabled by setting <code>BRIDGE_BACKGROUND_TASKS=false</code>.</p>
+
+<table>
+<tr><th>Task</th><th>Default Interval</th><th>Env Override</th><th>Purpose</th></tr>
+<tr><td>Periodic cleanup</td><td>30 min</td><td><code>BRIDGE_CLEANUP_INTERVAL</code></td><td>Aggregate, purge, and compact data across all stores</td></tr>
+<tr><td>Spectrum materializer</td><td>5 min</td><td><code>BRIDGE_MATERIALIZER_INTERVAL</code></td><td>Refresh the materialized spectrum view for fast queries</td></tr>
+<tr><td>WAL checkpoint</td><td>30 min</td><td><code>BRIDGE_WAL_CHECKPOINT_INTERVAL</code></td><td>PASSIVE WAL checkpoint to move pages to main DB</td></tr>
+<tr><td>Stale anomaly resolver</td><td>10 min</td><td><code>BRIDGE_STALE_RESOLVE_INTERVAL</code></td><td>Auto-resolve low-scoring, frequently-seen anomalies</td></tr>
+<tr><td>Correlation maintenance</td><td>6 hours</td><td>&mdash;</td><td>Prune expired cross-protocol correlations</td></tr>
+<tr><td>Daily config snapshot</td><td>24 hours</td><td>&mdash;</td><td>Snapshot system configuration for versioning</td></tr>
+<tr><td>Command lease reaper</td><td>60 sec</td><td>&mdash;</td><td>Remove expired pending node commands</td></tr>
+</table>
+
+<h3 id="bg-cleanup">Periodic Cleanup Details</h3>
+<p>The cleanup task (default: every 30 minutes) runs the following operations in sequence:</p>
+<ol>
+<li>Aggregate WiFi metadata into hourly buckets (rows older than 2 hours)</li>
+<li>Purge raw WiFi metadata older than 4 hours (already aggregated)</li>
+<li>Purge WiFi anomalies older than retention period</li>
+<li>Purge raw detections older than retention period</li>
+<li>Purge RF anomalies older than retention period</li>
+<li>Purge hourly summaries older than retention period</li>
+<li>Compact dismissed WiFi anomalies (keep most recent per BSSID)</li>
+<li>Purge old BT devices and anomalies</li>
+<li>Purge old Zigbee devices</li>
+<li>Clean up expired config snapshots</li>
+<li>Clean up security state (rate limits, lockouts, expired OIDC/TOTP records)</li>
+<li>Roll up raw detections into hourly summaries (for non-summarizing nodes)</li>
+<li>Roll up IQ metadata into capture sessions</li>
+<li>Deduplicate FHSS events into summaries</li>
+<li>Run device lifecycle daily rollup and archive stale devices</li>
+</ol>
+<p>Configure retention with <code>BRIDGE_RETENTION_DAYS=90</code> (default). Each step uses 10k-row batch deletes to avoid write lock starvation.</p>
+
+<h3 id="bg-materializer">Spectrum Materializer</h3>
+<p>The materializer maintains a pre-computed view of spectrum data (<code>spectrum_all</code>) for fast dashboard queries. It supports both incremental refreshes (new data since last refresh) and full rebuilds.</p>
+<pre><code># Force a full refresh via maintenance API
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"refresh_spectrum_view"}' \
+  https://bridge.example.com/api/admin/maintenance</code></pre>
+
+<h3 id="bg-other">Other Background Tasks</h3>
+<h4>Stale Anomaly Resolver</h4>
+<p>Automatically marks RF anomalies as <code>stale-resolved</code> when they meet all of these criteria:</p>
+<ul>
+<li>Anomaly is older than <code>rf_auto_snooze_hours</code> (default: 24)</li>
+<li>Score is below <code>rf_auto_snooze_max_score</code> (default: 0.5)</li>
+<li>Detection has been seen at least <code>rf_auto_snooze_seen_count</code> times (default: 100)</li>
+</ul>
+<p>These thresholds are configurable via <a href="api_reference.html#cfg-detection">detection config</a>.</p>
+
+<h4>Admin Password Auto-Delete</h4>
+<p>If an initial admin password file is used at startup, it is automatically deleted after 60 seconds for security.</p>
+
+<h3 id="bg-config">Disabling / Tuning Background Tasks</h3>
+<pre><code># Disable all background tasks (useful for testing or read-only replicas)
+export BRIDGE_BACKGROUND_TASKS=false
+
+# Tune specific intervals (seconds)
+export BRIDGE_CLEANUP_INTERVAL=1800
+export BRIDGE_MATERIALIZER_INTERVAL=300
+export BRIDGE_WAL_CHECKPOINT_INTERVAL=1800
+export BRIDGE_STALE_RESOLVE_INTERVAL=600</code></pre>
+
+<!-- ======== COMMON TASKS ======== -->
+<h2 id="common-tasks">Common Tasks</h2>
+
+<h3 id="add-node">Add/Remove Nodes</h3>
+<h4>Register a New Edge Node</h4>
+<pre><code># 1. Create a sensor API key for the node
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Rooftop sensor","role":"sensor","expires_days":365}' \
+  https://bridge.example.com/api/admin/keys
+# Save the raw_key from the response
+
+# 2. Register the node
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"node_id":"rooftop-01","host":"10.0.1.50","port":8080}' \
+  https://bridge.example.com/api/nodes/register
+
+# 3. Configure the edge node
+export MLRF_BRIDGE_URL=https://bridge.example.com:8443
+export MLRF_API_KEY=&lt;sensor_key_from_step_1&gt;
+export MLRF_NODE_ID=rooftop-01</code></pre>
+
+<h4>Remove a Node</h4>
+<pre><code># Deregister via admin API
+curl -X DELETE -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/nodes/rooftop-01
+
+# Or via the node management API (requires master key)
+curl -X DELETE -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/nodes/rooftop-01</code></pre>
+
+<h4>Update Node Position (Floor Plan)</h4>
+<pre><code>curl -X PATCH -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"x":45.0,"y":72.0,"floor_label":"Floor 2"}' \
+  https://bridge.example.com/api/nodes/rooftop-01/position</code></pre>
+
+<h3 id="manage-keys">Manage API Keys</h3>
+<pre><code># List all keys
+curl -H "X-API-Key: $MASTER_KEY" https://bridge.example.com/api/admin/keys
+
+# Create key with specific role. expires_days omitted (or null) gets
+# BRIDGE_MAX_KEY_LIFETIME_DAYS (default 365), which also caps a longer one;
+# 0, a negative number or more than 3650 is refused (422)
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Analyst team","role":"analyst","expires_days":90}' \
+  https://bridge.example.com/api/admin/keys
+
+# Change key role
+curl -X PUT -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"role":"viewer"}' \
+  https://bridge.example.com/api/admin/keys/key_abc123/permissions
+
+# Revoke a key
+curl -X DELETE -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/keys/key_abc123</code></pre>
+
+<h3 id="manage-alerts">Manage Alerts</h3>
+<pre><code># List unacknowledged alerts
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/alerts/?acknowledged=false"
+
+# Acknowledge an alert
+curl -X PUT -H "X-API-Key: $KEY" \
+  https://bridge.example.com/api/alerts/alert-42/ack
+
+# Create an alert rule
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"High CPU","severity":"warning","thresholds":{"cpu_percent":90}}' \
+  https://bridge.example.com/api/admin/alerts</code></pre>
+
+<h3 id="export-data">Export Data</h3>
+<pre><code># Export detections as CSV (last 48 hours, node-01 only)
+curl -H "X-API-Key: $KEY" -o detections.csv \
+  "https://bridge.example.com/api/export/detections?format=csv&amp;hours=48&amp;node_id=node-01"
+
+# Generate compliance report (HTML)
+curl -H "X-API-Key: $KEY" -o report.html \
+  "https://bridge.example.com/api/export/report?start=2026-02-01T00:00:00Z&amp;end=2026-02-14T00:00:00Z&amp;format=html"
+
+# Export RF anomalies as JSON
+curl -H "X-API-Key: $KEY" -o anomalies.json \
+  "https://bridge.example.com/api/export/rf_anomalies?min_score=0.5"</code></pre>
+
+<h3 id="wifi-ops">WiFi Operations</h3>
+<pre><code># View discovered networks
+curl -H "X-API-Key: $KEY" "https://bridge.example.com/api/wifi/networks?band=5GHz"
+
+# Check WiFi anomalies with re-evaluation
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/wifi/anomalies?reevaluate=true"
+
+# Download pcap capture for forensics
+curl -H "X-API-Key: $KEY" -o capture.pcap.gz \
+  https://bridge.example.com/api/wifi/anomalies/42/pcap
+
+# Add trusted AP to whitelist
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"bssid":"AA:BB:CC:DD:EE:FF","ssid":"Corporate-WiFi","notes":"Office AP"}' \
+  https://bridge.example.com/api/admin/wifi-whitelist</code></pre>
+
+<!-- ======== SPECTRUM & GEO ======== -->
+<h2 id="spectrum-geo">Spectrum &amp; Geolocation</h2>
+
+<h3 id="spectrum-waterfall">Interpreting the Spectrum Waterfall Display</h3>
+<p>The spectrum waterfall provides a time-frequency view of all RF activity detected by edge nodes. Each row represents a time slice; the horizontal axis maps to frequency, and colour intensity indicates signal power.</p>
+<ul>
+<li><strong>Bright horizontal lines:</strong> Persistent signals (e.g. broadcast FM, cellular carriers). These are normal in most environments.</li>
+<li><strong>Short bright bursts:</strong> Intermittent transmissions such as push-to-talk radio, IoT uplinks, or radar pulses.</li>
+<li><strong>Wideband blocks:</strong> OFDM or spread-spectrum signals (WiFi, LTE). The width corresponds to channel bandwidth.</li>
+<li><strong>Colour scale:</strong> Power in dBm. Use the range slider above the waterfall to adjust the colour floor and ceiling for better contrast.</li>
+</ul>
+<pre><code># Fetch raw spectrum data for a specific node and time range
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/spectrum/waterfall?node_id=rooftop-01&amp;hours=1&amp;resolution=256"</code></pre>
+<div class="note"><strong>Tip:</strong> Narrow the frequency range with <code>freq_min</code> and <code>freq_max</code> query parameters to focus on a specific band.</div>
+
+<h3 id="band-occupancy">Band Occupancy Analysis</h3>
+<p>Band occupancy shows the percentage of time each frequency band is active, helping identify congested or under-utilised spectrum.</p>
+<ul>
+<li><strong>View occupancy chart:</strong> Navigate to <em>Spectrum &rarr; Band Occupancy</em> in the dashboard or query the API directly.</li>
+<li><strong>Time resolution:</strong> Occupancy is computed over configurable intervals (default: 15 minutes). Shorter intervals provide finer granularity at the cost of more data.</li>
+<li><strong>Threshold:</strong> A frequency bin is considered "occupied" when the detected power exceeds the noise floor by the configured margin (default: 6 dB above baseline).</li>
+</ul>
+<pre><code># Query band occupancy for the ISM 433 MHz band
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/spectrum/occupancy?freq_min=433e6&amp;freq_max=434e6&amp;hours=24"
+
+# Get occupancy summary across all monitored bands
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/spectrum/occupancy/summary"</code></pre>
+
+<h3 id="node-locations">Setting Node Locations for the Map</h3>
+<p>The geolocation map requires each edge node to have a geographic position (latitude/longitude). Positions can be set via the admin panel or the API.</p>
+<h4>Via the Admin Panel</h4>
+<ol>
+<li>Open the <em>Admin &rarr; Nodes</em> page.</li>
+<li>Click a node row to expand its details.</li>
+<li>Enter latitude, longitude, and an optional location name.</li>
+<li>Click <strong>Save Location</strong>.</li>
+</ol>
+<h4>Via the API</h4>
+<pre><code># Set node location
+curl -X PUT -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"latitude":37.7749,"longitude":-122.4194,"altitude_m":30,"location_name":"Rooftop SF"}' \
+  https://bridge.example.com/api/geo/nodes/rooftop-01/location
+
+# List all node locations
+curl -H "X-API-Key: $KEY" \
+  https://bridge.example.com/api/geo/nodes
+
+# Delete a node location (reverts to "unlocated")
+curl -X DELETE -H "X-API-Key: $ADMIN_KEY" \
+  https://bridge.example.com/api/geo/nodes/rooftop-01/location</code></pre>
+<div class="warning"><strong>Privacy:</strong> Node locations are visible to all authenticated users with viewer role or above. Do not set precise coordinates for sensitive installations unless access is restricted.</div>
+
+<h3 id="coverage-overlays">Coverage Overlays and Heatmaps</h3>
+<p>The map supports two overlay modes: <strong>coverage circles</strong> (estimated receive range per node) and <strong>detection heatmaps</strong> (density of detections weighted by location).</p>
+<h4>Coverage Overlays</h4>
+<ul>
+<li>Each node is shown with a translucent circle representing its estimated coverage radius.</li>
+<li>The radius is derived from average SNR and power levels observed over the last 24 hours.</li>
+<li>Overlapping coverage areas are highlighted, indicating redundant monitoring zones.</li>
+</ul>
+<pre><code># Get coverage areas for all located nodes
+curl -H "X-API-Key: $KEY" \
+  https://bridge.example.com/api/geo/coverage
+
+# Get coverage for a specific node
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/geo/coverage?node_id=rooftop-01"</code></pre>
+<h4>Detection Heatmaps</h4>
+<ul>
+<li>The heatmap aggregates detection density across all nodes with locations.</li>
+<li>Higher detection counts appear as warmer colours (yellow to red).</li>
+<li>Filter by signal class or time range to focus the heatmap on specific activity.</li>
+</ul>
+<pre><code># Get heatmap data (last 24 hours, all classes)
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/geo/heatmap?hours=24"
+
+# Filter heatmap by signal class
+curl -H "X-API-Key: $KEY" \
+  "https://bridge.example.com/api/geo/heatmap?hours=24&amp;signal_class=ofdm"</code></pre>
+
+<!-- ======== TROUBLESHOOTING ======== -->
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<h3 id="ts-node-disconnect">Node Disconnected / Stale</h3>
+<p><strong>Symptoms:</strong> Node shows "stale" or "offline" status in dashboard.</p>
+<ul>
+<li><strong>Check network connectivity</strong> from edge node to Bridge server</li>
+<li><strong>Verify API key is valid:</strong> <code>curl -H "X-API-Key: $NODE_KEY" https://bridge/api/health</code></li>
+<li><strong>Check edge node logs</strong> for connection errors or SSL certificate issues</li>
+<li><strong>Verify SSL:</strong> If using self-signed or internal CA certs, set <code>BRIDGE_CA_BUNDLE=/path/to/ca.pem</code> on edge</li>
+<li><strong>Check firewall:</strong> Port 8443 must be open between edge and Bridge</li>
+<li><strong>Monitor heartbeats:</strong> Node status transitions from active to stale after 2 minutes, then offline after 5 minutes without heartbeat</li>
+<li><strong>Check SAF buffer:</strong> If the edge node's <code>saf_buffer.db</code> is growing, the node cannot reach the Bridge</li>
+</ul>
+
+<h3 id="ts-high-anomalies">High Anomaly Scores / Alert Storms</h3>
+<p><strong>Symptoms:</strong> Flood of anomaly alerts, high anomaly counts.</p>
+<ul>
+<li><strong>Check if a new signal source appeared:</strong> Review frequency and signal class in anomaly details</li>
+<li><strong>Re-evaluate against baselines:</strong> <code>GET /api/detections/anomalies?reevaluate=true</code> &mdash; many anomalies may now be resolved</li>
+<li><strong>Bulk dismiss resolved:</strong> <code>POST /api/detections/anomalies/bulk/reeval-dismiss</code></li>
+<li><strong>Adjust thresholds:</strong> <code>PUT /api/admin/detection-config</code> to tune <code>wifi_anomaly_alert_threshold</code>, dimension weights</li>
+<li><strong>Whitelist known APs:</strong> Add to WiFi whitelist via admin panel</li>
+<li><strong>Alert cooldown:</strong> Anomaly alerts have a 5-minute cooldown per node+frequency bucket</li>
+<li><strong>Check learning phase:</strong> A new frequency baseline needs ~300 detections before scoring stabilizes. False positives during learning are dampened but not eliminated.</li>
+</ul>
+
+<h3 id="ts-db-growth">Database Growth</h3>
+<p><strong>Symptoms:</strong> Large <code>detections.db</code> file, slow queries.</p>
+<pre><code># Check database stats
+curl -H "X-API-Key: $MASTER_KEY" https://bridge.example.com/api/admin/stats
+
+# Run full cleanup (purge + vacuum)
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"full_cleanup","retention_days":30}' \
+  https://bridge.example.com/api/admin/maintenance
+
+# Or use the retention policy purge
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"purge_old_data","retention_days":90}' \
+  https://bridge.example.com/api/admin/maintenance</code></pre>
+<p><strong>Automatic cleanup:</strong> The Bridge runs periodic cleanup every 30 minutes. Configure retention with <code>BRIDGE_RETENTION_DAYS</code> (default: 90).</p>
+<p><strong>WAL file growth:</strong> WAL is checkpointed automatically every 30 minutes (PASSIVE mode). Force checkpoint: <code>{"task":"wal_checkpoint"}</code></p>
+<p><strong>Disk space monitoring:</strong> The health endpoint (<a href="api_reference.html#health-health"><code>GET /api/health</code></a>) reports <code>disk_usage_pct</code> and warns at 80%/90%.</p>
+
+<h3 id="ts-ws-issues">WebSocket Connection Issues</h3>
+<p><strong>Symptoms:</strong> Dashboard shows "disconnected", WebSocket connections dropping.</p>
+<ul>
+<li><strong>Check rate limits:</strong> Max 10 concurrent WS connections per IP, 30/minute</li>
+<li><strong>Verify auth method:</strong> Use <code>Sec-WebSocket-Protocol: bridge-v1, API_KEY</code> header (not query params)</li>
+<li><strong>Proxy configuration:</strong> Ensure nginx/reverse proxy supports WebSocket upgrade and has adequate <code>proxy_read_timeout</code></li>
+<li><strong>Network issues:</strong> WebSockets need persistent TCP connections; check for intermediate proxies/firewalls</li>
+</ul>
+
+<h3 id="ts-auth-failures">Authentication Failures</h3>
+<ul>
+<li><strong>401 "API key required":</strong> Missing <code>X-API-Key</code> header or <code>api_key</code> query param</li>
+<li><strong>401 "Invalid API key":</strong> Key not found or expired. Check key list: <code>GET /api/admin/keys</code> (<code>"expired": true</code> for a key bridge auth rejects as expired, also when its stored <code>expires_at</code> cannot be parsed; <code>effective_expires_at</code> is the instant it applies). A key that works on bridge routes but gets 401 from the gateway's own routes (users, sessions, audit) may hold a hand-edited <code>expires_at</code> the gateway cannot read, such as <code>2999-01-01T00:00</code>: rewrite it as <code>2999-01-01T00:00:00+00:00</code></li>
+<li><strong>403 "Admin role required":</strong> Key has insufficient role. Upgrade via <code>PUT /api/admin/keys/{id}/permissions</code></li>
+<li><strong>429 "Rate limit exceeded":</strong> Too many requests. Wait for <code>Retry-After</code> seconds. Admin endpoints: 10/min</li>
+<li><strong>423 "Account locked":</strong> Too many failed login attempts. Lockout lasts 30 minutes. An admin can clear lockouts via the admin panel.</li>
+</ul>
+
+<h3 id="ts-slow-queries">Slow Queries</h3>
+<ul>
+<li>Run <code>PRAGMA optimize</code>: <code>{"task":"optimize"}</code></li>
+<li>Check WAL size via <code>GET /api/admin/stats</code> &mdash; large WAL indicates need for checkpoint</li>
+<li>Reduce query scope: use <code>node_id</code>, time range, and <code>limit</code> filters</li>
+<li>Aggregate old data: <code>{"task":"aggregate_detections"}</code></li>
+</ul>
+
+<h3 id="ts-map-not-loading">Map Not Loading</h3>
+<p><strong>Symptoms:</strong> Geo map page is blank, tiles not rendering, or nodes not appearing on the map.</p>
+<ul>
+<li><strong>Check browser console:</strong> Look for JavaScript errors or failed tile requests. Tile servers may be unreachable if the Bridge host has no internet access.</li>
+<li><strong>Offline tile support:</strong> For air-gapped deployments, configure a local tile server or use the built-in offline tile cache (set <code>GEO_TILE_URL</code> to a local endpoint).</li>
+<li><strong>No nodes on map:</strong> Verify that at least one node has a location set: <code>GET /api/geo/nodes</code>. Nodes without latitude/longitude are excluded from the map.</li>
+<li><strong>CORS issues:</strong> If serving tiles from a different origin, ensure the tile server sends appropriate <code>Access-Control-Allow-Origin</code> headers.</li>
+<li><strong>WebGL errors:</strong> Some heatmap renderers require WebGL. Check browser compatibility or disable GPU acceleration as a workaround.</li>
+</ul>
+
+<h3 id="ts-spectrum-empty">Spectrum Data Empty</h3>
+<p><strong>Symptoms:</strong> Waterfall display shows no data, band occupancy charts are blank.</p>
+<ul>
+<li><strong>Verify spectrum ingest:</strong> Check that edge nodes are sending spectrum data: <code>GET /api/spectrum/status</code>. If <code>last_sweep</code> is null, the node is not reporting spectrum.</li>
+<li><strong>Check node agent config:</strong> Ensure the edge agent is configured with <code>MLRF_SPECTRUM=1</code> (spectrum reporting is disabled by default to save bandwidth).</li>
+<li><strong>Time range mismatch:</strong> The waterfall defaults to the last hour. If spectrum data is older, adjust the <code>hours</code> parameter.</li>
+<li><strong>Frequency range:</strong> If <code>freq_min</code>/<code>freq_max</code> filters are set too narrowly and no signals fall within that range, the display will be empty.</li>
+<li><strong>Storage retention:</strong> Spectrum data is subject to the same retention policy as detections. Old sweeps may have been purged by the hourly cleanup.</li>
+</ul>
+
+<!-- ======== MAINTENANCE ======== -->
+<h2 id="maintenance">Scheduled Maintenance</h2>
+
+<h3 id="db-vacuum">Database Vacuum</h3>
+<p>SQLite VACUUM reclaims disk space from deleted rows. Run periodically (weekly) or after large purges.</p>
+<pre><code>curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"vacuum","retention_days":1}' \
+  https://bridge.example.com/api/admin/maintenance</code></pre>
+<div class="warning"><strong>Note:</strong> VACUUM temporarily doubles disk usage and blocks all writes. Schedule during low-activity periods.</div>
+
+<h3 id="wal-checkpoint">WAL Checkpoint</h3>
+<p>The Bridge runs PASSIVE WAL checkpoints every 30 minutes automatically. For a forced checkpoint:</p>
+<pre><code>curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"wal_checkpoint","retention_days":1}' \
+  https://bridge.example.com/api/admin/maintenance</code></pre>
+
+<h3 id="retention-cleanup">Retention Cleanup</h3>
+<p>The automatic cleanup (every 30 min) performs aggregation, purge, and compaction across all data stores. See <a href="#bg-cleanup">Periodic Cleanup Details</a> for the full sequence.</p>
+<p>Configure with <code>BRIDGE_RETENTION_DAYS=90</code> (default).</p>
+
+<h3 id="log-rotation">Log Rotation</h3>
+<p>The Bridge uses an in-memory ring buffer for logs (viewable via <code>GET /api/admin/logs</code>). For persistent log files, configure your process manager (systemd, Docker) to rotate stdout/stderr. With JSON logging (<code>BRIDGE_LOG_FORMAT=json</code>), use standard log aggregation tools.</p>
+
+<h3 id="backup-schedule">Recommended Backup Schedule</h3>
+<table>
+<tr><th>Frequency</th><th>Action</th></tr>
+<tr><td>Daily</td><td><a href="api_reference.html#maint-backup"><code>POST /api/admin/backup</code></a> &mdash; point-in-time SQLite backup</td></tr>
+<tr><td>Weekly</td><td>Copy backup files to offsite storage</td></tr>
+<tr><td>Monthly</td><td>Full cleanup + vacuum: <code>{"task":"full_cleanup","retention_days":90}</code></td></tr>
+</table>
+<p>Automate with cron:</p>
+<pre><code># Daily backup at 2 AM
+0 2 * * * curl -s -X POST -H "X-API-Key: $MASTER_KEY" https://bridge.example.com/api/admin/backup
+
+# Monthly full cleanup at 3 AM on the 1st
+0 3 1 * * curl -s -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"full_cleanup","retention_days":90}' https://bridge.example.com/api/admin/maintenance</code></pre>
+
+<!-- ======== SECURITY ======== -->
+<h2 id="security-ops">Security Operations</h2>
+
+<h3 id="key-rotation">Key Rotation</h3>
+<p>Rotate API keys regularly. The rotation endpoint returns the new key once &mdash; the old key is immediately invalidated.</p>
+<pre><code># Rotate a specific key
+curl -X PUT -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/keys/sensor-01/rotate
+# Response contains new raw_key — update edge node immediately</code></pre>
+<div class="note">Recommended rotation schedule: sensor keys every 90 days, viewer/analyst keys every 30 days. All keys require an expiration date (mandatory key expiration policy).</div>
+
+<h3 id="audit-review">Audit Log Review</h3>
+<p>All security-sensitive operations are logged to the persistent audit log stored in SQLite with <a href="#audit-hmac">HMAC chain integrity</a>.</p>
+<pre><code># View recent audit entries
+curl -H "X-API-Key: $MASTER_KEY" \
+  "https://bridge.example.com/api/admin/audit?limit=50"
+
+# Filter by action type
+curl -H "X-API-Key: $MASTER_KEY" \
+  "https://bridge.example.com/api/admin/audit?action=admin_create_key"
+
+# Search audit log
+curl -H "X-API-Key: $MASTER_KEY" \
+  "https://bridge.example.com/api/admin/audit?search=revoked"
+
+# Get available filter options
+curl -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/audit/filters</code></pre>
+
+<h4>Key Audit Actions to Monitor</h4>
+<table>
+<tr><th>Action</th><th>Significance</th></tr>
+<tr><td><code>admin_create_key</code></td><td>New API key created</td></tr>
+<tr><td><code>admin_revoke_key</code></td><td>API key revoked</td></tr>
+<tr><td><code>admin_update_key_permissions</code></td><td>Key role changed</td></tr>
+<tr><td><code>admin_deregister_node</code></td><td>Node removed</td></tr>
+<tr><td><code>admin_update_detection_config</code></td><td>Detection thresholds changed</td></tr>
+<tr><td><code>admin_whitelist_add</code></td><td>AP added to WiFi whitelist</td></tr>
+<tr><td><code>admin_create_webhook</code></td><td>New webhook configured</td></tr>
+<tr><td><code>bulk_dismiss_rf</code></td><td>Bulk RF anomaly dismissal</td></tr>
+</table>
+
+<h3 id="webhook-mgmt">Webhook Management</h3>
+<pre><code># List webhooks with delivery log
+curl -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/webhooks
+
+# Create a webhook for critical alerts
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://slack.example.com/webhook","name":"Slack Critical","severity_filter":["critical"]}' \
+  https://bridge.example.com/api/admin/webhooks
+
+# Test webhook delivery
+curl -X POST -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/webhooks/wh_abc123/test
+
+# Check retry queue
+curl -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/webhooks/retry-queue</code></pre>
+<div class="note">Webhook URLs are validated against SSRF: private networks (10.x, 172.16.x, 192.168.x, localhost) are blocked. Blocked ports include database ports (6379, 3306, 5432, etc.).</div>
+
+<h3 id="wifi-whitelist">WiFi AP Whitelist</h3>
+<p>Whitelisted APs are excluded from anomaly scoring, reducing false positives for known infrastructure.</p>
+<pre><code># List current whitelist
+curl -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/wifi-whitelist
+
+# Add AP (BSSID format: AA:BB:CC:DD:EE:FF)
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"bssid":"AA:BB:CC:DD:EE:FF","ssid":"Corporate","notes":"Main office AP"}' \
+  https://bridge.example.com/api/admin/wifi-whitelist
+
+# Remove from whitelist
+curl -X DELETE -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/wifi-whitelist/entry_abc123</code></pre>
+
+<!-- ======== PERFORMANCE ======== -->
+<h2 id="performance">Performance Tuning</h2>
+
+<h3 id="cache-config">Cache Configuration</h3>
+<p>The Bridge uses a partitioned TTL cache (PartitionedCache) with 2048 total entries, domain-routed across cache tag namespaces. Cache statistics are available via <a href="api_reference.html#health-metrics"><code>GET /api/metrics</code></a> (the <code>cache</code> field). If cache hit rates are low, consider reducing query complexity or adjusting cache tag TTLs.</p>
+
+<h3 id="rate-limits">Rate Limits</h3>
+<table>
+<tr><th>Category</th><th>Default</th><th>Configuration</th></tr>
+<tr><td>Standard API</td><td>300/min per key</td><td>YAML config: <code>security.rate_limit_per_minute</code></td></tr>
+<tr><td>Sensitive endpoints</td><td>10/min per key</td><td>Hardcoded (key creation, admin ops)</td></tr>
+<tr><td>WS concurrent per IP</td><td>10</td><td><code>WSConnectionLimiter.max_concurrent</code></td></tr>
+<tr><td>WS connections/min per IP</td><td>30</td><td><code>WSConnectionLimiter.max_per_minute</code></td></tr>
+<tr><td>Request body size</td><td>10 MB</td><td>Middleware: <code>_MAX_REQUEST_BODY</code></td></tr>
+<tr><td>Detection batch</td><td>1 MB compressed</td><td>50 MB decompressed limit</td></tr>
+<tr><td>IQ upload</td><td>100 KB</td><td>Per-detection limit</td></tr>
+<tr><td>Pcap upload</td><td>10 MB</td><td>Per-anomaly limit</td></tr>
+</table>
+
+<h3 id="ws-limits">WebSocket Connection Management</h3>
+<p>5 WebSocket channels are available:</p>
+<table>
+<tr><th>Channel</th><th>Path</th><th>Events</th></tr>
+<tr><td>Node Status</td><td><code>/api/nodes/ws/status</code></td><td>Node state changes, initial snapshot</td></tr>
+<tr><td>Detection Feed</td><td><code>/api/detections/ws/feed</code></td><td>Batch ingest notifications</td></tr>
+<tr><td>Anomaly Stream</td><td><code>/api/detections/ws/anomalies</code></td><td>IQ capture availability</td></tr>
+<tr><td>Alert Stream</td><td><code>/api/alerts/ws/alerts</code></td><td>New alerts</td></tr>
+<tr><td>WiFi Events</td><td><code>/api/wifi/ws/wifi</code></td><td>WiFi ingest, anomaly events</td></tr>
+</table>
+<p>All channels support <code>ping</code>/<code>pong</code> keepalive. Client IP tracking ensures connection slot release on disconnect.</p>
+
+<h3 id="sqlite-tuning">SQLite Tuning</h3>
+<p>The Bridge configures SQLite with WAL mode for concurrent reads during writes. Key PRAGMAs are configurable via environment variables:</p>
+<table>
+<tr><th>PRAGMA</th><th>Env Var</th><th>Default</th></tr>
+<tr><td><code>cache_size</code></td><td><code>BRIDGE_SQLITE_CACHE_SIZE</code></td><td><code>-8000</code> (8 MB)</td></tr>
+<tr><td><code>mmap_size</code></td><td><code>BRIDGE_SQLITE_MMAP_SIZE</code></td><td><code>268435456</code> (256 MB)</td></tr>
+</table>
+
+<table>
+<tr><th>Task</th><th>Frequency</th><th>Purpose</th></tr>
+<tr><td>WAL Checkpoint (PASSIVE)</td><td>Every 30 min (auto)</td><td>Move WAL pages to main DB without blocking reads</td></tr>
+<tr><td>Periodic Cleanup</td><td>Every 30 min (auto)</td><td>Aggregate and purge old data per retention policy</td></tr>
+<tr><td>VACUUM</td><td>Monthly (manual)</td><td>Reclaim disk space, defragment</td></tr>
+<tr><td>PRAGMA optimize</td><td>After large data changes</td><td>Optimize query plans and indexes</td></tr>
+<tr><td>PRAGMA quick_check</td><td>Startup</td><td>Integrity check; raises error on corruption</td></tr>
+</table>
+
+<div class="note">
+<strong>Single Writer:</strong> SQLite allows only one writer at a time. Use a single uvicorn worker (<code>--workers 1</code>). For higher ingest rates, batch detections on the edge node (the detection reporter already does this).
+</div>
+
+<h3>Recommended Hardware Sizing</h3>
+<table>
+<tr><th>Deployment</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Nodes</th></tr>
+<tr><td>Small (lab)</td><td>2 cores</td><td>2 GB</td><td>10 GB SSD</td><td>1-5</td></tr>
+<tr><td>Medium (site)</td><td>4 cores</td><td>4 GB</td><td>50 GB SSD</td><td>5-20</td></tr>
+<tr><td>Large (campus)</td><td>8 cores</td><td>8 GB</td><td>200 GB SSD</td><td>20-100</td></tr>
+</table>
+
+<hr style="margin:40px 0;border-color:var(--border);">
+<p style="color:var(--text-secondary);font-size:12px;">The Bridge v4.0.0 Operations Guide &mdash; <a href="api_reference.html">API Reference</a> &middot; <a href="deployment_guide.html">Deployment Guide</a> &middot; <a href="/documentation/">Documentation Index</a></p>
+</main>
+</div>
+</body>
+</html>

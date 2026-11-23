@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API Reference — The Bridge v4.0.0</title>
+<style>
+:root {
+  --bg: #0d1117; --bg-card: #161b22; --bg-sidebar: #0d1117;
+  --border: #30363d; --text: #c9d1d9; --text-secondary: #8b949e;
+  --accent: #58a6ff; --accent-hover: #79c0ff;
+  --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff;
+  --code-bg: #1c2129; --code-border: #30363d;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* Layout */
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 280px; background: var(--bg-sidebar); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; bottom: 0; overflow-y: auto; padding: 20px 0; z-index: 10; }
+.sidebar-header { padding: 0 20px 16px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.sidebar-header h2 { font-size: 16px; color: var(--text); margin-bottom: 4px; }
+.sidebar-header .version { font-size: 12px; color: var(--text-secondary); }
+.sidebar-nav a { display: block; padding: 6px 20px; font-size: 13px; color: var(--text-secondary); border-left: 3px solid transparent; }
+.sidebar-nav a:hover { color: var(--text); background: rgba(88,166,255,0.05); text-decoration: none; }
+.sidebar-nav a.active { color: var(--accent); border-left-color: var(--accent); background: rgba(88,166,255,0.08); }
+.sidebar-nav .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); padding: 12px 20px 4px; font-weight: 600; }
+.content { margin-left: 280px; padding: 32px 40px; max-width: 960px; flex: 1; }
+
+/* Components */
+h1 { font-size: 28px; margin-bottom: 8px; color: var(--text); }
+h2 { font-size: 22px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+h3 { font-size: 17px; margin: 28px 0 12px; color: var(--text); }
+h4 { font-size: 14px; margin: 16px 0 8px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.3px; }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-secondary); margin-bottom: 24px; font-size: 15px; }
+
+.endpoint { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+.endpoint-header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.method { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 4px; font-family: 'SFMono-Regular', Consolas, monospace; min-width: 55px; text-align: center; }
+.method-get { background: rgba(63,185,80,0.15); color: var(--green); }
+.method-post { background: rgba(88,166,255,0.15); color: var(--accent); }
+.method-put { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.method-delete { background: rgba(248,81,73,0.15); color: var(--red); }
+.method-patch { background: rgba(188,140,255,0.15); color: var(--purple); }
+.method-ws { background: rgba(188,140,255,0.15); color: var(--purple); }
+.endpoint-path { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: var(--text); }
+.endpoint-body { padding: 12px 16px; font-size: 13px; }
+.endpoint-body p { color: var(--text-secondary); margin-bottom: 8px; }
+.role-badge { font-size: 11px; padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: auto; }
+.role-sensor { background: rgba(63,185,80,0.15); color: var(--green); }
+.role-viewer { background: rgba(88,166,255,0.15); color: var(--accent); }
+.role-analyst { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.role-admin { background: rgba(248,81,73,0.15); color: var(--red); }
+.role-none { background: rgba(139,148,158,0.15); color: var(--text-secondary); }
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+th { text-align: left; padding: 6px 10px; background: var(--code-bg); color: var(--text-secondary); font-weight: 600; border: 1px solid var(--border); }
+td { padding: 6px 10px; border: 1px solid var(--border); }
+code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; background: var(--code-bg); padding: 2px 5px; border-radius: 3px; }
+pre { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 6px; padding: 12px 16px; overflow-x: auto; margin: 8px 0 16px; font-size: 12px; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+  .content { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h2>The Bridge API</h2>
+    <span class="version">v4.0.0 &middot; API v1</span>
+    <div style="margin-top:8px"><a href="deployment_guide.html">Deployment</a> &middot; <a href="operations_guide.html">Operations</a></div>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-group">Overview</div>
+    <a href="#auth">Authentication</a>
+    <a href="#versioning">API Versioning</a>
+    <a href="#rate-limiting">Rate Limiting</a>
+    <div class="nav-group">Health</div>
+    <a href="#health-version">GET /api/version</a>
+    <a href="#health-health">GET /api/health</a>
+    <a href="#health-status">GET /api/status</a>
+    <a href="#health-metrics">GET /api/metrics</a>
+    <div class="nav-group">Nodes</div>
+    <a href="#nodes-register">POST /register</a>
+    <a href="#nodes-heartbeat">POST /heartbeat</a>
+    <a href="#nodes-list">GET /</a>
+    <a href="#nodes-get">GET /{node_id}</a>
+    <a href="#nodes-delete">DELETE /{node_id}</a>
+    <a href="#nodes-command">POST /{node_id}/command</a>
+    <a href="#nodes-location">PUT /{node_id}/location</a>
+    <a href="#nodes-locations">GET /locations</a>
+    <a href="#nodes-position">PATCH /{node_id}/position</a>
+    <a href="#nodes-activity">GET /activity</a>
+    <a href="#nodes-deployment">GET /deployment</a>
+    <a href="#nodes-ws">WS /ws/status</a>
+    <div class="nav-group">Detections</div>
+    <a href="#det-batch">POST /batch</a>
+    <a href="#det-ingest-summary">POST /ingest-summary</a>
+    <a href="#det-ingest-status">GET /ingest-status</a>
+    <a href="#det-query">POST /query</a>
+    <a href="#det-recent">GET /recent</a>
+    <a href="#det-stats">GET /stats</a>
+    <a href="#det-timeline">GET /timeline</a>
+    <a href="#det-heatmap">GET /heatmap</a>
+    <a href="#det-distribution">GET /distribution</a>
+    <a href="#det-count">GET /count</a>
+    <a href="#det-compare">GET /nodes/compare</a>
+    <a href="#det-aggregate">POST /aggregate</a>
+    <a href="#det-anomalies">GET /anomalies</a>
+    <a href="#det-iq">PUT /{id}/iq</a>
+    <a href="#det-ws-feed">WS /ws/feed</a>
+    <a href="#det-ws-anomalies">WS /ws/anomalies</a>
+    <div class="nav-group">Alerts</div>
+    <a href="#alerts-list">GET /</a>
+    <a href="#alerts-create">POST /rules</a>
+    <a href="#alerts-ack">PUT /{alert_id}/ack</a>
+    <a href="#alerts-history">GET /history</a>
+    <a href="#alerts-ws">WS /ws/alerts</a>
+    <div class="nav-group">Keys</div>
+    <a href="#keys-create">POST /</a>
+    <a href="#keys-list">GET /</a>
+    <a href="#keys-revoke">DELETE /{key_id}</a>
+    <a href="#keys-rotate">PUT /{key_id}/rotate</a>
+    <div class="nav-group">Export</div>
+    <a href="#export-nodes">GET /nodes</a>
+    <a href="#export-detections">GET /detections</a>
+    <a href="#export-report">GET /report</a>
+    <div class="nav-group">WiFi SIGINT</div>
+    <a href="#wifi-networks">GET /networks</a>
+    <a href="#wifi-ingest">POST /ingest</a>
+    <a href="#wifi-anomalies">GET /anomalies</a>
+    <a href="#wifi-channels">GET /channels</a>
+    <a href="#wifi-ws">WS /ws/wifi</a>
+    <div class="nav-group">Signals</div>
+    <a href="#sig-classes">GET /classes</a>
+    <a href="#sig-generate">GET /generate</a>
+    <a href="#sig-compare">POST /compare</a>
+    <div class="nav-group">Admin</div>
+    <a href="#admin-keys">Key Management</a>
+    <a href="#admin-nodes">Node Management</a>
+    <a href="#admin-alerts">Alert Management</a>
+    <a href="#admin-audit">Audit Log</a>
+    <a href="#admin-logs">Log Viewer</a>
+    <a href="#admin-protocols">GET /protocols</a>
+    <a href="#admin-scoring-eval">GET /scoring/evaluation</a>
+    <a href="#admin-scoring-thresholds">GET /scoring/thresholds</a>
+    <div class="nav-group">Maintenance</div>
+    <a href="#maint-maintenance">POST /maintenance</a>
+    <a href="#maint-backup">POST /backup</a>
+    <a href="#maint-backups">GET /backups</a>
+    <a href="#maint-jobs">GET /jobs</a>
+    <div class="nav-group">System Config</div>
+    <a href="#cfg-detection">Detection Config</a>
+    <a href="#cfg-config">GET /config</a>
+    <a href="#cfg-stats">GET /stats</a>
+    <a href="#cfg-whitelist">WiFi Whitelist</a>
+    <div class="nav-group">Webhooks</div>
+    <a href="#wh-list">GET /webhooks</a>
+    <a href="#wh-create">POST /webhooks</a>
+    <a href="#wh-test">POST /webhooks/{id}/test</a>
+    <div class="nav-group">Spectrum</div>
+    <a href="#spectrum-nodes">GET /nodes</a>
+    <a href="#spectrum-connect">POST /connect</a>
+    <a href="#spectrum-disconnect">GET /disconnect</a>
+    <a href="#spectrum-config">GET /config</a>
+    <a href="#spectrum-ws">WS /ws/spectrum</a>
+    <a href="#spectrum-occupancy">GET /occupancy</a>
+    <a href="#spectrum-waterfall">GET /waterfall</a>
+    <a href="#spectrum-bands">GET /bands</a>
+    <a href="#spectrum-activity">GET /activity</a>
+    <div class="nav-group">Geolocation</div>
+    <a href="#geo-map">GET /map</a>
+    <a href="#geo-heatmap">GET /heatmap</a>
+    <a href="#geo-coverage">GET /coverage</a>
+    <a href="#geo-activity">GET /activity</a>
+    <a href="#geo-detection-estimates">GET /estimates/detection/{id}</a>
+    <div class="nav-group">Crypto Keys</div>
+    <a href="#crypto-list">GET /api/crypto/keys</a>
+    <a href="#crypto-import">POST /keys</a>
+    <a href="#crypto-decrypt">POST /decrypt</a>
+    <div class="nav-group">Threat Signatures</div>
+    <a href="#threats-list">GET /threats/list</a>
+    <a href="#threats-match">POST /threats/match</a>
+    <a href="#threats-seed">POST /threats/seed</a>
+    <div class="nav-group">Incidents</div>
+    <a href="#incidents-list">GET /api/incidents/</a>
+    <a href="#incidents-create">POST /</a>
+    <a href="#incidents-metrics">GET /metrics</a>
+    <a href="#incidents-assign">PUT /{id}/assign</a>
+    <a href="#incidents-status">PUT /{id}/status</a>
+    <a href="#incidents-resolve">PUT /{id}/resolve</a>
+    <a href="#incidents-timeline">GET /{id}/timeline</a>
+    <a href="#incidents-detections">GET /{id}/detections</a>
+    <a href="#incidents-link-detection">POST /{id}/detections</a>
+    <div class="nav-group">Device Fingerprinting</div>
+    <a href="#fp-clusters">GET /device-clusters</a>
+    <a href="#fp-identify">POST /identify</a>
+    <a href="#fp-cluster-timeline">GET /{id}/timeline</a>
+    <div class="nav-group">Aircraft</div>
+    <a href="#aircraft-list">GET /api/aircraft/</a>
+    <a href="#aircraft-ingest">POST /api/aircraft/</a>
+    <a href="#aircraft-stats">GET /stats</a>
+    <a href="#aircraft-trail">GET /{icao}/trail</a>
+    <div class="nav-group">Sweeps</div>
+    <a href="#sweeps-list">GET /api/sweeps/</a>
+    <a href="#sweeps-create">POST /api/sweeps/</a>
+    <a href="#sweeps-detail">GET /{id}</a>
+    <a href="#sweeps-phase">PUT /{id}/phase</a>
+    <a href="#sweeps-zones-list">GET /{id}/zones</a>
+    <a href="#sweeps-summary">GET /{id}/summary</a>
+    <a href="#sweeps-report">GET /{id}/report</a>
+    <div class="nav-group">Training</div>
+    <a href="#train-runs">GET /runs</a>
+    <a href="#train-metrics">GET /runs/.../metrics</a>
+    <a href="#train-health">GET /health</a>
+  </div>
+</nav>
+
+<main class="content">
+
+<h1>API Reference</h1>
+<p class="subtitle">The Bridge v4.0.0 &mdash; RF Signal Detection Backend. All endpoints are prefixed with their router path.</p>
+
+<!-- ======== AUTHENTICATION ======== -->
+<h2 id="auth">Authentication</h2>
+<p>All API endpoints (except <code>GET /api/version</code>) require authentication via an API key.</p>
+<h4>HTTP Endpoints</h4>
+<p>Pass the key in the <code>X-API-Key</code> header or as an <code>api_key</code> query parameter:</p>
+<pre><code>curl -H "X-API-Key: YOUR_KEY" https://bridge.example.com/api/health</code></pre>
+
+<h4>WebSocket Endpoints</h4>
+<p>Use the <code>Sec-WebSocket-Protocol</code> header (preferred):</p>
+<pre><code>Sec-WebSocket-Protocol: bridge-v1, YOUR_API_KEY</code></pre>
+<p>Query parameter auth (<code>?api_key=xxx</code>) is deprecated and can be disabled with <code>BRIDGE_WS_QUERY_AUTH=disabled</code>.</p>
+
+<h4>RBAC Roles</h4>
+<p>Roles are hierarchical &mdash; higher roles inherit all lower permissions.</p>
+<table>
+<tr><th>Role</th><th>Level</th><th>Permissions</th></tr>
+<tr><td><code>SENSOR</code></td><td>0</td><td>Edge sensor devices, ingest-only</td></tr>
+<tr><td><code>NODE</code></td><td>1</td><td>Edge nodes, ingest + read own status</td></tr>
+<tr><td><code>VIEWER</code></td><td>2</td><td>Read-only dashboard access</td></tr>
+<tr><td><code>ANALYST</code></td><td>3</td><td>Read + write detections, alerts, investigations</td></tr>
+<tr><td><code>ADMIN</code></td><td>4</td><td>Full access including user management, system config</td></tr>
+</table>
+
+<h2 id="versioning">API Versioning</h2>
+<p>The Bridge uses header-based versioning. Include <code>X-API-Version: 1</code> in requests. Currently supported: <code>["1"]</code>. Responses include <code>X-API-Version</code> in the header. Requests with unsupported versions receive 400.</p>
+
+<h2 id="rate-limiting">Rate Limiting</h2>
+<p>Sliding window rate limiting per API key. Default: 300 requests/minute (configurable). Sensitive endpoints (key creation, admin) limited to 10/minute. Exceeded limits return 429 with <code>Retry-After</code> header.</p>
+<p>WebSocket connections: max 10 concurrent per IP, max 30 connections/minute per IP.</p>
+
+<!-- ======== HEALTH ======== -->
+<h2 id="health">Health &amp; Status</h2>
+<p>Prefix: <code>/api</code></p>
+
+<div class="endpoint" id="health-version">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/version</span>
+  <span class="role-badge role-none">No Auth</span>
+</div>
+<div class="endpoint-body">
+<p>Version discovery endpoint. No authentication required.</p>
+<p>Returns <code>api_version</code>, <code>server_version</code>, <code>ws_protocol</code>, and <code>supported_versions</code>.</p>
+<pre><code>curl https://bridge.example.com/api/version</code></pre>
+</div></div>
+
+<div class="endpoint" id="health-health">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/health</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Basic health probe. Returns status, version, and UTC timestamp.</p>
+<pre><code>curl -H "X-API-Key: $KEY" https://bridge.example.com/api/health</code></pre>
+</div></div>
+
+<div class="endpoint" id="health-status">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/status</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Live system-wide status: node counts (active/stale/offline), alert count, job counts, detection metrics (24h totals, detections/sec), active anomalies, active frequencies, uptime.</p>
+</div></div>
+
+<div class="endpoint" id="health-metrics">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/metrics</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Operational metrics: ingest rate, WS client counts (detections, anomalies, spectrum, wifi), database size and row count, cache statistics.</p>
+</div></div>
+
+<!-- ======== NODES ======== -->
+<h2 id="nodes">Nodes</h2>
+<p>Prefix: <code>/api/nodes</code></p>
+
+<div class="endpoint" id="nodes-register">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/nodes/register</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Register a new edge node or re-register an existing one.</p>
+<h4>Request Body (NodeRegistration)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>Unique node identifier</td></tr>
+<tr><td><code>host</code></td><td>string</td><td>Node hostname/IP</td></tr>
+<tr><td><code>port</code></td><td>int</td><td>Node port</td></tr>
+<tr><td><code>capabilities</code></td><td>dict</td><td>Node capability metadata</td></tr>
+</table>
+<pre><code>curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"node_id":"node-01","host":"192.168.1.10","port":8080}' \
+  https://bridge.example.com/api/nodes/register</code></pre>
+</div></div>
+
+<div class="endpoint" id="nodes-heartbeat">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/nodes/heartbeat</span>
+  <span class="role-badge role-sensor">SENSOR+</span>
+</div>
+<div class="endpoint-body">
+<p>Process a node heartbeat. Updates metrics, checks alerts, returns pending commands.</p>
+<h4>Request Body (BridgeHeartbeatRequest)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>Registered node ID</td></tr>
+<tr><td><code>metrics</code></td><td>NodeMetrics</td><td>CPU, memory, frequency and the edge agent's monitor fields (<code>agent_version</code>, <code>disk_percent</code>, <code>cpu_temp</code>, <code>load_1m</code>, <code>uptime_seconds</code>, ...). Only known metrics are stored, each only with a value of its type and range; other names are ignored and a known metric with a bad value is cleared. A heartbeat never changes the node's <code>host</code>, <code>port</code>, <code>registered_at</code> or <code>last_seen</code> (set by the server). Of its <code>capabilities</code> it updates only the monitor fields (<code>agent_version</code>, <code>disk_percent</code>, <code>cpu_temp</code>, <code>load_1m</code>, <code>uptime_seconds</code>, <code>capture_mode</code>, <code>scan_count</code>, <code>anomaly_enabled</code>, <code>anomaly_count</code>, <code>anomaly_baseline</code>, <code>platform</code>, <code>os</code>, <code>hardware</code>, <code>python_version</code>): a valid value replaces the entry of that name, also one the admin registered, and a bad value removes it.</td></tr>
+<tr><td><code>detection_summary</code></td><td>DetectionSummary?</td><td>Optional detection statistics</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="nodes-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/nodes/</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List all registered nodes with computed status and floor plan positions.</p></div></div>
+
+<div class="endpoint" id="nodes-get">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/nodes/{node_id}</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Get a single node by ID. Returns 404 if not found.</p></div></div>
+
+<div class="endpoint" id="nodes-delete">
+<div class="endpoint-header">
+  <span class="method method-delete">DELETE</span>
+  <span class="endpoint-path">/api/nodes/{node_id}</span>
+  <span class="role-badge role-admin">ADMIN (master)</span>
+</div>
+<div class="endpoint-body"><p>Remove a node. Returns 204 on success.</p></div></div>
+
+<div class="endpoint" id="nodes-command">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/nodes/{node_id}/command</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Queue a command for delivery on the node's next heartbeat.</p>
+<h4>Request Body (CommandRequest)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>command</code></td><td>string</td><td>Command name: one of <code>restart</code>, <code>update</code>, <code>update_config</code>, <code>status</code>, <code>ping</code>. Any other name is a 422, including <code>iq_capture</code>: IQ captures are queued through <code>POST /api/nodes/{node_id}/capture</code>, which range-checks their parameters.</td></tr>
+<tr><td><code>params</code></td><td>dict</td><td>Command parameters</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="nodes-location">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/nodes/{node_id}/location</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Update a node's geographic location (latitude, longitude, altitude, name). Used for geolocation mapping features.</p>
+<h4>Request Body (NodeLocationUpdate)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>latitude</code></td><td>float (-90 to 90)</td><td>Latitude</td></tr>
+<tr><td><code>longitude</code></td><td>float (-180 to 180)</td><td>Longitude</td></tr>
+<tr><td><code>altitude_m</code></td><td>float | null</td><td>Altitude in meters</td></tr>
+<tr><td><code>location_name</code></td><td>string</td><td>Human-readable location name</td></tr>
+</table>
+<pre><code>curl -X PUT -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"latitude":40.7128,"longitude":-74.006,"location_name":"Building A"}' \
+  https://bridge/api/nodes/node-01/location</code></pre>
+</div></div>
+
+<div class="endpoint" id="nodes-locations">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/nodes/locations</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Return all nodes that have geographic location data (latitude/longitude). Each entry includes node status and last seen timestamp.</p>
+<pre><code>curl -H "X-API-Key: $KEY" https://bridge/api/nodes/locations</code></pre>
+</div></div>
+
+<div class="endpoint" id="nodes-position">
+<div class="endpoint-header">
+  <span class="method method-patch">PATCH</span>
+  <span class="endpoint-path">/api/nodes/{node_id}/position</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Update a node's floor plan position (0-100 coordinate space).</p>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>x</code></td><td>float (0-100)</td><td>X coordinate</td></tr>
+<tr><td><code>y</code></td><td>float (0-100)</td><td>Y coordinate</td></tr>
+<tr><td><code>floor_label</code></td><td>string</td><td>Floor/area label</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="nodes-activity">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/nodes/activity</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Return recent activity log entries.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>limit</code></td><td>int (1-1000)</td><td>100</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="nodes-deployment">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/nodes/deployment</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>SSH audit of all edge nodes. Returns deployment status, OS version, package versions, and service health for each registered node.</p></div></div>
+
+<div class="endpoint" id="nodes-ws">
+<div class="endpoint-header">
+  <span class="method method-ws">WS</span>
+  <span class="endpoint-path">/api/nodes/ws/status</span>
+  <span class="role-badge role-viewer">Auth Required</span>
+</div>
+<div class="endpoint-body"><p>Real-time node status stream. Sends initial snapshot, then updates on changes.</p></div></div>
+
+<!-- ======== DETECTIONS ======== -->
+<h2 id="detections">Detections</h2>
+<p>Prefix: <code>/api/detections</code></p>
+
+<div class="endpoint" id="det-batch">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/detections/batch</span>
+  <span class="role-badge role-sensor">SENSOR</span>
+</div>
+<div class="endpoint-body">
+<p>Ingest a batch of detections from an edge node. Supports gzip-compressed bodies (<code>Content-Encoding: gzip</code>). Max 1MB compressed, 50MB decompressed. Auto-creates anomaly alerts for scores above 0.7.</p>
+<h4>Request Body (DetectionBatch)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>Registered node ID</td></tr>
+<tr><td><code>batch_id</code></td><td>string</td><td>Unique batch identifier (auto-generated if omitted)</td></tr>
+<tr><td><code>period_start</code></td><td>datetime</td><td>Start of reporting period</td></tr>
+<tr><td><code>period_end</code></td><td>datetime</td><td>End of reporting period</td></tr>
+<tr><td><code>detections</code></td><td>DetectionRecord[]</td><td>Array of detection records</td></tr>
+</table>
+<h4>DetectionRecord Fields</h4>
+<table><tr><th>Field</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>required</td></tr>
+<tr><td><code>signal_class</code></td><td>string</td><td>required</td></tr>
+<tr><td><code>confidence</code></td><td>float (0-1)</td><td>required</td></tr>
+<tr><td><code>family</code></td><td>string</td><td>""</td></tr>
+<tr><td><code>freq_hz</code></td><td>float</td><td>0.0</td></tr>
+<tr><td><code>snr_db</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>power_dbm</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>inference_ms</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>anomaly_score</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>baseline_status</code></td><td>"learning"|"stable"|"unknown"</td><td>"stable"</td></tr>
+<tr><td><code>has_iq_capture</code></td><td>bool</td><td>false</td></tr>
+</table>
+<pre><code>curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"node_id":"node-01","period_start":"2026-01-01T00:00:00Z","period_end":"2026-01-01T00:01:00Z","detections":[{"node_id":"node-01","signal_class":"wifi_ofdm","confidence":0.95,"freq_hz":2412000000}]}' \
+  https://bridge.example.com/api/detections/batch</code></pre>
+</div></div>
+
+<div class="endpoint" id="det-ingest-summary">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/detections/ingest-summary</span>
+  <span class="role-badge role-sensor">SENSOR</span>
+</div>
+<div class="endpoint-body">
+<p>Ingest pre-aggregated hourly detection summaries from an edge node. Preferred over <code>/batch</code> for nodes with <code>MLRF_SUMMARIZE=1</code> enabled. Reduces write volume by ~45x. Supports gzip (<code>Content-Encoding: gzip</code>). Max 1MB compressed.</p>
+<p>Detections with anomaly scores above the threshold are included as <code>high_anomaly_detections</code> and inserted through the normal raw pipeline to preserve full detail.</p>
+<h4>Request Body (DetectionSummaryBatch)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>Registered node ID</td></tr>
+<tr><td><code>summaries</code></td><td>DetectionHourlySummary[]</td><td>Array of hourly summary bins</td></tr>
+<tr><td><code>high_anomaly_detections</code></td><td>DetectionRecord[]</td><td>Raw detections that exceeded the anomaly threshold</td></tr>
+</table>
+<h4>DetectionHourlySummary Fields</h4>
+<table><tr><th>Field</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>hour</code></td><td>string (ISO, e.g. "2026-03-26T14:00:00Z")</td><td>required</td></tr>
+<tr><td><code>signal_class</code></td><td>string</td><td>required</td></tr>
+<tr><td><code>family</code></td><td>string</td><td>""</td></tr>
+<tr><td><code>freq_bin_hz</code></td><td>float</td><td>0.0</td></tr>
+<tr><td><code>detection_count</code></td><td>int</td><td>0</td></tr>
+<tr><td><code>avg_confidence</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>min_confidence</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>max_confidence</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>avg_snr_db</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>avg_power_dbm</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>avg_anomaly</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>max_anomaly</code></td><td>float (0-1)</td><td>0.0</td></tr>
+</table>
+<h4>Response (201 Created)</h4>
+<pre><code>{
+  "inserted_summaries": 48,
+  "inserted_raw": 3
+}</code></pre>
+</div></div>
+
+<div class="endpoint" id="det-ingest-status">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/ingest-status</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Returns which nodes are using raw batch ingest vs summary ingest. Values are Unix timestamps of the most recent ingest from each node. Use this to identify nodes that should be migrated to <code>MLRF_SUMMARIZE=1</code>.</p>
+<h4>Response (200)</h4>
+<pre><code>{
+  "raw_ingest_nodes": {"node-01": 1711468800.0, "node-03": 1711468790.0},
+  "summary_ingest_nodes": {"node-02": 1711468860.0}
+}</code></pre>
+</div></div>
+
+<div class="endpoint" id="det-query">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/detections/query</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Query stored detections with filters.</p>
+<h4>Request Body (DetectionQuery)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>start</code></td><td>datetime?</td><td>null</td></tr>
+<tr><td><code>end</code></td><td>datetime?</td><td>null</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>signal_class</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>family</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>min_confidence</code></td><td>float (0-1)</td><td>0.0</td></tr>
+<tr><td><code>limit</code></td><td>int (1-10000)</td><td>100</td></tr>
+<tr><td><code>offset</code></td><td>int</td><td>0</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-recent">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/recent</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Recent detections within a time window.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>minutes</code></td><td>int (1-10080)</td><td>5</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>limit</code></td><td>int (1-1000)</td><td>100</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-stats">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/stats</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Aggregated statistics: total detections, unique classes/nodes, average confidence, class/family distributions, detections/second.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>hours</code></td><td>int (1-168)</td><td>24</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-timeline">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/timeline</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Time-bucketed detection counts for charts.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>hours</code></td><td>int (1-168)</td><td>24</td></tr>
+<tr><td><code>resolution</code></td><td>int seconds (60-3600)</td><td>300</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-heatmap">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/heatmap</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Frequency x time heatmap data.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>date</code></td><td>string (YYYY-MM-DD)</td><td>today</td></tr>
+<tr><td><code>resolution</code></td><td>int minutes (1-60)</td><td>15</td></tr>
+<tr><td><code>hours</code></td><td>int? (1-168)</td><td>null (overrides date)</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-distribution">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/distribution</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Signal class distribution data.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>hours</code></td><td>int (1-168)</td><td>24</td></tr>
+<tr><td><code>min_confidence</code></td><td>float (0-1)</td><td>0.0</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-count">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/count</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Returns total number of raw detection rows.</p></div></div>
+
+<div class="endpoint" id="det-compare">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/nodes/compare</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Compare detection profiles across all active nodes. Returns per-node stats and Jaccard similarity cross-correlation matrix.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>hours</code></td><td>int (1-168)</td><td>24</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="det-aggregate">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/detections/aggregate</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Trigger hourly aggregation of raw detections. Also cleans up IQ captures older than 7 days.</p></div></div>
+
+<div class="endpoint" id="det-anomalies">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/detections/anomalies</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>RF anomalies from the dedicated rf_anomalies table. Supports filtering, sorting, and live re-evaluation.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>min_score</code></td><td>float (0-1)</td><td>0.3</td></tr>
+<tr><td><code>limit</code></td><td>int (1-1000)</td><td>50</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>family</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>signal_class</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>priority</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>freq_min</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>freq_max</code></td><td>float?</td><td>null</td></tr>
+<tr><td><code>sort</code></td><td>"score"|"time"|"freq"|"seen"</td><td>"score"</td></tr>
+<tr><td><code>order</code></td><td>"asc"|"desc"</td><td>"desc"</td></tr>
+<tr><td><code>reevaluate</code></td><td>bool</td><td>false</td></tr>
+</table>
+</div></div>
+
+<h3>Anomaly Management Endpoints</h3>
+<p>Additional endpoints under <code>/api/detections/anomalies/</code>:</p>
+<table>
+<tr><th>Method</th><th>Path</th><th>Role</th><th>Description</th></tr>
+<tr><td>GET</td><td>/anomalies/summary</td><td>VIEWER</td><td>Aggregate anomaly breakdown by priority, family, band, node</td></tr>
+<tr><td>PUT</td><td>/anomalies/{id}/dismiss</td><td>ANALYST</td><td>Dismiss a single RF anomaly by row ID</td></tr>
+<tr><td>PUT</td><td>/anomalies/{id}/snooze</td><td>ANALYST</td><td>Snooze an anomaly for 1-168 hours</td></tr>
+<tr><td>GET</td><td>/anomalies/{detection_id}/baseline</td><td>VIEWER</td><td>Review server-resolved RF identity, node-scoped defaults and existing matches</td></tr>
+<tr><td>GET</td><td>/known-signals</td><td>VIEWER</td><td>List durable known RF patterns and whether the caller may manage them</td></tr>
+<tr><td>POST</td><td>/known-signals</td><td>ANALYST</td><td>Create a reviewed range without a source detection; explicit node_id or null is required; returns 201 and the durable pattern</td></tr>
+<tr><td>PUT</td><td>/known-signals/{pattern_id}</td><td>ANALYST</td><td>Edit full pattern with current revision; stale revisions return 409</td></tr>
+<tr><td>DELETE</td><td>/known-signals/{pattern_id}?revision=N</td><td>ANALYST</td><td>Remove the reviewed revision; future matching alert evaluation resumes</td></tr>
+<tr><td>PUT</td><td>/anomalies/{id}/baseline</td><td>ANALYST</td><td>Durably save a known RF alert-suppression pattern; no score or history changes</td></tr>
+<tr><td>POST</td><td>/anomalies/{id}/feedback</td><td>ANALYST</td><td>Submit operator feedback (true_positive, false_positive, expected, interesting)</td></tr>
+<tr><td>PUT</td><td>/anomalies/bulk/dismiss</td><td>ANALYST</td><td>Bulk dismiss up to 1000 RF anomalies</td></tr>
+<tr><td>PUT</td><td>/anomalies/bulk/snooze</td><td>ANALYST</td><td>Bulk snooze up to 1000 RF anomalies</td></tr>
+<tr><td>POST</td><td>/anomalies/bulk/escalate</td><td>ANALYST</td><td>Escalate up to 100 RF anomalies, none dismissed: one critical <code>anomaly_escalated</code> alert per request (webhooks, syslog, live feed) names them in <code>anomaly_ids</code> and is returned as <code>alert_id</code>; an anomaly an unacknowledged escalation alert already names is listed in <code>already_escalated</code>, unknown IDs in <code>not_found</code></td></tr>
+<tr><td>PUT</td><td>/anomalies/bulk/baseline</td><td>ANALYST</td><td>Bulk baseline up to 100 anomalies</td></tr>
+<tr><td>POST</td><td>/anomalies/bulk/reeval-dismiss</td><td>ANALYST</td><td>Re-evaluate all, auto-dismiss resolved</td></tr>
+<tr><td>GET</td><td>/anomalies/audit</td><td>VIEWER</td><td>Audit log for anomaly operations</td></tr>
+</table>
+<p><strong>Known-pattern scope:</strong> an explicit pattern body uses <code>freq_min_hz</code>, <code>freq_max_hz</code>, <code>signal_class</code>, <code>node_id</code> and optional <code>note</code>. Set <code>signal_class</code> to the exact literal <code>"*"</code> for any modulation; otherwise it must be an exact class matching <code>[a-zA-Z0-9_/.-]{1,128}</code>. Embedded wildcards are rejected. The inclusive frequency range and node still apply; <code>node_id: null</code> explicitly means all nodes. Power is never a matching criterion. For the per-detection baseline endpoint, the reviewed frequency range and node scope must include the source detection; its signal class must match unless <code>"*"</code> is selected. Edits also require the current <code>revision</code>.</p>
+<p>Direct <code>POST /known-signals</code> uses the same validated fields, with an explicit <code>node_id</code> (a receiver ID or <code>null</code> for all nodes). It requires no existing detection and returns <code>source_detection_id: null</code> for a newly created direct rule. Identical matching scope retries return the existing pattern without changing its note or duplicating its audit record. The rule and <code>known_signal_create</code> audit event commit together; persistence failure returns 503 without claiming success. Existing matching patterns retain their original provenance.</p>
+<p>Preview defaults retain the actual source class. Omitting the per-detection baseline body, and bulk baseline requests, keep the existing class-specific behavior. The browser’s new reviewed form explicitly sends <code>"*"</code> when its frequency-only checkbox is selected. These patterns change future RF alerting only; detection scores and history remain intact.</p>
+
+<div class="endpoint" id="det-iq">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/detections/{detection_id}/iq</span>
+  <span class="role-badge role-sensor">SENSOR</span>
+</div>
+<div class="endpoint-body">
+<p>Upload IQ waveform capture (gzip-compressed float32). Max 100KB. Also: <code>GET /{detection_id}/iq</code> (VIEWER) to retrieve as JSON visualization or raw binary (<code>?format=raw</code>).</p>
+</div></div>
+
+<div class="endpoint" id="det-ws-feed">
+<div class="endpoint-header">
+  <span class="method method-ws">WS</span>
+  <span class="endpoint-path">/api/detections/ws/feed</span>
+  <span class="role-badge role-viewer">Auth Required</span>
+</div>
+<div class="endpoint-body"><p>Real-time detection event stream. Receives batch ingest notifications.</p></div></div>
+
+<div class="endpoint" id="det-ws-anomalies">
+<div class="endpoint-header">
+  <span class="method method-ws">WS</span>
+  <span class="endpoint-path">/api/detections/ws/anomalies</span>
+  <span class="role-badge role-viewer">Auth Required</span>
+</div>
+<div class="endpoint-body"><p>Real-time anomaly event stream. Receives IQ capture availability notifications.</p></div></div>
+
+<!-- ======== ALERTS ======== -->
+<h2 id="alerts">Alerts</h2>
+<p>Prefix: <code>/api/alerts</code></p>
+
+<div class="endpoint" id="alerts-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/alerts/</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>List alerts with optional filters.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>severity</code></td><td>"critical"|"warning"|"info"?</td><td>null</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>acknowledged</code></td><td>bool?</td><td>null</td></tr>
+<tr><td><code>limit</code></td><td>int (1-500)</td><td>100</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="alerts-create">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/alerts/rules</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Create a new alert rule.</p></div></div>
+
+<div class="endpoint" id="alerts-ack">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/alerts/{alert_id}/ack</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Acknowledge an alert. Also: <code>DELETE /rules/{rule_id}</code> (ADMIN master key) to delete a rule.</p></div></div>
+
+<div class="endpoint" id="alerts-history">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/alerts/history</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Full alert history with optional date range filter.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>start</code></td><td>ISO 8601 datetime?</td><td>null</td></tr>
+<tr><td><code>end</code></td><td>ISO 8601 datetime?</td><td>null</td></tr>
+<tr><td><code>limit</code></td><td>int (1-500)</td><td>200</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="alerts-ws">
+<div class="endpoint-header">
+  <span class="method method-ws">WS</span>
+  <span class="endpoint-path">/api/alerts/ws/alerts</span>
+  <span class="role-badge role-viewer">Auth Required</span>
+</div>
+<div class="endpoint-body"><p>Real-time alert stream.</p></div></div>
+
+<!-- ======== KEYS ======== -->
+<h2 id="keys">API Keys</h2>
+<p>Prefix: <code>/api/keys</code></p>
+
+<div class="endpoint" id="keys-create">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/keys/</span>
+  <span class="role-badge role-admin">ADMIN (master)</span>
+</div>
+<div class="endpoint-body">
+<p>Create a new API key. Returns the raw key <strong>once</strong>. Sensitive rate limit (10/min).</p>
+<h4>Request Body (KeyCreate)</h4>
+<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>key_id</code></td><td>string</td><td>Unique key identifier. The key is an ANALYST key, except an id starting with <code>node_</code>, <code>rtlsdr_</code>, <code>hackrf_</code>, <code>sensor_</code>, <code>edge_</code> or <code>sdr_</code>: that is a NODE key (the response's <code>role</code>)</td></tr>
+<tr><td><code>description</code></td><td>string</td><td>Human-readable description</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>Optional: bind to specific node</td></tr>
+<tr><td><code>expires_in_hours</code></td><td>number?</td><td>Optional lifetime in hours: finite and at most 10000000, else 422. Capped at <code>BRIDGE_MAX_KEY_LIFETIME_DAYS</code> (default 365); omitted, zero or negative gets that maximum.</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="keys-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/keys/</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List all keys with metadata. Raw keys and hashes are never returned. Each row's <code>expires_at</code> is the instant bridge auth applies (a stored value without a UTC offset is UTC), and <code>expired</code> is true when bridge auth rejects the key as expired: its <code>expires_at</code> has passed, or the stored value cannot be parsed (then <code>expires_at</code> is <code>null</code>, which alone would read as never expiring). A disabled or revoked key is not <code>expired</code>. <code>GET /api/admin/keys</code> lists the same flag next to the stored <code>expires_at</code>. The gateway reads a hand-edited <code>expires_at</code> with its own parser and can disagree: <code>2999-01-01T00:00</code> (no seconds), for example, is not expired here but is refused by the gateway's own routes.</p></div></div>
+
+<div class="endpoint" id="keys-revoke">
+<div class="endpoint-header">
+  <span class="method method-delete">DELETE</span>
+  <span class="endpoint-path">/api/keys/{key_id}</span>
+  <span class="role-badge role-admin">ADMIN (master)</span>
+</div>
+<div class="endpoint-body"><p>Revoke an API key permanently.</p></div></div>
+
+<div class="endpoint" id="keys-rotate">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/keys/{key_id}/rotate</span>
+  <span class="role-badge role-admin">ADMIN (master)</span>
+</div>
+<div class="endpoint-body"><p>Rotate an existing key. Returns the new raw key once. Sensitive rate limit.</p></div></div>
+
+<!-- ======== EXPORT ======== -->
+<h2 id="export">Export</h2>
+<p>Prefix: <code>/api/export</code>. All endpoints support <code>?format=json</code> (default) or <code>?format=csv</code>.</p>
+
+<table>
+<tr><th>Endpoint</th><th>Description</th></tr>
+<tr id="export-nodes"><td><code>GET /nodes</code></td><td>Export node data</td></tr>
+<tr><td><code>GET /training</code></td><td>Export training history</td></tr>
+<tr id="export-alerts"><td><code>GET /alerts</code></td><td>Export alert history (with optional date range)</td></tr>
+<tr id="export-detections"><td><code>GET /detections</code></td><td>Export detections (filter by hours, node, class, confidence, anomaly score; limit up to 50000)</td></tr>
+<tr><td><code>GET /anomalies</code></td><td>Export anomaly detections</td></tr>
+<tr><td><code>GET /wifi_networks</code></td><td>Export WiFi networks (aggregated by BSSID)</td></tr>
+<tr><td><code>GET /wifi_anomalies</code></td><td>Export WiFi anomalies</td></tr>
+<tr><td><code>GET /rf_anomalies</code></td><td>Export RF anomalies</td></tr>
+</table>
+
+<div class="endpoint" id="export-report">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/export/report</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Generate a compliance/incident report for a time range. Includes anomaly summary, top signals, operator actions, alert history, node status. Supports <code>?format=html</code> (default) or <code>?format=json</code>.</p>
+<table><tr><th>Param</th><th>Type</th><th>Required</th></tr>
+<tr><td><code>start</code></td><td>ISO 8601 datetime</td><td>Yes</td></tr>
+<tr><td><code>end</code></td><td>ISO 8601 datetime</td><td>Yes</td></tr>
+<tr><td><code>format</code></td><td>"html"|"json"</td><td>No (default: html)</td></tr>
+</table>
+</div></div>
+
+<!-- ======== WIFI ======== -->
+<h2 id="wifi">WiFi SIGINT</h2>
+<p>Prefix: <code>/api/wifi</code></p>
+
+<div class="endpoint" id="wifi-networks">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/wifi/networks</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>List discovered WiFi networks aggregated by BSSID. Also: <code>GET /networks/{bssid}</code> for detail with clients and signal history.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>band</code></td><td>"2.4GHz"|"5GHz"|"6GHz"?</td><td>null</td></tr>
+<tr><td><code>node_id</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>limit</code></td><td>int (1-500)</td><td>100</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="wifi-ingest">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/wifi/ingest</span>
+  <span class="role-badge role-sensor">SENSOR</span>
+</div>
+<div class="endpoint-body">
+<p>Batch ingest WiFi metadata from edge nodes. Sanitizes SSIDs, anonymizes client MACs, scores anomalies, auto-creates alerts for critical anomalies.</p>
+<h4>Request Body (WifiMetadataBatch)</h4>
+<table><tr><th>Field</th><th>Type</th></tr>
+<tr><td><code>node_id</code></td><td>string</td></tr>
+<tr><td><code>records</code></td><td>WifiMetadataRecord[]</td></tr>
+</table>
+</div></div>
+
+<div class="endpoint" id="wifi-anomalies">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/wifi/anomalies</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>WiFi anomalies above score threshold. Supports re-evaluation.</p>
+</div></div>
+
+<p>Additional WiFi endpoints:</p>
+<table>
+<tr><th>Method</th><th>Path</th><th>Role</th><th>Description</th></tr>
+<tr><td>GET</td><td>/clients</td><td>VIEWER</td><td>All observed WiFi client associations</td></tr>
+<tr id="wifi-channels"><td>GET</td><td>/channels</td><td>VIEWER</td><td>Channel utilization heatmap data</td></tr>
+<tr><td>GET</td><td>/timeline</td><td>VIEWER</td><td>Signal strength timeline</td></tr>
+<tr><td>GET</td><td>/stats</td><td>VIEWER</td><td>WiFi summary statistics</td></tr>
+<tr><td>PUT</td><td>/anomalies/{id}/dismiss</td><td>ANALYST</td><td>Dismiss single WiFi anomaly</td></tr>
+<tr><td>PUT</td><td>/anomalies/{id}/snooze</td><td>ANALYST</td><td>Snooze single WiFi anomaly</td></tr>
+<tr><td>PUT</td><td>/anomalies/bulk/dismiss</td><td>ANALYST</td><td>Bulk dismiss up to 100</td></tr>
+<tr><td>PUT</td><td>/anomalies/bulk/snooze</td><td>ANALYST</td><td>Bulk snooze with duration</td></tr>
+<tr><td>POST</td><td>/anomalies/bulk/escalate</td><td>ANALYST</td><td>Escalate up to 100 WiFi anomalies, none dismissed: one critical <code>wifi_anomaly_escalated</code> alert per request names them (same response as the RF endpoint)</td></tr>
+<tr><td>POST</td><td>/anomalies/bulk/reevaluate</td><td>ANALYST</td><td>Re-evaluate up to 50 anomalies</td></tr>
+<tr><td>POST</td><td>/anomalies/{id}/reevaluate</td><td>ANALYST</td><td>Re-evaluate single anomaly</td></tr>
+<tr><td>POST</td><td>/anomalies/bulk/reeval-dismiss</td><td>ANALYST</td><td>Re-evaluate all and dismiss resolved</td></tr>
+<tr><td>POST</td><td>/anomalies/{id}/pcap</td><td>ANALYST</td><td>Upload pcap capture (max 10MB)</td></tr>
+<tr><td>GET</td><td>/anomalies/{id}/pcap</td><td>VIEWER</td><td>Download raw pcap</td></tr>
+<tr><td>GET</td><td>/anomalies/{id}/pcap/summary</td><td>VIEWER</td><td>Parsed pcap frame summary</td></tr>
+</table>
+
+<div class="endpoint" id="wifi-ws">
+<div class="endpoint-header">
+  <span class="method method-ws">WS</span>
+  <span class="endpoint-path">/api/wifi/ws/wifi</span>
+  <span class="role-badge role-viewer">Auth Required</span>
+</div>
+<div class="endpoint-body"><p>Real-time WiFi event stream (ingest notifications, anomaly alerts).</p></div></div>
+
+<!-- ======== SIGNALS ======== -->
+<h2 id="signals">Signal Browser</h2>
+<p>Prefix: <code>/api/signals</code>. Browse the 40-class signal taxonomy and generate synthetic waveforms.</p>
+
+<div class="endpoint" id="sig-classes">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/signals/classes</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List all 40 signal classes with hierarchy (name, mod_type, family, super_family). Also: <code>GET /families</code> and <code>GET /super-families</code>.</p></div></div>
+
+<div class="endpoint" id="sig-generate">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/signals/generate</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Generate a synthetic waveform. Returns constellation, PSD, and DSP features.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>class</code></td><td>string</td><td>required</td></tr>
+<tr><td><code>snr</code></td><td>float (-20 to 40)</td><td>15.0</td></tr>
+<tr><td><code>n</code></td><td>int (64-32768)</td><td>4096</td></tr>
+</table>
+<p>Also: <code>GET /dsp-features</code> for DSP feature vector only.</p>
+</div></div>
+
+<div class="endpoint" id="sig-compare">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/signals/compare</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Side-by-side comparison of up to 6 signal classes. Request body: array of class name strings.</p></div></div>
+
+<!-- ======== ADMIN ======== -->
+<h2 id="admin">Admin Panel</h2>
+<p>Prefix: <code>/api/admin</code>. All admin endpoints require master key (ADMIN role) and use sensitive rate limiting (10/min).</p>
+
+<h3 id="admin-keys">Key Management</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td>/keys</td><td>List all API keys with metadata. <code>role</code> is the role the key authenticates with (a key with no stored role, or one that is not a role name, is <code>viewer</code>); <code>stored_role</code> is the value stored for it (<code>null</code> when none). <code>expires_at</code> is the value as stored, <code>effective_expires_at</code> the instant bridge auth applies (ISO 8601 with an offset; <code>null</code> when the key never expires or the stored value cannot be parsed) and <code>expired</code> bridge auth's verdict, as in <code>GET /api/keys/</code></td></tr>
+<tr><td>POST</td><td>/keys</td><td>Create new key (returns raw key once). Body: <code>description</code>, <code>role</code> (default <code>analyst</code>), <code>node_id</code>, <code>expires_days</code>: a whole number of days from 1 to 3650, capped at <code>BRIDGE_MAX_KEY_LIFETIME_DAYS</code> (default 365); omit it or send <code>null</code> for that default lifetime (every key created here expires). Zero, a negative number, more than 3650 or a non-integer is refused with 422 (never taken as the default)</td></tr>
+<tr><td>DELETE</td><td>/keys/{key_id}</td><td>Revoke key (cannot revoke master)</td></tr>
+<tr><td>PUT</td><td>/keys/{key_id}/permissions</td><td>Update key role and permissions</td></tr>
+</table>
+
+<h3 id="admin-nodes">Node Management</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td>/nodes</td><td>List nodes with status and capabilities</td></tr>
+<tr><td>DELETE</td><td>/nodes/{node_id}</td><td>Deregister a node (commands still queued for it are dropped)</td></tr>
+<tr><td>PUT</td><td>/nodes/{node_id}/config</td><td>Update node config (queued for next heartbeat, like a command below)</td></tr>
+<tr><td>POST</td><td>/nodes/{node_id}/command</td><td>Queue command for node (same body, allowlist and limits as <code>POST /api/nodes/{node_id}/command</code>: 404 for an unregistered node, 429 for a full queue; a command the node has not collected within 5 minutes is dropped)</td></tr>
+</table>
+
+<h3 id="admin-alerts">Alert Management</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td>/alerts</td><td>List all alert rules</td></tr>
+<tr><td>POST</td><td>/alerts</td><td>Create alert rule</td></tr>
+<tr><td>PUT</td><td>/alerts/{alert_id}</td><td>Update alert rule</td></tr>
+<tr><td>DELETE</td><td>/alerts/{alert_id}</td><td>Delete alert rule</td></tr>
+</table>
+
+<h3 id="admin-audit">Audit Log</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td>/audit</td><td>Paginated audit log with filtering (action, operator, node_id, target_id, search, date range)</td></tr>
+<tr><td>GET</td><td>/audit/actions</td><td>Distinct action types for filter dropdown</td></tr>
+<tr><td>GET</td><td>/audit/filters</td><td>Distinct values for all audit filter dropdowns</td></tr>
+</table>
+
+<h3 id="admin-logs">Log Viewer</h3>
+<div class="endpoint">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/logs</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Recent log entries from the in-memory ring buffer.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>limit</code></td><td>int (1-2000)</td><td>200</td></tr>
+<tr><td><code>level</code></td><td>DEBUG|INFO|WARNING|ERROR?</td><td>null</td></tr>
+<tr><td><code>logger</code></td><td>string?</td><td>null</td></tr>
+<tr><td><code>search</code></td><td>string?</td><td>null</td></tr>
+</table>
+</div></div>
+
+<h3 id="admin-protocols">Protocol Toggles</h3>
+
+<div class="endpoint">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/protocols</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Get protocol detection toggle state. Returns enabled/disabled status for each supported protocol scanner (WiFi, Bluetooth, Zigbee, ADS-B).</p></div></div>
+
+<div class="endpoint">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/admin/protocols</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Update protocol detection toggles. Body: map of protocol names to enabled booleans. A name the bridge does not list is ignored; any other value that is not <code>true</code> / <code>false</code> makes the request a 422 that changes nothing.</p></div></div>
+
+<h3 id="admin-scoring">Scoring Configuration</h3>
+
+<div class="endpoint" id="admin-scoring-eval">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/scoring/evaluation</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Scoring evaluation metrics. Returns current scorer performance: precision, recall, F1-score, calibration error, and per-band statistics.</p></div></div>
+
+<div class="endpoint" id="admin-scoring-thresholds">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/scoring/thresholds</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Current alert thresholds. Returns anomaly score thresholds per priority level (critical, high, medium, low) and per-band overrides.</p></div></div>
+
+<!-- ======== MAINTENANCE ======== -->
+<h2 id="maintenance">Maintenance</h2>
+<p>Prefix: <code>/api/admin</code></p>
+
+<div class="endpoint" id="maint-maintenance">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/admin/maintenance</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body">
+<p>Run a database maintenance task.</p>
+<h4>Supported Tasks</h4>
+<table>
+<tr><th>Task</th><th>Description</th></tr>
+<tr><td><code>purge_detections</code></td><td>Delete raw detections older than N days</td></tr>
+<tr><td><code>purge_rf_anomalies</code></td><td>Delete RF anomalies older than N days</td></tr>
+<tr><td><code>purge_wifi_anomalies</code></td><td>Delete WiFi anomalies older than N days</td></tr>
+<tr><td><code>purge_wifi_metadata</code></td><td>Delete WiFi metadata (N days * 24 hours)</td></tr>
+<tr><td><code>purge_wifi_hourly</code></td><td>Delete hourly WiFi summaries older than N days</td></tr>
+<tr><td><code>purge_audit_log</code></td><td>Refused (409): archive with <code>POST /api/admin/audit/archive</code>, then <code>DELETE /api/admin/audit?days=N</code></td></tr>
+<tr><td><code>purge_iq_captures</code></td><td>Delete IQ capture files older than N days</td></tr>
+<tr><td><code>purge_pcap_captures</code></td><td>Delete pcap files older than N days</td></tr>
+<tr><td><code>aggregate_wifi</code></td><td>Roll up wifi_metadata into hourly summaries</td></tr>
+<tr><td><code>aggregate_detections</code></td><td>Roll up raw detections into hourly aggregates</td></tr>
+<tr><td><code>reeval_dismiss_rf</code></td><td>Re-evaluate RF anomalies, dismiss resolved</td></tr>
+<tr><td><code>reeval_dismiss_wifi</code></td><td>Re-evaluate WiFi anomalies, dismiss resolved</td></tr>
+<tr><td><code>vacuum</code></td><td>Reclaim disk space (SQLite VACUUM)</td></tr>
+<tr><td><code>wal_checkpoint</code></td><td>Force WAL checkpoint</td></tr>
+<tr><td><code>optimize</code></td><td>Run PRAGMA optimize</td></tr>
+<tr><td><code>full_cleanup</code></td><td>All purges + vacuum</td></tr>
+<tr><td><code>purge_old_data</code></td><td>All purges using BRIDGE_RETENTION_DAYS (the audit log is left to the anchored archive)</td></tr>
+</table>
+<pre><code>curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"vacuum","retention_days":7}' \
+  https://bridge.example.com/api/admin/maintenance</code></pre>
+</div></div>
+
+<div class="endpoint" id="maint-backup">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/admin/backup</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Create a database backup using SQLite VACUUM INTO. Stored with timestamped name.</p></div></div>
+
+<div class="endpoint" id="maint-backups">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/backups</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>List available backups. Also: <code>GET /backups/{filename}</code> to download.</p></div></div>
+
+<div class="endpoint" id="maint-jobs">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/jobs</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Recent maintenance job activity with next scheduled cleanup time.</p></div></div>
+
+<!-- ======== SYSTEM CONFIG ======== -->
+<h2 id="system-config">System Configuration</h2>
+<p>Prefix: <code>/api/admin</code></p>
+
+<div class="endpoint" id="cfg-detection">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/detection-config</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Get/set detection thresholds, dimension weights, and auto-snooze config. PUT to update: send only the keys to change. <code>wifi_dimension_weights</code>, <code>rf_dimension_weights</code> and <code>protocol_detection</code> merge into the stored objects; every other key replaces its value.</p>
+<p>Every value is checked before anything is stored. Thresholds, scores and <code>rf_min_confidence_floor</code>: numbers from 0 to 1. Seen counts, <code>wifi_anomaly_cooldown_seconds</code> and <code>rf_min_learning_detections</code>: whole numbers from 0 to 1000000000; snooze hours: whole numbers from 0 to 87840. Weights: numbers from 0 to 1, at most 64 per object as stored, summing to at most 2.0 as stored. <code>protocol_detection</code>: <code>true</code> / <code>false</code> for protocols the bridge lists. <code>auto_rescan</code>: the <code>POST /api/admin/auto-rescan</code> body. <code>iq_capture_enabled</code>: <code>true</code> / <code>false</code>. Strings, booleans, <code>null</code>, NaN and infinities are not numbers, and a key the bridge does not know is refused unless it is sent with the value already stored, so the <code>config</code> a GET returns can be sent back as is. A refused value makes the request a 422 whose string <code>detail</code> names each problem, and nothing changes.</p></div></div>
+
+<div class="endpoint" id="cfg-config">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/config</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Current system configuration (sanitized, no secrets). Shows rate limits, retention policy, version.</p></div></div>
+
+<div class="endpoint" id="cfg-stats">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/stats</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Database statistics: per-table row counts (1h/24h/custom), DB size, WAL size, oldest/newest timestamps.</p></div></div>
+
+<div class="endpoint">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/admin/sessions</span>
+  <span class="role-badge role-admin">ADMIN</span>
+</div>
+<div class="endpoint-body"><p>Active sessions list with token prefix, key ID, creation, and expiration.</p></div></div>
+
+<h3 id="cfg-whitelist">WiFi AP Whitelist</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td>/wifi-whitelist</td><td>List whitelisted APs</td></tr>
+<tr><td>POST</td><td>/wifi-whitelist</td><td>Add BSSID to whitelist (validates MAC format)</td></tr>
+<tr><td>DELETE</td><td>/wifi-whitelist/{entry_id}</td><td>Remove from whitelist</td></tr>
+</table>
+
+<!-- ======== WEBHOOKS ======== -->
+<h2 id="webhooks">Webhooks</h2>
+<p>Prefix: <code>/api/admin</code>. SSRF protection blocks private/internal networks.</p>
+
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr id="wh-list"><td>GET</td><td>/webhooks</td><td>List webhooks and delivery log</td></tr>
+<tr id="wh-create"><td>POST</td><td>/webhooks</td><td>Create webhook (URL validated, SSRF-protected)</td></tr>
+<tr><td>PUT</td><td>/webhooks/{id}</td><td>Update webhook (url, name, enabled, severity_filter)</td></tr>
+<tr><td>DELETE</td><td>/webhooks/{id}</td><td>Delete webhook</td></tr>
+<tr id="wh-test"><td>POST</td><td>/webhooks/{id}/test</td><td>Send test notification</td></tr>
+<tr><td>GET</td><td>/webhooks/retry-queue</td><td>View retry queue</td></tr>
+</table>
+
+<!-- ======== SPECTRUM ======== -->
+<h2 id="spectrum">Spectrum Analysis</h2>
+<p>Prefix: <code>/api/spectrum</code>. Live spectrum viewer (rtl_tcp proxy), frequency-band occupancy analysis, waterfall time-frequency data, pre-defined band summaries, and spectrum activity timeline.</p>
+
+<h3>Live Spectrum Viewer</h3>
+<p>The Bridge acts as a proxy to rtl_tcp on registered nodes. The browser selects a node from a dropdown, the server connects to rtl_tcp, runs FFT server-side, and streams results to the browser via WebSocket.</p>
+
+<div class="endpoint" id="spectrum-nodes">
+<div class="endpoint-header">
+  <span class="method get">GET</span>
+  <span class="endpoint-path">/api/spectrum/nodes</span>
+  <span class="role-badge viewer">VIEWER</span>
+</div>
+<p>List registered nodes available for spectrum viewing. Returns node_id, host, status, hardware, and rtl_tcp_port for populating the node dropdown.</p>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/nodes"</code></pre>
+</div>
+
+<div class="endpoint" id="spectrum-connect">
+<div class="endpoint-header">
+  <span class="method post">POST</span>
+  <span class="endpoint-path">/api/spectrum/connect</span>
+  <span class="role-badge analyst">ANALYST</span>
+</div>
+<p>Connect to rtl_tcp on a registered node and start FFT streaming. The server acts as a proxy &mdash; the browser does not connect directly to the device.</p>
+<p><strong>Request body:</strong> <code>{ "node_id": string, "center_freq_hz": float, "gain_db": float, "sample_rate_hz": float }</code></p>
+<p><strong>Response:</strong> <code>{ "connected": true, "node_id": "...", "host": "...", "port": 1234 }</code></p>
+<pre><code>curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"node_id":"node-01","center_freq_hz":433920000,"gain_db":40,"sample_rate_hz":2048000}' \
+  "https://bridge/api/spectrum/connect"</code></pre>
+</div>
+
+<div class="endpoint" id="spectrum-disconnect">
+<div class="endpoint-header">
+  <span class="method get">GET</span>
+  <span class="endpoint-path">/api/spectrum/disconnect</span>
+  <span class="role-badge analyst">ANALYST</span>
+</div>
+<p>Disconnect from rtl_tcp and stop streaming.</p>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/disconnect"</code></pre>
+</div>
+
+<div class="endpoint" id="spectrum-config">
+<div class="endpoint-header">
+  <span class="method get">GET</span>
+  <span class="endpoint-path">/api/spectrum/config</span>
+  <span class="role-badge viewer">VIEWER</span>
+</div>
+<p>Return current spectrum streamer configuration and connection status. Includes center_freq_hz, sample_rate_hz, gain_db, fft_size, connected_since, and frames_sent.</p>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/config"</code></pre>
+</div>
+
+<div class="endpoint" id="spectrum-ws">
+<div class="endpoint-header">
+  <span class="method get">WS</span>
+  <span class="endpoint-path">/api/spectrum/ws/spectrum</span>
+  <span class="role-badge viewer">VIEWER</span>
+</div>
+<p>WebSocket endpoint for live FFT spectrum data. Authenticated via <code>Sec-WebSocket-Protocol</code> header. Each frame contains <code>magnitudes_db</code> (array of float dB values), <code>signals</code> (identified known signals in range), and frequency metadata (f0, f1, fc, bw).</p>
+</div>
+
+<div class="endpoint" id="spectrum-occupancy">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/spectrum/occupancy</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Frequency band occupancy over a time window. Each bin includes occupancy percentage, average/peak power, signal count, and dominant signal class.</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>24</td><td>Time window (1-168)</td></tr>
+<tr><td><code>bin_width_hz</code></td><td>int</td><td>1000000</td><td>Frequency bin width (10kHz - 100MHz)</td></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>null</td><td>Filter by node</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/occupancy?hours=24&bin_width_hz=1000000"</code></pre>
+</div></div>
+
+<div class="endpoint" id="spectrum-waterfall">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/spectrum/waterfall</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Time-frequency data for waterfall display. Returns time bins, frequency bins, a power matrix, and a signal class matrix suitable for canvas rendering.</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>1</td><td>Time window (1-48)</td></tr>
+<tr><td><code>freq_min_hz</code></td><td>float</td><td>null</td><td>Minimum frequency filter</td></tr>
+<tr><td><code>freq_max_hz</code></td><td>float</td><td>null</td><td>Maximum frequency filter</td></tr>
+<tr><td><code>time_resolution_sec</code></td><td>int</td><td>60</td><td>Time bin size (10-3600 seconds)</td></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>null</td><td>Filter by node</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/waterfall?hours=2&time_resolution_sec=120"</code></pre>
+</div></div>
+
+<div class="endpoint" id="spectrum-bands">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/spectrum/bands</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Occupancy stats per known frequency band (ISM, amateur, cellular, broadcast, and other pre-defined allocations).</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>24</td><td>Time window (1-168)</td></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>null</td><td>Filter by node</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/bands?hours=24"</code></pre>
+</div></div>
+
+<div class="endpoint" id="spectrum-activity">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/spectrum/activity</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Recent spectrum activity as individual detections. Suitable for scatter-plot visualization (time vs frequency, dot size proportional to power).</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>4</td><td>Time window (1-48)</td></tr>
+<tr><td><code>node_id</code></td><td>string</td><td>null</td><td>Filter by node</td></tr>
+<tr><td><code>limit</code></td><td>int</td><td>500</td><td>Max results (1-5000)</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/spectrum/activity?hours=4&limit=500"</code></pre>
+</div></div>
+
+<!-- ======== GEOLOCATION ======== -->
+<h2 id="geo">Geolocation &amp; Mapping</h2>
+<p>Prefix: <code>/api/geo</code>. Geographic map data, detection heatmaps, coverage estimates, and geospatial activity feeds for nodes with location data.</p>
+
+<div class="endpoint" id="geo-map">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/geo/map</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>All nodes with geographic locations and recent detection summaries. Each entry includes detection count (last 1h), top 5 signal classes, anomaly count, and node status.</p>
+<p>Response: array of <code>GeoNodeSummary</code> objects.</p>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/geo/map"
+
+# Response:
+[{
+  "node_id": "node-01",
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "location_name": "Building A",
+  "status": "online",
+  "detection_count_1h": 42,
+  "top_signals": ["fm_broadcast", "wifi", "bluetooth"],
+  "anomaly_count_1h": 3
+}]</code></pre>
+</div></div>
+
+<div class="endpoint" id="geo-heatmap">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/geo/heatmap</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Detection density heatmap data. Returns lat/lon/weight points for nodes with location data. Suitable for Leaflet or similar heatmap layer rendering.</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>24</td><td>Time window (1-168)</td></tr>
+<tr><td><code>signal_class</code></td><td>string</td><td>null</td><td>Filter by signal class</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/geo/heatmap?hours=24&signal_class=bluetooth"</code></pre>
+</div></div>
+
+<div class="endpoint" id="geo-coverage">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/geo/coverage</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Estimated coverage area per node. Each entry includes latitude, longitude, estimated coverage radius (default 1.0 km for RTL-SDR receivers), detected signal classes, and average SNR.</p>
+<p>Response: array of <code>GeoCoverageArea</code> objects.</p>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/geo/coverage"</code></pre>
+</div></div>
+
+<div class="endpoint" id="geo-activity">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/geo/activity</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body">
+<p>Geospatial activity feed -- recent detections enriched with location data. Useful for mapping individual detection events onto a geographic view. Returns max 200 results.</p>
+<table>
+<tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>hours</code></td><td>int</td><td>4</td><td>Time window (1-48)</td></tr>
+<tr><td><code>min_anomaly_score</code></td><td>float</td><td>null</td><td>Filter by minimum anomaly score (0.0-1.0)</td></tr>
+</table>
+<pre><code>curl -H "X-API-Key: $KEY" "https://bridge/api/geo/activity?hours=4&min_anomaly_score=0.5"</code></pre>
+</div></div>
+
+<div class="endpoint" id="geo-detection-estimates">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/geolocation/estimates/detection/{id}</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Geolocation estimates for a specific detection. Returns position estimates computed from TDOA or multilateration, including lat/lon, accuracy radius, and contributing nodes.</p></div></div>
+
+<!-- ======== TRAINING ======== -->
+<h2 id="crypto">Crypto Key Management</h2>
+<p>Prefix: <code>/api/crypto</code> &mdash; Protocol key management for decryption (Meshtastic AES, DMR, P25).</p>
+
+<div class="endpoint" id="crypto-list">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/crypto/keys</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>List stored keys (metadata only &mdash; key material is NEVER returned). Fields: <code>key_id, protocol, algorithm, label, source, key_len, created_at</code>.</p></div></div>
+
+<div class="endpoint" id="crypto-import">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/crypto/keys</span><span class="role-badge role-admin">ADMIN</span></div>
+<div class="endpoint-body"><p>Import a key. Body: <code>{protocol, key_name, raw_key_hex, algorithm}</code>. Returns 201 with <code>{key_id}</code>.</p></div></div>
+
+<div class="endpoint" id="crypto-decrypt">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/crypto/decrypt</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Manual decrypt. Body: <code>{payload_hex, protocol, key_id?, packet_id?, source_node?}</code>. Returns <code>{success, plaintext_hex, algorithm, key_id, confidence}</code>.</p></div></div>
+
+<h2 id="threats">Threat Signatures</h2>
+<p>Prefix: <code>/api/signatures/threats</code> &mdash; TSCM threat signature library (64 curated signatures across 12 categories).</p>
+
+<div class="endpoint" id="threats-list">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/signatures/threats/list</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>List threat signatures. Query params: <code>threat_category</code>, <code>threat_level</code>. Categories: covert_mic, video_tx, body_worn_tx, gps_tracker, jammer, remote_control, imsi_catcher, drone_surveillance, data_exfil, surveillance_infra, counter_surveillance, unknown_threat.</p></div></div>
+
+<div class="endpoint" id="threats-match">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/signatures/threats/match</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>Match signal parameters against threat library. Body: <code>{freq_hz, signal_class, power_dbm, bandwidth_hz}</code>. Returns <code>{matched, count, matches[]}</code> with per-signature <code>match_score</code>.</p></div></div>
+
+<div class="endpoint" id="threats-seed">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/signatures/threats/seed</span><span class="role-badge role-admin">ADMIN</span></div>
+<div class="endpoint-body"><p>Populate library with 64 curated TSCM threat signatures. Idempotent. Returns <code>{seeded: count}</code>.</p></div></div>
+
+<h2 id="incidents">Incident Management</h2>
+<p>Prefix: <code>/api/incidents</code> &mdash; TSCM incident lifecycle (open &rarr; investigating &rarr; escalated &rarr; resolved &rarr; closed).</p>
+
+<div class="endpoint" id="incidents-list">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/incidents/</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>List incidents. Query params: <code>status</code>, <code>severity</code>, <code>assigned_to</code>, <code>limit</code>, <code>offset</code>. Returns <code>{incidents[], count, total}</code>.</p></div></div>
+
+<div class="endpoint" id="incidents-create">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/incidents/</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Create incident. Body: <code>{title, severity, description, node_id, freq_hz, signal_class, anomaly_score}</code>.</p></div></div>
+
+<div class="endpoint" id="incidents-metrics">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/incidents/metrics</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>SLA metrics: MTTA (mean time to acknowledge), MTTR (mean time to resolve), counts by status/severity.</p></div></div>
+
+<div class="endpoint" id="incidents-assign">
+<div class="endpoint-header"><span class="method method-put">PUT</span><span class="endpoint-path">/api/incidents/{id}/assign</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Assign to operator. Body: <code>{assigned_to}</code>.</p></div></div>
+
+<div class="endpoint" id="incidents-status">
+<div class="endpoint-header"><span class="method method-put">PUT</span><span class="endpoint-path">/api/incidents/{id}/status</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Update status. Body: <code>{status, note?}</code>. Valid: open, investigating, escalated, resolved, closed.</p></div></div>
+
+<div class="endpoint" id="incidents-resolve">
+<div class="endpoint-header"><span class="method method-put">PUT</span><span class="endpoint-path">/api/incidents/{id}/resolve</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Resolve with classification. Body: <code>{resolution, resolution_note?}</code>. Types: confirmed_threat, false_alarm, inconclusive, known_device, benign.</p></div></div>
+
+<div class="endpoint" id="incidents-timeline">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/incidents/{id}/timeline</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>Chronological event timeline for an incident (status changes, notes, evidence, linked detections).</p></div></div>
+
+<div class="endpoint" id="incidents-detections">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/incidents/{id}/detections</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List RF detections linked to this incident. Returns detection records with signal class, frequency, anomaly score, and timestamp.</p></div></div>
+
+<div class="endpoint" id="incidents-link-detection">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/incidents/{id}/detections</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Link a detection to this incident. Body: <code>{detection_id}</code>. Returns 201 on success.</p></div></div>
+
+<h2 id="fingerprinting">Device Fingerprinting</h2>
+<p>Prefix: <code>/api/wifi</code> &mdash; Device identity tracking across MAC randomization.</p>
+
+<div class="endpoint" id="fp-clusters">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/wifi/device-clusters</span><span class="role-badge role-viewer">VIEWER</span></div>
+<div class="endpoint-body"><p>List device identity clusters. Each cluster = one physical device with multiple observed MACs. Query params: <code>min_confidence</code>, <code>min_observations</code>, <code>since</code>.</p></div></div>
+
+<div class="endpoint" id="fp-identify">
+<div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/wifi/identify</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Identify device by IE fingerprint. Body: <code>{ie_fingerprint}</code>. Returns matching cluster(s).</p></div></div>
+
+<div class="endpoint" id="fp-cluster-timeline">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/wifi/device-clusters/{id}/timeline</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Chronological appearances for a device cluster. Returns timestamped observations with MAC address, BSSID, signal strength, and node ID.</p></div></div>
+
+<!-- ======== AIRCRAFT ======== -->
+<h2 id="aircraft">Aircraft Tracking</h2>
+<p>Prefix: <code>/api/aircraft</code> &mdash; ADS-B aircraft tracking and trail history.</p>
+
+<div class="endpoint" id="aircraft-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/aircraft/</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List tracked aircraft. Returns current position, altitude, heading, speed, and callsign for each tracked ICAO address.</p>
+<table><tr><th>Param</th><th>Type</th><th>Default</th></tr>
+<tr><td><code>max_age</code></td><td>int (seconds)</td><td>300</td></tr>
+</table></div></div>
+
+<div class="endpoint" id="aircraft-ingest">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/aircraft/</span>
+  <span class="role-badge role-sensor">SENSOR</span>
+</div>
+<div class="endpoint-body"><p>Ingest aircraft observation batch from ADS-B receiver. Body: array of aircraft position reports with ICAO address, lat/lon, altitude, heading, speed, callsign.</p></div></div>
+
+<div class="endpoint" id="aircraft-stats">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/aircraft/stats</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Aircraft tracking statistics: total tracked, currently active, unique ICAO addresses, average altitude, busiest time periods.</p></div></div>
+
+<div class="endpoint" id="aircraft-trail">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/aircraft/{icao}/trail</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Flight trail for a specific ICAO address. Returns chronological position reports with lat/lon, altitude, heading, speed, and timestamp.</p></div></div>
+
+<!-- ======== SWEEPS ======== -->
+<h2 id="sweeps">TSCM Sweeps</h2>
+<p>Prefix: <code>/api/sweeps</code> &mdash; TSCM sweep session management with zone tracking, detection linking, and reporting.</p>
+
+<div class="endpoint" id="sweeps-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/sweeps/</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List sweep sessions with status, phase, zone count, and detection count.</p></div></div>
+
+<div class="endpoint" id="sweeps-create">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/sweeps/</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Create a new sweep session. Body: <code>{name, location, operator, notes?}</code>. Returns 201 with sweep ID.</p></div></div>
+
+<div class="endpoint" id="sweeps-detail">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/sweeps/{id}</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Sweep session detail with full zone list, linked detections, linked incidents, and phase history.</p></div></div>
+
+<div class="endpoint" id="sweeps-phase">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/sweeps/{id}/phase</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Advance sweep phase. Valid transitions: pre_assessment &rarr; active &rarr; analysis &rarr; reporting &rarr; closed. Body: <code>{phase}</code>.</p></div></div>
+
+<div class="endpoint" id="sweeps-zones-list">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/sweeps/{id}/zones</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List zones for a sweep session. Each zone has a name, status (pending/clear/flagged), and optional notes.</p></div></div>
+
+<div class="endpoint" id="sweeps-zones-create">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/sweeps/{id}/zones</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Create a zone within a sweep. Body: <code>{name, notes?}</code>. Returns 201 with zone ID.</p></div></div>
+
+<div class="endpoint" id="sweeps-zone-status">
+<div class="endpoint-header">
+  <span class="method method-put">PUT</span>
+  <span class="endpoint-path">/api/sweeps/{id}/zones/{zone_id}/status</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Update zone status. Body: <code>{status}</code>. Valid values: <code>clear</code>, <code>flagged</code>.</p></div></div>
+
+<div class="endpoint" id="sweeps-link-detection">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/sweeps/{id}/detections</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Link a detection to this sweep session. Body: <code>{detection_id}</code>.</p></div></div>
+
+<div class="endpoint" id="sweeps-link-incident">
+<div class="endpoint-header">
+  <span class="method method-post">POST</span>
+  <span class="endpoint-path">/api/sweeps/{id}/incidents</span>
+  <span class="role-badge role-analyst">ANALYST</span>
+</div>
+<div class="endpoint-body"><p>Link an incident to this sweep session. Body: <code>{incident_id}</code>.</p></div></div>
+
+<div class="endpoint" id="sweeps-summary">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/sweeps/{id}/summary</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Aggregated sweep summary: zone counts by status, detection count, incident count, phase, duration.</p></div></div>
+
+<div class="endpoint" id="sweeps-report">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/sweeps/{id}/report</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Generate HTML sweep report. Self-contained document with zone results, linked detections, incidents, and operator notes.</p></div></div>
+
+<h2 id="training">Training</h2>
+<p>Prefix: <code>/api/training</code></p>
+
+<div class="endpoint" id="train-runs">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/training/runs</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>List all training runs with metadata (epochs, GPU, status, best accuracy).</p></div></div>
+
+<div class="endpoint" id="train-metrics">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/training/runs/{dir}/{name}/metrics</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Parsed epoch metrics (train/val loss, accuracy, learning rate, time). Also: <code>GET .../log</code> for raw log tail.</p></div></div>
+
+<div class="endpoint" id="train-health">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/training/health</span>
+  <span class="role-badge role-viewer">VIEWER</span>
+</div>
+<div class="endpoint-body"><p>Training health check. Auto-detects stalled/failed/completed runs and logs state transitions.</p></div></div>
+
+<p>Additional training endpoints:</p>
+<table>
+<tr><th>Method</th><th>Path</th><th>Role</th><th>Description</th></tr>
+<tr><td>GET</td><td>/operations</td><td>VIEWER</td><td>Training operation audit entries</td></tr>
+<tr><td>POST</td><td>/runs/{dir}/{name}/start</td><td>ADMIN</td><td>Log training start event</td></tr>
+<tr><td>POST</td><td>/runs/{dir}/{name}/stop</td><td>ADMIN</td><td>Log training stop event</td></tr>
+<tr><td>POST</td><td>/runs/{dir}/{name}/resume</td><td>ADMIN</td><td>Log training resume event</td></tr>
+</table>
+
+<hr style="margin:40px 0;border-color:var(--border);">
+<p style="color:var(--text-secondary);font-size:12px;">Generated for The Bridge v4.0.0 &mdash; API Version 1 &mdash; <a href="deployment_guide.html">Deployment Guide</a> &middot; <a href="operations_guide.html">Operations Guide</a></p>
+
+</main>
+</div>
+</body>
+</html>

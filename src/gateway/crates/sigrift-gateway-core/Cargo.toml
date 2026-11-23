@@ -1,0 +1,58 @@
+[package]
+name = "sigrift-gateway-core"
+version = "0.1.0"
+edition = "2021"
+description = "SigRift gateway core library — auth, proxy, ingest, audit, and middleware shared across community and enterprise binaries."
+license = "MIT"
+rust-version = "1.80"
+
+[lib]
+name = "sigrift_gateway_core"
+path = "src/lib.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+r2d2 = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
+tower-http = { version = "0.7", features = ["cors", "compression-gzip", "limit"] }
+tower = { version = "0.5", features = ["util", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+data-encoding = "2"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.13"
+constant_time_eq = "0.5"
+clap = { version = "4", features = ["derive", "env"] }
+rand = "0.10"
+futures-util = "0.3"
+tokio-stream = "0.1"
+bytes = "1"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls", "stream"] }
+axum-extra = { version = "0.12", features = ["typed-header", "cookie"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+x509-parser = "0.18"
+
+[dev-dependencies]
+tempfile = "3"
+# Paused-clock tests (`#[tokio::test(start_paused = true)]`) need test-util.
+tokio = { version = "1", features = ["test-util"] }
+tokio-test = "0.4"
+rcgen = "0.14"
+# The audit page snapshot test writes from another connection between two
+# reads, from an authorizer callback (`hooks`).
+rusqlite = { version = "0.41", features = ["hooks"] }

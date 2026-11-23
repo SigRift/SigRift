@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "src/gateway/crates/sigrift-gateway-core",
+    "src/gateway/crates/sigrift-gateway",
+]
+
+# Gateway workspace (community edition):
+#   - sigrift-gateway-core  = shared library. The commercial edition pins a
+#                             tag of this crate and layers its own resolver
+#                             and feature-routes table on top.
+#   - sigrift-gateway       = community binary. Injects NullLicenseResolver
+#                             and FeatureRoutes::EMPTY — grants every
+#                             feature at community tier with no licence
+#                             verification, no crypto keys, no tier gating.
+
+# Tests hash many passwords with the production PBKDF2 cost (600,000
+# rounds, as the bridge does). Unoptimized, that hashing is most of a test
+# run, and on CI runners it pushed the gateway job past its time limit.
+# Test builds get light optimization (PBKDF2 and HMAC are generic, so their
+# loops compile in the calling crate) and the hashing crates full
+# optimization. Debug assertions and overflow checks stay on; the release
+# profile is unchanged.
+[profile.test]
+opt-level = 1
+
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+[profile.dev.package.block-buffer]
+opt-level = 3

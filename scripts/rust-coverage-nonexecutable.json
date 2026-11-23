@@ -1,0 +1,57 @@
+{
+  "description": "Explicitly reviewed nonexecutable Rust files omitted by LLVM. These files contain only module/import/type declarations, cfg attributes and comments. Review confirmed no function bodies, macro invocations, derives, or const/static initializers. Every byte is hash-pinned: any edit requires reviewing and updating this inventory. Executable and platform-specific sources must never be added here merely to pass coverage.",
+  "files": {
+    "src/gateway/crates/sigrift-gateway-core/src/analysis/mod.rs": {
+      "sha256": "1b1b91dd87ead81c89866540d54be661287ac5b8b1c34f3dd5850ea6619199b1",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/audit/mod.rs": {
+      "sha256": "d967227c981fa0764a29521ac27edcf6198c37605d9ab04f127e35cd5d7cbd02",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/auth/mod.rs": {
+      "sha256": "7e6b2fa7f56965c5a99b05fd75c8f25e77c1b252ff386b5a7cb8bfd0ad0d4b1b",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/db/mod.rs": {
+      "sha256": "e25778f8bd9fbb56b300542ef1efce119a2c7baa3640afa870803f19473a7328",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/ingest/mod.rs": {
+      "sha256": "5cf09fce777bf4f92bfabe0ef7b64843008aece04f7e1b5df685a83f2092e122",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/lib.rs": {
+      "sha256": "63711a240216c599e97626fe6eaab8c31367c22b16c172cbc97995a5e03e3989",
+      "reason": "Module/import declarations and AppState struct fields only; no executable body."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/middleware/mod.rs": {
+      "sha256": "32e352bb274e02b28ac2a9e35d8251ce000329b980185797dc1d02f5ef317d71",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/models/mod.rs": {
+      "sha256": "3d33f9cf891f041cba3e56dd1170a70e64dbd83ea2d3e89059dfcefd1b06f507",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/proxy/mod.rs": {
+      "sha256": "b76cbba920800e49214ffb4a8be4e1e47749d55344219c755454bdfff37aab32",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/query/mod.rs": {
+      "sha256": "380a3343bbfdfc63dec1db300c892118b2deb08421a600faa1b4a868c6c3e3d6",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/scoring/mod.rs": {
+      "sha256": "02351ba83eb3d1aee96ca4d3e869b3b3f1415f26fa7523de8bacc11d8369f3e9",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/storage/mod.rs": {
+      "sha256": "2c95ee0c03c733b1c90657063e5f60382511502f4c911fda960568e607580c0f",
+      "reason": "Module declarations and comments only."
+    },
+    "src/gateway/crates/sigrift-gateway-core/src/ws/mod.rs": {
+      "sha256": "24b5a2911abd0f192d546433938b752992aabf17dd7cb740a1fa82a2b620387d",
+      "reason": "Module declarations and comments only."
+    }
+  }
+}

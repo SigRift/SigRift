@@ -1,0 +1,3 @@
+# Torch CPU wheel, from the PyTorch index only. Edit, then run
+# scripts/lock-requirements.sh (writes requirements-torch-cpu.txt).
+torch==2.13.0+cpu

@@ -1,0 +1,30 @@
+[Unit]
+Description=Zigbee Scanner Edge Service (SONOFF ZBDongle-E)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/rf-edge
+# zigbee_scanner takes MLRF_BRIDGE_URL, MLRF_BRIDGE_KEY, MLRF_NODE_ID and
+# MLRF_CA_BUNDLE from the environment. Never pass the API key as
+# --api-key: a process's argv is readable by every local user (ps,
+# /proc/<pid>/cmdline). The env file is root:root 0600 (systemd reads it
+# before dropping privileges); a value set there overrides the default below.
+Environment=MLRF_CA_BUNDLE=/home/pi/mlrf-agent/ca.pem
+EnvironmentFile=/etc/sigrift-edge/edge.env
+ExecStart=/usr/bin/python3 /opt/rf-edge/bin/zigbee_scanner.py
+Restart=always
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+# Needs only the serial dongle (pi is in the dialout group): no capabilities.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

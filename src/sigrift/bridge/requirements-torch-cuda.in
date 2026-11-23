@@ -1,0 +1,4 @@
+# Torch CUDA build (docker build --build-arg ACCEL=cuda, linux/amd64 only),
+# from PyPI with its nvidia-* runtime packages. Edit, then run
+# scripts/lock-requirements.sh (writes requirements-torch-cuda.txt).
+torch==2.13.0

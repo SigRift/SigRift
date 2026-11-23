@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/SigRift/SigRift/security/advisories/new
+    about: Please report suspected vulnerabilities privately via GitHub private vulnerability reporting, not as a public issue. See SECURITY.md for details.
+  - name: General question, discussion or commercial enquiry
+    url: https://github.com/SigRift/SigRift/discussions
+    about: For questions, ideas, general discussion or enquiries about the commercial edition, please use GitHub Discussions instead of an issue.

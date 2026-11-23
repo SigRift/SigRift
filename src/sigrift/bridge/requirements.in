@@ -1,0 +1,59 @@
+# The Bridge — runtime dependencies (the ones the code imports directly).
+#
+# This is the file to edit. requirements.txt is generated from it — every
+# package pinned with sha256 hashes — by scripts/lock-requirements.sh,
+# which also regenerates requirements-test.txt and the torch locks. Install
+# from the locks, never from this file:
+#
+#   pip install --require-hashes -r src/sigrift/bridge/requirements.txt
+#   pip install --require-hashes --no-deps \
+#       -r src/sigrift/bridge/requirements-torch-cpu.txt
+#
+# Everything here comes from PyPI only. Torch is NOT listed: the CPU wheel
+# lives on the PyTorch index, and mixing two indexes in one install lets
+# pip take a same-named package from either (the dependency-confusion
+# shape). It is installed in a separate step, from that index only, with
+# --no-deps (requirements-torch-cpu.txt) — which is why torch's own
+# runtime dependencies are listed at the end of this file.
+#
+# Keep Python 3.11 support (the images run python:3.11-slim).
+
+fastapi==0.136.3
+uvicorn==0.40.0
+# WebSocket protocol implementation for uvicorn — without this, the
+# dashboard's /api/*/ws/* endpoints return 404 with "Unsupported upgrade
+# request" because uvicorn ships without a WS handler unless installed
+# via [standard] extras or paired with websockets/wsproto explicitly.
+websockets==16.0
+starlette==1.3.1
+pydantic==2.12.5
+jinja2>=3.1.6
+python-multipart==0.0.32
+httpx==0.28.1
+
+# Security / auth
+cryptography>=49.0.0
+
+# System metrics
+psutil==7.2.2
+
+# Config loading (YAML)
+pyyaml>=6.0.3
+
+# Scientific stack — used by bridge DSP modules, anomaly scoring,
+# and IQ / signal-testing routers. Torch does not declare numpy as a
+# requirement, so we pin it explicitly.
+numpy>=1.26,<3
+# scipy 1.18 drops Python 3.11.
+scipy>=1.17.1,<1.18
+scikit-learn>=1.3
+
+# Runtime dependencies of torch 2.13 (see the header: torch itself is
+# installed with --no-deps from the PyTorch CPU index). Keep in step with
+# `Requires-Dist` of the torch version in requirements-torch-cpu.txt.
+filelock
+fsspec>=0.8.5
+networkx>=2.5.1
+setuptools>=84.1.0
+sympy>=1.13.3
+typing-extensions>=4.10.0

@@ -1,0 +1,17 @@
+{
+  "profile": "suburban-residential",
+  "seed": 41002,
+  "version": 1,
+  "variance_widening": 1.5,
+  "rx_power_offset_db": -45,
+  "diurnal": "evening_peak",
+  "description": "Moderate-density neighborhood: broadcast FM, NOAA weather, smart-home ISM devices, home WiFi. Fully synthetic; no site data.",
+  "bands": [
+    {"name": "fm_broadcast", "freq_start_hz": 88500000, "freq_step_hz": 400000, "slots": 8, "detections_per_slot": [350, 650], "classes": {"fm": 1.0}, "snr_db": [12, 34]},
+    {"name": "noaa_wx", "freq_start_hz": 162400000, "freq_step_hz": 25000, "slots": 3, "detections_per_slot": [320, 480], "classes": {"fm": 1.0}, "snr_db": [14, 30]},
+    {"name": "ism_433", "freq_start_hz": 433050000, "freq_step_hz": 100000, "slots": 10, "detections_per_slot": [350, 650], "classes": {"ook": 0.55, "2fsk": 0.3, "4fsk": 0.15}, "snr_db": [6, 22]},
+    {"name": "ism_915", "freq_start_hz": 902000000, "freq_step_hz": 500000, "slots": 6, "detections_per_slot": [330, 550], "classes": {"lora-css": 0.4, "2gfsk": 0.35, "ook": 0.25}, "snr_db": [6, 20]},
+    {"name": "wifi_2g4", "freq_start_hz": 2412000000, "freq_step_hz": 5000000, "slots": 8, "detections_per_slot": [350, 700], "classes": {"ofdm-64": 0.6, "ofdm-256": 0.4}, "snr_db": [8, 26]}
+  ],
+  "detection_config": {"rf_anomaly_insert_threshold": 0.32}
+}

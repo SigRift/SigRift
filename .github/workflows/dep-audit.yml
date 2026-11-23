@@ -1,0 +1,84 @@
+name: Dependency Audit
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked JavaScript measurement dependencies
+        run: npm ci --prefix tests/bridge/js --ignore-scripts
+      - name: Audit all JavaScript measurement dependencies
+        run: npm audit --prefix tests/bridge/js --audit-level=low
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with: { python-version: '3.11' }
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip-audit
+      - name: Audit bridge requirements
+        # The hashed runtime lock (what the image installs), exactly as
+        # pinned: --disable-pip audits the listed versions without
+        # resolving anything again. Non-zero exit on any known
+        # vulnerability. Add `--ignore-vuln GHSA-xxxx` with a tracking
+        # comment if a finding must be temporarily accepted.
+        run: |
+          pip-audit --disable-pip --require-hashes --strict \
+            --requirement src/sigrift/bridge/requirements.txt
+      - name: Audit torch
+        # The CPU wheel's version (2.13.0+cpu) has a local suffix PyPI does
+        # not know, so audit the upstream release it was built from.
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^torch==\([0-9][0-9.]*\)+cpu.*/\1/p' \
+            src/sigrift/bridge/requirements-torch-cpu.txt)
+          [ -n "$version" ] || { echo "::error::no torch pin in requirements-torch-cpu.txt"; exit 1; }
+          printf 'torch==%s\n' "$version" > "${RUNNER_TEMP}/torch-audit.txt"
+          pip-audit --disable-pip --no-deps --strict \
+            --requirement "${RUNNER_TEMP}/torch-audit.txt"
+
+      - name: Audit CUDA dependencies
+        # This optional image has a separate hashed dependency set. Audit it
+        # without installing GPU packages or requiring GPU hardware.
+        run: |
+          pip-audit --disable-pip --require-hashes --strict \
+            --requirement src/sigrift/bridge/requirements-torch-cuda.txt
+
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Action pinned by SHA; the toolchain stays on `stable` here — it only
+      # builds the cargo-audit tool, not our code.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit workspace dependencies
+        # Fail on actual vulnerabilities, NOT on unmaintained/unsound *warnings*
+        # (cargo audit exits non-zero on vulnerabilities by default; --deny
+        # warnings would also fail on e.g. rustls-pemfile being unmaintained and
+        # the anyhow unsoundness advisory, neither of which is a vulnerability
+        # nor compiled into a shipped binary). Promote a specific warning with
+        # `--deny unmaintained`/`--deny unsound` once it is remediated, or waive
+        # a vulnerability explicitly with `--ignore RUSTSEC-YYYY-NNNN` + a
+        # tracking comment.
+        run: cargo audit

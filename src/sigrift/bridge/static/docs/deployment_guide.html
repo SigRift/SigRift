@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deployment Guide — The Bridge v4.0.0</title>
+<style>
+:root {
+  --bg: #0d1117; --bg-card: #161b22; --bg-sidebar: #0d1117;
+  --border: #30363d; --text: #c9d1d9; --text-secondary: #8b949e;
+  --accent: #58a6ff; --accent-hover: #79c0ff;
+  --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff;
+  --code-bg: #1c2129; --code-border: #30363d;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; bottom: 0; overflow-y: auto; padding: 20px 0; z-index: 10; }
+.sidebar-header { padding: 0 20px 16px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.sidebar-header h2 { font-size: 16px; color: var(--text); margin-bottom: 4px; }
+.sidebar-header .version { font-size: 12px; color: var(--text-secondary); }
+.sidebar-nav a { display: block; padding: 6px 20px; font-size: 13px; color: var(--text-secondary); border-left: 3px solid transparent; }
+.sidebar-nav a:hover { color: var(--text); background: rgba(88,166,255,0.05); text-decoration: none; }
+.sidebar-nav .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); padding: 12px 20px 4px; font-weight: 600; }
+.content { margin-left: 260px; padding: 32px 40px; max-width: 900px; flex: 1; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 22px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 17px; margin: 28px 0 12px; }
+h4 { font-size: 14px; margin: 16px 0 8px; color: var(--text-secondary); }
+p, li { margin-bottom: 8px; }
+ul, ol { padding-left: 24px; margin-bottom: 16px; }
+.subtitle { color: var(--text-secondary); margin-bottom: 24px; font-size: 15px; }
+code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; background: var(--code-bg); padding: 2px 5px; border-radius: 3px; }
+pre { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 6px; padding: 12px 16px; overflow-x: auto; margin: 8px 0 16px; font-size: 12px; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+th { text-align: left; padding: 6px 10px; background: var(--code-bg); color: var(--text-secondary); font-weight: 600; border: 1px solid var(--border); }
+td { padding: 6px 10px; border: 1px solid var(--border); vertical-align: top; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+.warning { background: rgba(210,153,34,0.08); border-left: 3px solid var(--yellow); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 13px; }
+@media (max-width: 900px) { .sidebar { display: none; } .content { margin-left: 0; padding: 20px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h2>Deployment Guide</h2>
+    <span class="version">The Bridge v4.0.0</span>
+    <div style="margin-top:8px"><a href="api_reference.html">API Ref</a> &middot; <a href="operations_guide.html">Operations</a></div>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-group">Setup</div>
+    <a href="#prerequisites">Prerequisites</a>
+    <a href="#installation">Installation</a>
+    <a href="#directory">Directory Structure</a>
+    <div class="nav-group">Configuration</div>
+    <a href="#env-vars">Environment Variables</a>
+    <a href="#yaml-config">YAML Config</a>
+    <div class="nav-group">Server</div>
+    <a href="#bridge-server">Bridge Server</a>
+    <a href="#reverse-proxy">Reverse Proxy</a>
+    <a href="#ssl">SSL/TLS</a>
+    <div class="nav-group">Edge Nodes</div>
+    <a href="#edge-overview">Overview</a>
+    <a href="#detection-reporter">Detection Reporter</a>
+    <a href="#wifi-scanner">WiFi Scanner</a>
+    <div class="nav-group">Gateway Sidecar</div>
+    <a href="#gateway-overview">Overview</a>
+    <a href="#gateway-build">Build &amp; Install</a>
+    <a href="#gateway-config">Configuration</a>
+    <a href="#gateway-integration">Bridge Integration</a>
+    <div class="nav-group">Security</div>
+    <a href="#api-keys">API Key Management</a>
+    <a href="#rbac">Role Assignment</a>
+    <div class="nav-group">Operations</div>
+    <a href="#monitoring">Monitoring</a>
+    <a href="#optional-ssh-audit">Optional SSH Audit</a>
+    <a href="#backup">Backup &amp; Restore</a>
+    <a href="#logging">Logging</a>
+  </div>
+</nav>
+
+<main class="content">
+<h1>Deployment Guide</h1>
+<p class="subtitle">Complete guide to deploying The Bridge RF signal detection backend and edge nodes.</p>
+
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li><strong>Python 3.10+</strong> (3.11 or 3.12 recommended)</li>
+<li><strong>SQLite 3.35+</strong> (for VACUUM INTO support; ships with Python 3.10+)</li>
+<li><strong>pip</strong> or <strong>uv</strong> package manager</li>
+<li><strong>Linux</strong> (Ubuntu 22.04+, Debian 12+, or Raspberry Pi OS for edge nodes)</li>
+<li>2GB+ RAM for the Bridge server, 512MB+ for edge nodes</li>
+<li>Edge nodes: RTL-SDR dongle</li>
+</ul>
+
+<h2 id="installation">Installation</h2>
+<pre><code># Clone the repository
+git clone https://github.com/SigRift/SigRift.git
+cd SigRift
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -e .
+# Or with uv:
+# uv pip install -e .</code></pre>
+
+<h2 id="directory">Directory Structure</h2>
+<pre><code>sigrift/bridge/
+  app.py              # FastAPI application, lifespan, middleware
+  __init__.py         # Version constants (4.0.0)
+  models.py           # Pydantic request/response models
+  dependencies.py     # Auth, RBAC, rate limiting
+  detection_store.py  # SQLite detection storage
+  detection_reporter.py  # Edge node reporter client
+  persistence.py      # JSON-based persistence (keys, nodes, alerts)
+  state.py            # Application state management
+  notifications.py    # Webhook notification manager
+  log_buffer.py       # In-memory log ring buffer
+  iq_store.py         # IQ capture file storage
+  anomaly/            # Anomaly scoring subsystem
+    baseline.py       # RF baseline manager
+    scorer.py         # RF anomaly scorer
+    wifi_scorer.py    # WiFi anomaly scorer
+    pcap_store.py     # Pcap capture storage
+  routers/            # API route handlers
+    health.py, nodes.py, detections.py, alerts.py,
+    keys.py, export.py, wifi.py, signals.py,
+    admin.py, maintenance.py, system_config.py,
+    webhook_management.py, training.py
+  templates/          # HTML templates (index.html, admin.html)
+  static/             # CSS, JS, docs
+  data/               # Runtime data directory
+    detections.db     # SQLite database
+    .master_key       # Auto-generated master key (chmod 600)
+    baselines.json    # RF baseline data
+    wifi_baselines.json  # WiFi baseline data
+    backups/          # Database backups
+    iq_captures/      # IQ waveform files
+    pcap_captures/    # WiFi pcap files</code></pre>
+
+<h2 id="env-vars">Environment Variables</h2>
+<p>All environment variables with their defaults, discovered by scanning the entire codebase.</p>
+
+<h3>Bridge Server</h3>
+<table>
+<tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>BRIDGE_LOG_LEVEL</code></td><td><code>INFO</code></td><td>Root logging level (DEBUG, INFO, WARNING, ERROR)</td></tr>
+<tr><td><code>BRIDGE_LOG_FORMAT</code></td><td><code>""</code></td><td>Set to <code>"json"</code> for structured JSON log output</td></tr>
+<tr><td><code>BRIDGE_MASTER_KEY</code></td><td><code>""</code></td><td>Pre-configured master API key. If empty, one is auto-generated and written to <code>data/.master_key</code></td></tr>
+<tr><td><code>BRIDGE_RETENTION_DAYS</code></td><td><code>90</code></td><td>Data retention policy in days. Used by periodic cleanup and maintenance tasks</td></tr>
+<tr><td><code>BRIDGE_CA_BUNDLE</code></td><td><code></code></td><td>Path to CA bundle file for TLS verification of outgoing connections (webhooks, reporter). Use for self-signed or internal PKI certs</td></tr>
+<tr><td><code>BRIDGE_WS_QUERY_AUTH</code></td><td><code>enabled</code></td><td>Set to <code>"disabled"</code> to block deprecated WebSocket query parameter auth</td></tr>
+<tr><td><code>MLRF_WIFI_FRAME_CAPTURE_MAX</code></td><td><code>50</code></td><td>Maximum frames to capture per WiFi anomaly event</td></tr>
+</table>
+
+<h3>Edge Node / Detection Reporter</h3>
+<table>
+<tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>MLRF_BRIDGE_URL</code></td><td><code>https://localhost:8443</code></td><td>URL of the Bridge server</td></tr>
+<tr><td><code>MLRF_API_KEY</code></td><td><code>""</code></td><td>API key for authentication with the Bridge</td></tr>
+<tr><td><code>MLRF_NODE_ID</code></td><td><code>test-node</code></td><td>Unique identifier for this edge node</td></tr>
+<tr><td><code>MLRF_ANOMALY</code></td><td><code>""</code></td><td>Enable anomaly scoring on edge: <code>"1"</code>, <code>"true"</code>, or <code>"yes"</code></td></tr>
+<tr><td><code>MLRF_DATA_DIR</code></td><td><code>""</code></td><td>Data directory for edge node storage</td></tr>
+<tr><td><code>MLRF_MODEL_PATH</code></td><td><code>""</code></td><td>Path to the ONNX model file</td></tr>
+<tr><td><code>MLRF_INTER_THREADS</code></td><td><code>2</code></td><td>ONNX Runtime inter-op threads</td></tr>
+<tr><td><code>MLRF_INTRA_THREADS</code></td><td><code>4</code></td><td>ONNX Runtime intra-op threads</td></tr>
+</table>
+
+<h2 id="yaml-config">YAML Configuration</h2>
+<p>The Bridge loads configuration from <code>SigRift/config.py</code> with dataclass defaults. Key sections:</p>
+<ul>
+<li><strong>SecurityConfig:</strong> <code>rate_limit_per_minute</code> (default: 300), <code>tls_enabled</code>, <code>require_auth</code>, <code>api_key_length</code> (32), <code>max_request_size_mb</code> (10)</li>
+<li><strong>TrainingConfig:</strong> Epochs, batch size, learning rate, early stopping, SNR ranges</li>
+<li><strong>HardwareConfig:</strong> Sample rate, capture settings</li>
+<li><strong>ModelConfig:</strong> Architecture parameters (base_channels, num_classes=40, dropout)</li>
+</ul>
+
+<h2 id="bridge-server">Bridge Server Setup</h2>
+<h3>Starting the Server</h3>
+<pre><code># Development mode
+uvicorn sigrift.bridge.app:app --host 0.0.0.0 --port 8443 --ssl-keyfile key.pem --ssl-certfile cert.pem
+
+# Production with multiple workers
+uvicorn sigrift.bridge.app:app --host 0.0.0.0 --port 8443 \
+  --ssl-keyfile /etc/ssl/bridge/key.pem \
+  --ssl-certfile /etc/ssl/bridge/cert.pem \
+  --workers 1 --limit-concurrency 100</code></pre>
+
+<div class="warning"><strong>Important:</strong> Use only 1 worker for SQLite (no multi-process write support). For higher throughput, use a reverse proxy with connection pooling.</div>
+
+<h3>Systemd Service</h3>
+<pre><code># /etc/systemd/system/bridge.service
+[Unit]
+Description=The Bridge - RF Detection Backend
+After=network.target
+
+[Service]
+Type=exec
+User=bridge
+Group=bridge
+WorkingDirectory=/opt/mlrf
+Environment=BRIDGE_LOG_LEVEL=INFO
+Environment=BRIDGE_RETENTION_DAYS=90
+Environment=BRIDGE_MASTER_KEY=your-secure-master-key-here
+ExecStart=/opt/mlrf/.venv/bin/uvicorn sigrift.bridge.app:app \
+  --host 0.0.0.0 --port 8443 \
+  --ssl-keyfile /etc/ssl/bridge/key.pem \
+  --ssl-certfile /etc/ssl/bridge/cert.pem
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+<pre><code>sudo systemctl daemon-reload
+sudo systemctl enable bridge
+sudo systemctl start bridge</code></pre>
+
+<h2 id="reverse-proxy">Reverse Proxy (nginx)</h2>
+<pre><code># /etc/nginx/sites-available/bridge
+upstream bridge {
+    server 127.0.0.1:8443;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name bridge.example.com;
+
+    ssl_certificate /etc/ssl/bridge/fullchain.pem;
+    ssl_certificate_key /etc/ssl/bridge/privkey.pem;
+
+    # Security headers (Bridge also sets these)
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options DENY;
+
+    # Request size limit (Bridge enforces 10MB)
+    client_max_body_size 10m;
+
+    location / {
+        proxy_pass https://bridge;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket endpoints
+    location ~ /ws/ {
+        proxy_pass https://bridge;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    # Static files with caching
+    location /static/ {
+        proxy_pass https://bridge;
+        proxy_cache_valid 200 1h;
+    }
+}</code></pre>
+
+<h2 id="ssl">SSL/TLS Configuration</h2>
+<pre><code># Generate self-signed certificate (development)
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes \
+  -subj "/CN=bridge.local"
+
+# Let's Encrypt (production)
+certbot certonly --standalone -d bridge.example.com</code></pre>
+<p>When using self-signed or internal CA certs, set <code>BRIDGE_CA_BUNDLE=/path/to/ca.pem</code> on edge nodes to provide the CA certificate for verification.</p>
+
+<h2 id="edge-overview">Edge Node Overview</h2>
+<p>Each edge node runs:</p>
+<ol>
+<li><strong>RTL-SDR capture</strong> &rarr; raw IQ samples at 2.048 MHz</li>
+<li><strong>Inference engine</strong> &rarr; ONNX Runtime classification</li>
+<li><strong>Detection Reporter</strong> &rarr; batches and uploads detections to the Bridge</li>
+<li><strong>WiFi Scanner</strong> (optional) &rarr; 802.11 metadata collection</li>
+</ol>
+
+<h2 id="detection-reporter">Detection Reporter Configuration</h2>
+<pre><code># Run the detection reporter
+python -m sigrift.edge.detection_reporter \
+  --server-url https://bridge.example.com:8443 \
+  --api-key YOUR_SENSOR_KEY \
+  --node-id node-01 \
+  --min-confidence 0.5 \
+  --min-snr 3.0 \
+  --batch-size 100
+
+# Or use environment variables:
+export MLRF_BRIDGE_URL=https://bridge.example.com:8443
+export MLRF_API_KEY=YOUR_SENSOR_KEY
+export MLRF_NODE_ID=node-01
+python -m sigrift.edge.detection_reporter</code></pre>
+
+<p>The reporter supports:</p>
+<ul>
+<li>Gzip compression of batch uploads</li>
+<li>Automatic retry with exponential backoff</li>
+<li>Deduplication of repeated detections</li>
+<li>Configurable confidence and SNR thresholds</li>
+<li>IQ capture uploads for anomalous detections</li>
+</ul>
+
+<h2 id="wifi-scanner">WiFi Scanner Setup</h2>
+<p>The WiFi scanner collects 802.11 metadata and submits via <code>POST /api/wifi/ingest</code>. Requires monitor-mode capable WiFi adapter.</p>
+
+<h2 id="gateway-overview">SigRift Gateway Sidecar</h2>
+<p>The <strong>SigRift gateway</strong> (<code>sigrift-gateway</code>) is a Rust microservice that fronts The Bridge's Python backend. It handles batch detection ingest, real-time anomaly scoring, read-only dashboard queries, and WebSocket feed broadcasting &mdash; all backed by the same shared SQLite database.</p>
+<p>In the single-host default deployment (see <code>docker-compose.yml</code>) the gateway terminates TLS on 8444 and proxies non-native routes to the bridge on 8001.</p>
+
+<h3 id="gateway-build">Build &amp; Install</h3>
+<p>Requires <a href="https://rustup.rs/">Rust 1.75+</a> (stable toolchain).</p>
+<pre><code># Build the release binary
+cd SigRift
+cargo build --release -p sigrift-gateway
+
+# The binary is at target/release/sigrift-gateway
+# Copy to your deployment path:
+sudo cp target/release/sigrift-gateway /usr/local/bin/sigrift-gateway</code></pre>
+
+<h3 id="gateway-config">Configuration</h3>
+<p>The gateway is configured via CLI arguments or environment variables. Precedence (highest to lowest): CLI args &gt; env vars &gt; built-in defaults.</p>
+
+<table>
+<tr><th>Variable</th><th>CLI Flag</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>UC_HOST</code></td><td><code>--host</code></td><td><code>0.0.0.0</code></td><td>Host to bind to</td></tr>
+<tr><td><code>UC_PORT</code></td><td><code>--port</code></td><td><code>8444</code></td><td>Port to listen on</td></tr>
+<tr><td><code>UC_DB_PATH</code></td><td><code>--db-path</code></td><td><code>../sigrift/bridge/data/detections.db</code></td><td>Path to the shared SQLite database (same DB as The Bridge)</td></tr>
+<tr><td><code>UC_KEYS_PATH</code></td><td><code>--keys-path</code></td><td><code>../sigrift/bridge/data/keys.json</code></td><td>Path to the API keys JSON file (shared with The Bridge)</td></tr>
+<tr><td><code>UC_BASELINE_PATH</code></td><td><code>--baseline-path</code></td><td><code>data/baselines.json</code></td><td>Path to anomaly baseline persistence file</td></tr>
+<tr><td><code>UC_POOL_SIZE</code></td><td><code>--pool-size</code></td><td><code>8</code></td><td>SQLite connection pool size</td></tr>
+<tr><td><code>UC_MAX_BODY_SIZE</code></td><td><code>--max-body-size</code></td><td><code>1048576</code> (1 MB)</td><td>Maximum request body size in bytes (before decompression)</td></tr>
+<tr><td><code>UC_MAX_DECOMPRESSED_SIZE</code></td><td><code>--max-decompressed-size</code></td><td><code>52428800</code> (50 MB)</td><td>Maximum decompressed body size (gzip bomb protection)</td></tr>
+<tr><td><code>UC_BASELINE_ALPHA</code></td><td><code>--baseline-alpha</code></td><td><code>0.01</code></td><td>EWMA alpha for baseline drift tracking</td></tr>
+<tr><td><code>UC_ACTIVE_NODES</code></td><td><code>--active-nodes</code></td><td><code>5</code></td><td>Number of active edge nodes (for correlation scoring)</td></tr>
+<tr><td><code>UC_LOG_LEVEL</code></td><td><code>--log-level</code></td><td><code>info</code></td><td>Log level (trace, debug, info, warn, error)</td></tr>
+<tr><td>&mdash;</td><td><code>-v</code> / <code>--verbose</code></td><td><code>false</code></td><td>Override log level to debug</td></tr>
+<tr><td>&mdash;</td><td><code>-q</code> / <code>--quiet</code></td><td><code>false</code></td><td>Override log level to warn</td></tr>
+<tr><td><code>BRIDGE_CORS_ORIGINS</code></td><td>&mdash;</td><td><code>http://localhost:3000,http://localhost:8080</code></td><td>Comma-separated list of allowed CORS origins</td></tr>
+</table>
+
+
+<h4>Systemd Service</h4>
+<pre><code># /etc/systemd/system/sigrift-gateway.service
+[Unit]
+Description=SigRift Gateway — High-performance RF detection ingest
+After=network.target bridge.service
+
+[Service]
+Type=exec
+User=bridge
+Group=bridge
+WorkingDirectory=/opt/sigrift
+Environment=UC_DB_PATH=/opt/sigrift/bridge/data/detections.db
+Environment=UC_KEYS_PATH=/opt/sigrift/bridge/data/keys.json
+Environment=UC_PORT=8444
+ExecStart=/usr/local/bin/sigrift-gateway
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+<pre><code>sudo systemctl daemon-reload
+sudo systemctl enable sigrift-gateway
+sudo systemctl start sigrift-gateway</code></pre>
+
+<h3 id="gateway-integration">Bridge Integration</h3>
+<p>The gateway shares The Bridge's SQLite database and API key store. The Python Bridge app validates auth via the same <code>keys.json</code>, while the gateway reads the same file for its own API key verification (fail-closed: if the keys file is missing, all authenticated requests are rejected).</p>
+
+<h4>Reverse Proxy (optional)</h4>
+<p>For multi-host or production deployments terminating TLS upstream (e.g. nginx/Caddy with a real certificate), route all traffic to the gateway on 8444 and let it handle the internal proxy to the bridge:</p>
+<pre><code># nginx example — single upstream, gateway handles internal routing
+location / {
+    proxy_pass https://127.0.0.1:8444;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}</code></pre>
+
+<h4>Health Check</h4>
+<pre><code># Gateway health probe (no auth required)
+curl -k https://127.0.0.1:8444/health
+# Returns: "ok"</code></pre>
+
+<h4>Endpoints Served by the Gateway</h4>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td><code>POST</code></td><td><code>/batch</code></td><td>Batch detection ingest (gzip supported)</td></tr>
+<tr><td><code>POST</code></td><td><code>/api/detections/batch</code></td><td>Batch detection ingest (Bridge-compatible path)</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/recent</code></td><td>Recent detections query</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/timeline</code></td><td>Detection timeline data</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/distribution</code></td><td>Class distribution summary</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/heatmap</code></td><td>Frequency/time heatmap data</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/summary</code></td><td>Detection statistics summary</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/detections/anomalies/summary</code></td><td>Anomaly summary data</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/status</code></td><td>System status overview</td></tr>
+<tr><td><code>WS</code></td><td><code>/ws/feed</code></td><td>Real-time detection WebSocket feed</td></tr>
+<tr><td><code>WS</code></td><td><code>/ws/anomalies</code></td><td>Real-time anomaly WebSocket feed</td></tr>
+<tr><td><code>GET</code></td><td><code>/health</code></td><td>Health check (returns <code>"ok"</code>)</td></tr>
+</table>
+
+<div class="note"><strong>Note:</strong> The gateway performs periodic WAL checkpoints (every 5 minutes) and baseline saves automatically. No additional cron jobs are needed.</div>
+
+<h2 id="api-keys">API Key Management</h2>
+<h3>Initial Master Key</h3>
+<p>On first startup with an empty key store, The Bridge auto-generates a master key:</p>
+<ul>
+<li>If <code>BRIDGE_MASTER_KEY</code> is set, that value is used</li>
+<li>Otherwise, a random key is generated and written to <code>data/.master_key</code> (chmod 600)</li>
+</ul>
+<div class="warning"><strong>Production:</strong> Always set <code>BRIDGE_MASTER_KEY</code> in the environment. Never rely on the auto-generated file in production.</div>
+
+<h3>Creating Keys</h3>
+<pre><code># Create a sensor key for an edge node
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Node 01 sensor","role":"sensor","expires_days":365}' \
+  https://bridge.example.com/api/admin/keys
+
+# Create a viewer key for dashboard access
+curl -X POST -H "X-API-Key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Dashboard viewer","role":"viewer"}' \
+  https://bridge.example.com/api/admin/keys</code></pre>
+
+<h2 id="rbac">Role Assignment</h2>
+<table>
+<tr><th>Role</th><th>Level</th><th>Use Case</th></tr>
+<tr><td><code>SENSOR</code></td><td>0</td><td>Edge sensor devices, ingest-only</td></tr>
+<tr><td><code>NODE</code></td><td>1</td><td>Edge nodes, ingest + read own status</td></tr>
+<tr><td><code>VIEWER</code></td><td>2</td><td>Read-only dashboard access</td></tr>
+<tr><td><code>ANALYST</code></td><td>3</td><td>Read + write detections, alerts, investigations</td></tr>
+<tr><td><code>ADMIN</code></td><td>4</td><td>Full access including user management, system config</td></tr>
+</table>
+
+<h2 id="monitoring">Monitoring</h2>
+<h3>Health Check</h3>
+<pre><code># Basic health probe
+curl -H "X-API-Key: $KEY" https://bridge.example.com/api/health
+
+# Full system status
+curl -H "X-API-Key: $KEY" https://bridge.example.com/api/status
+
+# Operational metrics (ingest rate, WS clients, DB size)
+curl -H "X-API-Key: $KEY" https://bridge.example.com/api/metrics</code></pre>
+
+<h3>Key Metrics to Monitor</h3>
+<ul>
+<li><strong>Health status:</strong> <code>GET /api/health</code> returns <code>"ok"</code></li>
+<li><strong>Node connectivity:</strong> <code>active_nodes</code> vs <code>offline_nodes</code> in status</li>
+<li><strong>Ingest rate:</strong> <code>detections_per_second</code> in metrics</li>
+<li><strong>Database size:</strong> <code>db_size_mb</code> and <code>wal_size_mb</code> in metrics</li>
+<li><strong>Alert backlog:</strong> <code>unacked_alerts</code> in status</li>
+<li><strong>Anomaly queue:</strong> <code>active_anomalies</code> in status</li>
+</ul>
+
+<h2 id="optional-ssh-audit">Deployment Status and Optional SSH Audit</h2>
+<p>The Deployment tab shows node contact and current scanner reports without SSH setup. A scanner can report normally while its optional SSH audit is unconfigured or fails. Reports expire after 120 seconds; recent node contact alone does not prove that a scanner is capturing. Refresh updates these report lifetimes even when host audit results are cached.</p>
+<p>Normal quickstart needs no SSH keys or host-key changes. Its <code>local-edge</code> node advertises the application service name <code>edge</code>; that does not imply an SSH server exists there. A registered node address is never automatically used as an SSH target.</p>
+<p>For an advanced host audit, provide a separate operator-owned JSON file and set <code>BRIDGE_DEPLOYMENT_SSH_CONFIG</code> to its path inside the Bridge container. For example:</p>
+<pre><code>{
+  "remote-node": {
+    "host": "scanner-host.example",
+    "user": "audit",
+    "port": 22,
+    "known_hosts_file": "/app/ssh-audit/known_hosts",
+    "identity_file": "/app/ssh-audit/identity"
+  }
+}</code></pre>
+<p>Use a host and port reachable from the Bridge, an explicitly authorized audit account, and absolute file paths without whitespace. Mount the target file, verified <code>known_hosts</code> and the existing audit identity read-only and make them readable by the Bridge user (UID 1500 in the shipped image). Do not upload keys in node registration, paste them into the dashboard, or overwrite an existing Compose override. Merge these additions into the operator-managed Bridge service configuration:</p>
+<pre><code>services:
+  bridge:
+    environment:
+      BRIDGE_DEPLOYMENT_SSH_CONFIG: /app/ssh-audit/targets.json
+    volumes:
+      - ./ssh-audit:/app/ssh-audit:ro</code></pre>
+<p>Verify the SSH host fingerprint through a trusted channel before provisioning <code>known_hosts</code>. The audit enforces strict verification and ignores ambient SSH configuration; it never accepts a new or changed key automatically. An unverified host key, changed key, unavailable identity, DNS failure or timeout has a separate actionable status. Scanner API credentials are not SSH credentials.</p>
+<p><strong>Existing SSH deployments:</strong> configure targets explicitly when upgrading. The old implicit <code>pi@node.host</code> behavior and <code>BRIDGE_SSH_HOST_KEY_CHECKING</code> overrides are no longer used by this audit. No node registration, credential or host setting is changed automatically.</p>
+<p>Host auditing retains the existing Linux/systemd layout checks; it is not Docker container inspection. SSH results are cached for five minutes, with at most four concurrent processes per request, ten seconds per target, and 32 configured targets. A fresh status response does not certify reachability, package consistency or radio operation. Refreshing scanner-only installations does not start SSH processes.</p>
+
+<h2 id="backup">Backup &amp; Restore</h2>
+<h3>Database Backup</h3>
+<pre><code># Create a backup via API
+curl -X POST -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/backup
+
+# List available backups
+curl -H "X-API-Key: $MASTER_KEY" \
+  https://bridge.example.com/api/admin/backups
+
+# Download a backup
+curl -H "X-API-Key: $MASTER_KEY" -o backup.db \
+  https://bridge.example.com/api/admin/backups/detections_backup_20260214_120000.db</code></pre>
+
+<h3>Persistence Directory</h3>
+<p>The <code>data/</code> directory contains all persistent state:</p>
+<ul>
+<li><code>detections.db</code> &mdash; SQLite database (detections, anomalies, audit log, WiFi metadata)</li>
+<li><code>.master_key</code> &mdash; Auto-generated master key file</li>
+<li><code>baselines.json</code> &mdash; RF anomaly baseline data</li>
+<li><code>wifi_baselines.json</code> &mdash; WiFi anomaly baseline data</li>
+<li><code>iq_captures/</code> &mdash; IQ waveform captures</li>
+<li><code>pcap_captures/</code> &mdash; WiFi pcap captures</li>
+<li><code>backups/</code> &mdash; Database backup copies</li>
+</ul>
+<p>Back up the entire <code>data/</code> directory regularly. The persistence manager also saves node registrations, alerts, and key metadata to JSON files.</p>
+
+<h2 id="logging">Logging</h2>
+<h3>Log Levels</h3>
+<p>Set via <code>BRIDGE_LOG_LEVEL</code> environment variable. In production, use <code>INFO</code> (default).</p>
+<h3>JSON Logging</h3>
+<p>Set <code>BRIDGE_LOG_FORMAT=json</code> for structured JSON output, suitable for log aggregation (ELK, Loki, etc.).</p>
+<h3>In-App Log Viewer</h3>
+<p>Access recent logs via the admin API: <code>GET /api/admin/logs</code>. Supports filtering by level, logger name, and full-text search.</p>
+
+<hr style="margin:40px 0;border-color:var(--border);">
+<p style="color:var(--text-secondary);font-size:12px;">The Bridge v4.0.0 Deployment Guide &mdash; <a href="api_reference.html">API Reference</a> &middot; <a href="operations_guide.html">Operations Guide</a></p>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,43 @@
+[Unit]
+Description=WiFi SIGINT Edge Scanner (monitor mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Not root: the scanner parses attacker-controlled 802.11 frames. It needs
+# exactly two capabilities, granted as ambient capabilities so the ip, iw
+# and tcpdump it runs inherit them:
+#   CAP_NET_ADMIN  `ip link set` and `iw dev ... set type monitor/channel`
+#   CAP_NET_RAW    tcpdump's AF_PACKET capture socket
+# (tcpdump drops to its own user only when started as root, so SETUID and
+# SETGID are not needed.) The bounding set holds nothing else, and
+# NoNewPrivileges stops setuid binaries / file capabilities from adding any.
+User=pi
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+# MLRF_BRIDGE_URL / MLRF_BRIDGE_KEY / MLRF_NODE_ID (and MLRF_CA_CERT ...).
+# systemd reads this file before dropping privileges, so keep it
+# root:root 0600 outside any user's home: a file the service user can edit
+# could set PYTHONPATH or LD_PRELOAD for the service. See the edge README.
+EnvironmentFile=/etc/sigrift-edge/edge.env
+WorkingDirectory=/opt/rf-edge/bin
+ExecStart=/usr/bin/python3 /opt/rf-edge/bin/wifi_scan.py
+Restart=always
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+# Runtime summarize toggles from the bridge arrive as a JSON file the agent
+# (mlrf-agent) writes and this scanner reads. PrivateTmp gives each unit its
+# own /tmp, so the handoff must live in a shared state dir, not /tmp. The
+# mlrf-agent unit (or its env file) must set the same MLRF_SCANNER_CONFIG_PATH
+# and, if it runs as pi, StateDirectory=sigrift-edge too (see the edge README).
+Environment=MLRF_SCANNER_CONFIG_PATH=/var/lib/sigrift-edge/scanner-config.json
+StateDirectory=sigrift-edge
+PrivateTmp=yes
+ProtectSystem=full
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

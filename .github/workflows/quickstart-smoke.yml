@@ -1,0 +1,258 @@
+name: Quickstart smoke
+
+# End-to-end smoke that runs scripts/quickstart.sh against a clean
+# Ubuntu 24.04 runner, waits for the stack to come up, then validates
+# with scripts/staging-smoke.sh. Catches docs-vs-script drift and the
+# kind of "fresh install" breakage that only surfaces on a host with no
+# leftover state (no prior .env, no cached compose images, no models).
+#
+# Why not in ci.yml? CI's docker-build job already runs `docker compose
+# build` — that catches Dockerfile regressions. This workflow exercises
+# the ORCHESTRATION layer in quickstart.sh: env-var generation, TLS
+# cert generation, model fallback, volume ownership migration, the
+# 240 s health wait, and the dependent-service restart pass. Drift in
+# any of those is invisible to ci.yml.
+#
+# Triggers:
+#   * Weekly cron (Mondays 04:00 UTC) — catches docs-vs-runtime drift
+#     introduced by upstream image/base changes between merges.
+#   * workflow_dispatch — operator can re-run after a quickstart edit.
+#   * pull requests and main pushes affecting installation or runtime —
+#     a successful image build does not establish that a fresh stack boots.
+# Failures are reported as failures, but this is not a required status
+# check: it is path-filtered, and a required check that never starts would
+# block merges (see CI_CD.md).
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'src/**'
+      - 'tests/e2e/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'docker-compose*.yml'
+      - '.github/workflows/quickstart-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'src/**'
+      - 'tests/e2e/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'docker-compose*.yml'
+      - '.github/workflows/quickstart-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quickstart-smoke:
+    name: quickstart.sh end-to-end
+    # Match the supported Linux image for the pinned Playwright browser.
+    # ubuntu-latest can advance before that browser supports the new release.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install jq (staging-smoke.sh dependency)
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends jq
+          fi
+          jq --version
+
+      - name: Verify docker compose plugin is present
+        # Ubuntu 24.04 runners ship Docker Engine + Compose v2 by
+        # default. Confirm rather than assume — surfaces a clear error
+        # if the runner image changes.
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Select services available on a host without radio hardware
+        # Keep the real gateway, bridge and edge heartbeat. Physical USB,
+        # Wi-Fi and Bluetooth services need real adapters and are validated
+        # separately. This hand-written override is preserved by quickstart.
+        run: |
+          cat > docker-compose.override.yml <<'YAML'
+          # CI host without radio adapters; preserved by quickstart.sh
+          services:
+            gateway:
+              volumes:
+                - ./tls:/app/tls:ro
+            edge:
+              volumes:
+                - ./tls/cert.pem:/app/tls/cert.pem:ro
+              environment:
+                - MLRF_CA_CERT=/app/tls/cert.pem
+            rtl-tcp:
+              profiles: [hardware]
+            scan:
+              profiles: [hardware]
+            wifi-scan:
+              profiles: [hardware]
+            bt-scan:
+              profiles: [hardware]
+          YAML
+
+      - name: Generate admin password
+        id: pw
+        # Exercise the literal .env password serialization with characters
+        # Compose otherwise interprets as expansion, quoting or comments.
+        # The random prefix and entire value are masked; never print them.
+        run: |
+          PW=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32) + "\u0024literal # \u0027quoted\u0027 \u005cend")')
+          echo "::add-mask::$PW"
+          echo "password=$PW" >> "$GITHUB_OUTPUT"
+
+      - name: Run quickstart.sh (fresh install path)
+        env:
+          ADMIN_PW: ${{ steps.pw.outputs.password }}
+        # quickstart.sh prompts for the admin password TWICE on a fresh
+        # host (no .env present). Feed both via stdin. The script's
+        # `read -r -s` consumes a single line each, so two lines suffice.
+        #
+        # A classifier model is not needed because RF capture is disabled;
+        # a missing/private model release must not affect core readiness.
+        run: |
+          printf '%s\n%s\n' "$ADMIN_PW" "$ADMIN_PW" | scripts/quickstart.sh --scanners=none
+
+      - name: Wait for gateway /health (extra margin past quickstart's own wait)
+        # quickstart.sh already waits up to 240 s for gateway-healthy
+        # before returning success, but the bridge's router init can
+        # lag a few extra seconds after that. 60 s extra margin here
+        # keeps the smoke deterministic without pushing total runtime.
+        run: |
+          deadline=$(( $(date +%s) + 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if curl -fsS -k --max-time 5 https://127.0.0.1:8444/health >/dev/null 2>&1; then
+              echo "gateway /health OK"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::gateway /health did not respond within 60 s after quickstart returned"
+          exit 1
+
+      - name: Run staging-smoke.sh against the live stack
+        env:
+          BASE_URL: https://127.0.0.1:8444
+          BRIDGE_ADMIN_USER: admin
+          BRIDGE_ADMIN_PASSWORD: ${{ steps.pw.outputs.password }}
+          LOG_DIR: /tmp
+        # Reuse the post-deploy smoke, including a node-authenticated ingest.
+        # Capture Compose's resolved configuration without logging secrets.
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          cfg = json.loads(subprocess.check_output(["docker", "compose", "config", "--format", "json"]))
+          env = dict(os.environ)
+          env["BRIDGE_LOCAL_NODE_KEY"] = cfg["services"]["bridge"]["environment"]["BRIDGE_LOCAL_NODE_KEY"]
+          subprocess.run(["scripts/staging-smoke.sh"], env=env, check=True)
+          PY
+
+      - name: Gateway and bridge security contracts
+        env:
+          BASE_URL: https://127.0.0.1:8444
+          BRIDGE_ADMIN_USER: admin
+          BRIDGE_ADMIN_PASSWORD: ${{ steps.pw.outputs.password }}
+        run: |
+          BRIDGE_ENV=production docker compose up -d --no-build \
+            --wait --wait-timeout 180 bridge gateway
+          python3 scripts/smoke-core.py --disposable \
+            --base-url https://127.0.0.1:8444 --ca-cert tls/cert.pem \
+            --bridge-container "$(docker compose ps -q bridge)"
+
+      - name: Install browser test tooling
+        run: |
+          python3 -m venv "$RUNNER_TEMP/e2e-venv"
+          "$RUNNER_TEMP/e2e-venv/bin/python" -m pip install \
+            -r tests/e2e/requirements.txt
+          "$RUNNER_TEMP/e2e-venv/bin/python" -m playwright install --with-deps chromium
+
+      - name: Prepare private browser diagnostics
+        run: |
+          umask 077
+          diagnostic_dir=$(mktemp -d "$RUNNER_TEMP/sigrift-e2e-diagnostics.XXXXXX")
+          echo "SIGRIFT_E2E_DIAGNOSTICS=$diagnostic_dir/events.jsonl" >> "$GITHUB_ENV"
+
+      - name: Real browser login, MFA, and dashboard flows
+        env:
+          BASE_URL: https://127.0.0.1:8444
+          BRIDGE_ADMIN_USER: admin
+          BRIDGE_ADMIN_PASSWORD: ${{ steps.pw.outputs.password }}
+          SIGRIFT_E2E_REQUIRED: '1'
+          SIGRIFT_E2E_DISPOSABLE: '1'
+          # The stack is built from this checkout: every page must carry
+          # the reviewed CSP (tests/e2e/conftest.py).
+          SIGRIFT_E2E_CSP: reviewed
+          SIGRIFT_E2E_CA_CERT: tls/cert.pem
+        # The fixture uses real HTTP authentication. Keep raw browser traces
+        # local: network recordings may contain disposable session credentials.
+        run: |
+          umask 077
+          set +e
+          "$RUNNER_TEMP/e2e-venv/bin/python" -m pytest tests/e2e -q \
+            --base-url "$BASE_URL" --timeout=120 \
+            --junitxml="$RUNNER_TEMP/browser-junit.xml" \
+            > "$RUNNER_TEMP/browser-private.log" 2>&1
+          result=$?
+          set -e
+          # Playwright errors can include passwords or replayed Cookie headers.
+          # Print test identity/status only; retain raw output on this runner.
+          "$RUNNER_TEMP/e2e-venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          report = Path(os.environ['RUNNER_TEMP']) / 'browser-junit.xml'
+          if not report.exists():
+              raise SystemExit('Browser report missing; see private runner diagnostics.')
+          cases = ET.parse(report).getroot().findall('.//testcase')
+          for case in cases:
+              state = next((child.tag for child in case if child.tag in {'failure', 'error', 'skipped'}), 'passed')
+              print(f"{case.get('classname')}.{case.get('name')}: {state}")
+          print(f'{len(cases)} browser test results recorded.')
+          if not cases:
+              raise SystemExit('No browser tests executed.')
+          PY
+          exit "$result"
+
+      - name: Diagnostics — safe browser operations
+        if: always()
+        run: python3 tests/e2e/diagnostics.py "${SIGRIFT_E2E_DIAGNOSTICS:-}"
+
+      - name: Diagnostics — docker compose ps
+        if: always()
+        run: docker compose ps
+
+      - name: Diagnostics — last 50 log lines per service
+        if: always()
+        # `|| true` per service so a crash-looped scan (expected on a
+        # hardware-less runner) doesn't mask the logs from healthy
+        # services. `--no-color` keeps the GHA log readable.
+        run: |
+          for svc in bridge gateway edge rtl-tcp scan wifi-scan bt-scan; do
+            echo "::group::$svc"
+            docker compose logs --tail=50 --no-color "$svc" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+      - name: Tear down (compose down -v)
+        if: always()
+        # -v removes the bridge_data volume too — this was a smoke test,
+        # nothing here is worth preserving. Idempotent if `up` never
+        # completed (no-op if no services were created).
+        run: docker compose down -v --remove-orphans || true

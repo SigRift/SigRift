@@ -1,0 +1,175 @@
+name: Build & push
+
+# Builds the bridge, gateway, and edge Docker images and publishes them
+# to GHCR with both a moving `:main` tag and an immutable `:main-<sha>`
+# tag. Manual runs only (workflow_dispatch): there is no push trigger,
+# so nothing is published automatically until the maintainers decide to
+# publish images. Dispatch it from main — a run from another branch
+# would still tag its images `:main`.
+#
+# Multi-arch (linux/amd64 + linux/arm64) for the air-gapped arm64 Pi
+# target. amd64 builds on a GitHub-hosted runner; arm64 builds natively
+# on GitHub-hosted ubuntu-24.04-arm unless the ARM64_RUNNER repository
+# variable names other runner labels. A final job merges the per-arch
+# digests into a single manifest tag.
+#
+# Release tags (vX.Y.Z, vX.Y.Z-rcN) go through release.yml — this
+# workflow does not produce cosign signatures, SBOMs, or GitHub Releases.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-and-push-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.component }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: bridge
+            dockerfile: src/sigrift/bridge/Dockerfile
+            image: sigrift-bridge
+            arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - component: bridge
+            dockerfile: src/sigrift/bridge/Dockerfile
+            image: sigrift-bridge
+            arch: arm64
+            platform: linux/arm64
+            runs-on: ${{ vars.ARM64_RUNNER && fromJSON(vars.ARM64_RUNNER) || 'ubuntu-24.04-arm' }}
+          - component: gateway
+            dockerfile: src/gateway/Dockerfile
+            image: sigrift-gateway
+            arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - component: gateway
+            dockerfile: src/gateway/Dockerfile
+            image: sigrift-gateway
+            arch: arm64
+            platform: linux/arm64
+            runs-on: ${{ vars.ARM64_RUNNER && fromJSON(vars.ARM64_RUNNER) || 'ubuntu-24.04-arm' }}
+          - component: edge
+            dockerfile: src/sigrift/edge/Dockerfile
+            image: sigrift-edge
+            arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - component: edge
+            dockerfile: src/sigrift/edge/Dockerfile
+            image: sigrift-edge
+            arch: arm64
+            platform: linux/arm64
+            runs-on: ${{ vars.ARM64_RUNNER && fromJSON(vars.ARM64_RUNNER) || 'ubuntu-24.04-arm' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image metadata
+        id: meta
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          # Same cache scope as release.yml, so a release of a commit
+          # built here starts from a warm cache instead of a cold cargo
+          # rebuild. Per-arch separation preserved in the scope name —
+          # BuildKit can't share layers across architectures.
+          cache-from: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }},mode=max
+          outputs: type=image,name=ghcr.io/${{ steps.meta.outputs.owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest='${{ steps.build.outputs.digest }}'
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge ${{ matrix.component }} manifest
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: bridge
+            image: sigrift-bridge
+          - component: gateway
+            image: sigrift-gateway
+          - component: edge
+            image: sigrift-edge
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.component }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image metadata
+        id: meta
+        run: |
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          owner='${{ steps.meta.outputs.owner }}'
+          image='${{ matrix.image }}'
+          sha='${{ steps.meta.outputs.sha_short }}'
+          refs=$(printf "ghcr.io/${owner}/${image}@sha256:%s " *)
+          docker buildx imagetools create \
+            -t "ghcr.io/${owner}/${image}:main" \
+            -t "ghcr.io/${owner}/${image}:main-${sha}" \
+            ${refs}
+
+      - name: Inspect manifest
+        run: |
+          owner='${{ steps.meta.outputs.owner }}'
+          image='${{ matrix.image }}'
+          sha='${{ steps.meta.outputs.sha_short }}'
+          docker buildx imagetools inspect "ghcr.io/${owner}/${image}:main-${sha}"

@@ -1,0 +1,74 @@
+# Build-context excludes for every image built from the repo root.
+#
+# What the Dockerfiles actually COPY:
+#   - src/sigrift/bridge/Dockerfile : the requirements*.txt locks + `src/sigrift/`
+#   - src/sigrift/edge/Dockerfile   : `src/sigrift/`
+#   - src/gateway/Dockerfile        : Cargo.toml + Cargo.lock + `src/`
+# Everything excluded below is runtime-generated state, a secret, or a
+# build artifact — never a build input. Patterns WITHOUT a `**/` prefix
+# are matched only at the context root, so the `models/` and `target/`
+# rules do NOT touch the `src/**/models/` source trees or nested code.
+
+# Python bytecode / tooling caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Bridge runtime state + secrets — detections.db, keys.json, .mac_secret,
+# audit.key, master_key.txt, etc. Seeded/created at container startup.
+src/sigrift/bridge/data/
+# The from-source bridge's secrets dir (BRIDGE_SECRETS_DIR default:
+# the CA private key).
+src/sigrift/bridge/secrets/
+
+# SQLite databases + WAL/SHM sidecars anywhere in the context
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
+# Key material and credentials anywhere in the context — not only under
+# tls/ and bridge/data/: a key, cert bundle, license or keys file dropped
+# anywhere in a checkout must never end up in an image layer. No build
+# needs any of them (the images get certificates by bind mount at run
+# time); if one ever does, re-include that exact path with `!path`.
+**/*.pem
+**/*.key
+**/*.key.*
+**/*.crt
+**/*.p12
+**/*.pfx
+**/*.jks
+**/id_rsa*
+**/id_ed25519*
+**/license.jwt
+**/keys.json
+**/master_key.txt
+**/.mac_secret
+**/audit.key
+**/.dep_hashes.json
+
+# TLS material, env files, model weights, checksum sidecars
+/tls/
+/pki/
+.env
+.env.*
+**/.env
+**/.env.*
+/models/
+**/*.sha256
+
+# Rust build output (root workspace target/; rebuilt inside the image)
+/target/
+
+# VCS + CI metadata + logs
+.git/
+.gitignore
+.github/
+**/*.log
+
+# Local evidence and agent worktrees never belong in a build context
+reports/
+.claude/

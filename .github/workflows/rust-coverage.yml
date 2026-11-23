@@ -1,0 +1,120 @@
+name: Rust line and branch coverage
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    name: Coverage gate scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # paths-filter lists the PR's changed files through the API.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      security: ${{ steps.filter.outputs.security }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            security:
+              - 'src/gateway/crates/sigrift-gateway-core/src/auth/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/middleware/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/proxy/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/ws/**'
+              - 'src/gateway/crates/sigrift-gateway-core/src/storage/**'
+              - 'src/sigrift/bridge/dependencies.py'
+              - 'src/sigrift/bridge/routers/admin.py'
+              - 'src/sigrift/bridge/routers/auth.py'
+              - 'src/sigrift/bridge/routers/internal.py'
+              - 'src/sigrift/bridge/routers/keys.py'
+              - 'src/sigrift/bridge/routers/mfa.py'
+              - 'src/sigrift/bridge/storage/audit.py'
+              - 'src/sigrift/bridge/storage/users.py'
+              - 'src/sigrift/lib/crypto/**'
+              - 'src/sigrift/lib/security/**'
+              - 'src/sigrift/bridge/static/auth_guard.js'
+              - 'src/sigrift/bridge/static/login.js'
+              - 'scripts/install-release.sh'
+              - 'scripts/quickstart.sh'
+              - 'scripts/pki_bootstrap.py'
+              - '.github/workflows/**'
+
+  rust-coverage:
+    needs: scope
+    # Gate for release evidence (pushes to main, checked by release.yml's
+    # coverage preflight), manual runs, and security-related pull requests
+    # (security paths in the scope job, or the `security` label). Other pull
+    # requests skip it instead of failing.
+    if: >-
+      github.event_name != 'pull_request'
+      || needs.scope.outputs.security == 'true'
+      || contains(github.event.pull_request.labels.*.name, 'security')
+    # Coverage is isolated from the production toolchain and from any Cargo
+    # cache a persistent runner keeps. Nightly is required for real branch
+    # counters.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      # Measure unoptimized code, as the committed floors were measured:
+      # the workspace's [profile.test] opt-level = 1 only speeds up tests.
+      CARGO_PROFILE_TEST_OPT_LEVEL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly-2026-11-05
+          components: llvm-tools-preview
+
+      - name: Install pinned coverage tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$RUNNER_TEMP/sigrift-llvm-cov"
+          mkdir -p "$tool_dir"
+          curl --fail --location --silent --show-error \
+            https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$tool_dir/tool.tar.gz"
+          (cd "$tool_dir" && echo 'b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a  tool.tar.gz' | sha256sum --check)
+          tar -xzf "$tool_dir/tool.tar.gz" -C "$tool_dir"
+          echo "$tool_dir" >> "$GITHUB_PATH"
+
+      - name: Measure all workspace targets with branch instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/coverage
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            cargo llvm-cov --version
+          } > reports/coverage/rust-provenance.txt
+          cargo llvm-cov --locked --workspace --all-targets --branch \
+            --json --output-path reports/coverage/rust.json
+
+      - name: Require coverage at or above the committed floor
+        run: python3 scripts/check-rust-coverage.py reports/coverage/rust.json --output reports/coverage/rust-summary.json
+
+      - name: Preserve raw coverage and missing-line evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-line-branch-coverage
+          path: reports/coverage/
+          if-no-files-found: error

@@ -1,0 +1,18 @@
+{
+  "about": [
+    "The reviewed Content-Security-Policy and Permissions-Policy, as one value each.",
+    "One table for both services that send them: the gateway (middleware/security.rs,",
+    "strict_csp_is_the_reviewed_policy and headers_match_the_shared_table) and the bridge",
+    "(src/sigrift/bridge/app.py _CSP_VALUE, tests/bridge/test_security_headers_parity.py).",
+    "Through the gateway the bridge's headers are replaced by the gateway's; the standalone",
+    "bridge (no gateway) sends its own, so the two must not drift apart.",
+    "tests/e2e/conftest.py reads the policy too: on the candidate gate",
+    "(SIGRIFT_E2E_CSP=reviewed) every document must carry exactly this value.",
+    "Scripts load only from the origin: no 'unsafe-inline', no 'unsafe-hashes', no",
+    "'unsafe-eval', no host sources. Styles keep 'unsafe-inline' until the template",
+    "style attributes are moved to stylesheets. Change the value here, in the gateway's",
+    "EXPECTED_CSP and in the CHANGELOG together."
+  ],
+  "content-security-policy": "default-src 'self'; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' wss: ws:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()"
+}

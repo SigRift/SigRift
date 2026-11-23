@@ -1,0 +1,72 @@
+name: Metrics
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Default to read-only. The commit-to-main step lives in a separate job
+# (`commit`) that grants itself contents: write and runs only when a
+# maintainer dispatches the workflow on main — never on push, so main
+# never gets an automatic bot commit, and never on PR events (which may
+# run PR-modified code). Pushes and PRs run `emit` only.
+permissions:
+  contents: read
+
+jobs:
+  emit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with: { python-version: '3.11' }
+      - name: Emit metrics
+        run: |
+          python3 scripts/emit_metrics.py --commit "${GITHUB_SHA}" --out docs/metrics.json
+      - name: Diff vs committed
+        id: diff
+        run: |
+          if git diff --quiet docs/metrics.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff docs/metrics.json
+          fi
+      - name: Upload as artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metrics
+          path: docs/metrics.json
+
+  commit:
+    # Only a manual run on main refreshes the committed metrics. Push and
+    # PR runs stop after `emit` (diff logged + artifact uploaded).
+    needs: emit
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with: { python-version: '3.11' }
+      - name: Emit metrics
+        run: |
+          python3 scripts/emit_metrics.py --commit "${GITHUB_SHA}" --out docs/metrics.json
+      - name: Commit updated metrics to main
+        run: |
+          if git diff --quiet docs/metrics.json; then
+            echo "No metrics change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/metrics.json
+          git commit -m "chore(metrics): refresh from $GITHUB_SHA"
+          git push

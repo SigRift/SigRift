@@ -1,0 +1,51 @@
+name: CodeQL
+
+on:
+  # Schedule-only — push and PR triggers removed. CodeQL is for
+  # security drift detection (not regression prevention); a weekly
+  # cadence matches how findings are reviewed and saves a few runner
+  # minutes on every push.
+  # Re-add the push/PR triggers temporarily if you need an immediate
+  # signal on a security-sensitive change.
+  schedule:
+    - cron: "23 7 * * 1"   # Mondays 07:23 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # CodeQL uploads results to GitHub Advanced Security, which is
+    # free on public repos and on paid Pro/Team/Enterprise plans. On
+    # Free-plan private repos the upload step always fails with
+    # "Advanced Security must be enabled". Skip the whole job until
+    # the repo flips public (or the org upgrades plan). This same
+    # workflow activates automatically on the first push after the
+    # flip.
+    if: ${{ !github.event.repository.private }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python", "rust"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      # Rust needs an actual build for CodeQL to index it.
+      - name: Autobuild
+        if: matrix.language == 'rust'
+        uses: github/codeql-action/autobuild@v4
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

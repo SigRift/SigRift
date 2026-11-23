@@ -1,0 +1,81 @@
+# Fingerprint allowlist for gitleaks. Every entry is a reviewed test
+# fixture or false positive: test passwords and API keys, sample Fernet
+# and MFA keys, the RFC 6455 example nonce, a truncated PEM stub, and
+# module attribute names. None is a real secret or grants access.
+#
+# Format: <path>:<rule>:<line>, a "global" fingerprint without a commit
+# SHA. CI scans the diff of every commit, so <line> is the line where the
+# fixture was added, in the commit that added it.
+#
+# To add one: run
+#   gitleaks git . --redact --gitleaks-ignore-path /dev/null \
+#     --report-format json --report-path gitleaks.json
+# review each finding, and add <File>:<RuleID>:<StartLine> only for
+# genuine fixtures or false positives.
+
+scripts/tests/test_install_scripts.py:generic-api-key:36
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:770
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:801
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:915
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:940
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:965
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:1029
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:1247
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:2193
+src/gateway/crates/sigrift-gateway-core/src/auth/admin_user_handler.rs:generic-api-key:2668
+src/gateway/crates/sigrift-gateway-core/src/auth/fernet_enc.rs:generic-api-key:572
+src/gateway/crates/sigrift-gateway-core/src/auth/fernet_enc.rs:generic-api-key:908
+src/gateway/crates/sigrift-gateway-core/src/auth/mfa_handler.rs:generic-api-key:983
+src/gateway/crates/sigrift-gateway-core/src/builder.rs:generic-api-key:1608
+src/gateway/crates/sigrift-gateway-core/src/builder.rs:generic-api-key:2174
+src/gateway/crates/sigrift-gateway-core/src/builder.rs:generic-api-key:2666
+src/gateway/crates/sigrift-gateway-core/src/builder.rs:generic-api-key:2776
+src/gateway/crates/sigrift-gateway-core/src/builder.rs:generic-api-key:2797
+src/sigrift/lib/shiny/tests/test_route_auth_matrix.py:generic-api-key:153
+src/sigrift/lib/shiny/tests/test_router_input_validation.py:generic-api-key:44
+tests/bridge/js/dashboard_api_fetch.test.cjs:generic-api-key:49
+tests/bridge/js/dashboard_security.test.cjs:generic-api-key:193
+tests/bridge/test_app_lifespan_security.py:generic-api-key:75
+tests/bridge/test_app_middleware_security.py:generic-api-key:69
+tests/bridge/test_app_middleware_security.py:generic-api-key:83
+tests/bridge/test_auth_router_security.py:generic-api-key:728
+tests/bridge/test_auth_state_store_guards.py:generic-api-key:36
+tests/bridge/test_detection_reporter.py:generic-api-key:65
+tests/bridge/test_detection_reporter.py:generic-api-key:955
+tests/bridge/test_detections_ingest_security.py:generic-api-key:44
+tests/bridge/test_key_role_parity.py:generic-api-key:58
+tests/bridge/test_mfa_key_validation.py:generic-api-key:54
+tests/bridge/test_mfa_key_validation.py:generic-api-key:65
+tests/bridge/test_mfa_key_validation.py:generic-api-key:66
+tests/bridge/test_nodes_alerts_security.py:generic-api-key:41
+tests/bridge/test_p0_security_integration.py:generic-api-key:464
+tests/bridge/test_persistence_merge_guards.py:generic-api-key:50
+tests/bridge/test_persistence_security.py:generic-api-key:44
+tests/bridge/test_proxy_auth.py:generic-api-key:133
+tests/bridge/test_proxy_auth.py:generic-api-key:159
+tests/bridge/test_proxy_auth.py:generic-api-key:261
+tests/bridge/test_proxy_auth.py:generic-api-key:274
+tests/bridge/test_state_utils_security.py:generic-api-key:49
+tests/bridge/test_system_config_security.py:generic-api-key:46
+tests/bridge/test_user_auth.py:generic-api-key:152
+tests/bridge/test_users_storage_security.py:generic-api-key:41
+tests/e2e/test_mfa.py:generic-api-key:33
+tests/e2e/test_security_boundaries.py:generic-api-key:748
+
+# Reported only by gitleaks 8.21.2, the version CI pins
+# (.github/workflows/gitleaks.yml), not by newer releases.
+tests/bridge/js/admin_console_security.test.cjs:private-key:688
+tests/bridge/js/admin_console_security.test.cjs:generic-api-key:1357
+tests/bridge/test_p0_security_integration.py:generic-api-key:488
+tests/bridge/test_p0_security_integration.py:generic-api-key:574
+tests/bridge/test_proxy_auth.py:generic-api-key:138
+tests/bridge/test_proxy_auth.py:generic-api-key:150
+tests/bridge/test_proxy_auth.py:generic-api-key:164
+tests/bridge/test_proxy_auth.py:generic-api-key:182
+tests/bridge/test_proxy_auth.py:generic-api-key:198
+tests/bridge/test_proxy_auth.py:generic-api-key:213
+tests/bridge/test_proxy_auth.py:generic-api-key:226
+tests/bridge/test_proxy_auth.py:generic-api-key:253
+tests/bridge/test_proxy_auth.py:generic-api-key:293
+tests/bridge/test_proxy_auth.py:generic-api-key:318
+tests/bridge/test_proxy_auth.py:generic-api-key:334

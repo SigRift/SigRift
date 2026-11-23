@@ -1,0 +1,588 @@
+name: Release
+
+# Triggers on release tags only — vX.Y.Z and vX.Y.Z-rcN (see `on:`;
+# other v* tags such as v0.1.0-models never start it). Produces:
+#   - Source tarball with SHA-256 checksum
+#   - Multi-arch (linux/amd64 + linux/arm64) GHCR images for both
+#     sigrift-bridge and sigrift-gateway, tagged :<tag> (+ :latest for
+#     final releases; release candidates never move :latest)
+#   - Release tarball: install-release.sh + LICENSE + README-INSTALL.txt
+#     (a single download that brings up the full stack via GHCR pulls),
+#     and install-release.sh on its own
+#   - SBOM (CycloneDX) for the full repository
+#   - cosign keyless signatures (GitHub OIDC) for every artefact
+#   - GitHub Release with everything attached and checksums in body
+#
+# Signing identity: every signature is made by THIS workflow file running
+# for the release tag, i.e. its certificate identity is exactly
+#   https://github.com/<owner>/<repo>/.github/workflows/release.yml@refs/tags/<tag>
+# (issuer https://token.actions.githubusercontent.com). The documented
+# verify commands pin that exact identity. A manual rerun must therefore
+# be dispatched FROM THE TAG ("Use workflow from" → the tag, or
+# `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`); a dispatch
+# from a branch is refused.
+#
+# Tags: ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ — anything else is refused
+# before any job with write access runs. The validated tag reaches later
+# steps through `env:` only, never interpolated into a script.
+#
+# Multi-arch follows the same per-arch + manifest-merge pattern as
+# build-and-push.yml: amd64 builds on ubuntu-latest, arm64 builds on
+# GitHub-hosted ubuntu-24.04-arm by default. A private repo with its own
+# arm64 runner can set the ARM64_RUNNER repo variable to a JSON label
+# array (e.g. ["self-hosted","<label>"]) to use it instead — never do
+# this on a public repo (fork-PR risk).
+
+on:
+  push:
+    # GitHub filter patterns: [0-9] is one digit, + means one or more of
+    # it, and the whole tag must match — the tags resolve-version accepts.
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (for manual reruns) — dispatch the workflow from that same tag"
+        required: true
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+jobs:
+  resolve-version:
+    name: Resolve tag
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      owner: ${{ steps.version.outputs.owner }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # GITHUB_REF_TYPE / GITHUB_REF_NAME: the ref this run is for.
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::release.yml must run for a tag (dispatch it from the tag, not from a branch), so its signatures carry the identity release.yml@refs/tags/<tag>"
+            exit 1
+          fi
+          version="$GITHUB_REF_NAME"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_TAG" != "$version" ]; then
+            echo "::error::input tag does not match the ref the workflow was dispatched from"
+            exit 1
+          fi
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "::error::release tags must look like v1.2.3 or v1.2.3-rc1"
+            exit 1
+          fi
+          prerelease=false
+          [[ "$version" != *-rc* ]] || prerelease=true
+          owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          if ! [[ "$owner" =~ ^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?$ ]]; then
+            echo "::error::unexpected repository owner name"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "owner=$owner"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  coverage-preflight:
+    name: Verify coverage floors for the release commit
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      commit: ${{ steps.coverage.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: coverage
+        # The whole-repository producer deliberately does not exist yet.
+        # Missing evidence blocks release; language reports alone are insufficient.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          python3 scripts/check-release-coverage.py \
+            --repository "$REPOSITORY" --tag "$VERSION" --commit "$COMMIT"
+
+  build-images:
+    name: Build ${{ matrix.component }} (${{ matrix.arch }}) — release
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    needs: [resolve-version, coverage-preflight]
+    permissions:
+      contents: read
+      packages: write        # ghcr push
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: bridge
+            dockerfile: src/sigrift/bridge/Dockerfile
+            image: sigrift-bridge
+            arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - component: bridge
+            dockerfile: src/sigrift/bridge/Dockerfile
+            image: sigrift-bridge
+            arch: arm64
+            platform: linux/arm64
+            runs-on: ${{ vars.ARM64_RUNNER && fromJSON(vars.ARM64_RUNNER) || 'ubuntu-24.04-arm' }}
+          - component: gateway
+            dockerfile: src/gateway/Dockerfile
+            image: sigrift-gateway
+            arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - component: gateway
+            dockerfile: src/gateway/Dockerfile
+            image: sigrift-gateway
+            arch: arm64
+            platform: linux/arm64
+            runs-on: ${{ vars.ARM64_RUNNER && fromJSON(vars.ARM64_RUNNER) || 'ubuntu-24.04-arm' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.coverage-preflight.outputs.commit }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          # Same cache scope as build-and-push.yml, so a release of a
+          # commit that build-and-push already built starts from a warm
+          # cache. Per-arch separation preserved in the scope name — the
+          # amd64 and arm64 legs MUST stay scoped apart because BuildKit
+          # can't share layers across architectures.
+          cache-from: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }},mode=max
+          outputs: type=image,name=ghcr.io/${{ needs.resolve-version.outputs.owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::unexpected digest"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-manifest:
+    name: Merge ${{ matrix.component }} manifest
+    needs: [resolve-version, build-images, verify-release-ref]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write        # ghcr push
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: bridge
+            image: sigrift-bridge
+          - component: gateway
+            image: sigrift-gateway
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.component }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          OWNER: ${{ needs.resolve-version.outputs.owner }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          PRERELEASE: ${{ needs.resolve-version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tags=(-t "ghcr.io/${OWNER}/${IMAGE}:${VERSION}")
+          # Release candidates never become :latest.
+          if [ "$PRERELEASE" != "true" ]; then
+            tags+=(-t "ghcr.io/${OWNER}/${IMAGE}:latest")
+          fi
+          refs=()
+          for d in *; do
+            [[ "$d" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::unexpected digest file"; exit 1; }
+            refs+=("ghcr.io/${OWNER}/${IMAGE}@sha256:${d}")
+          done
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+
+      - name: Inspect manifest
+        env:
+          OWNER: ${{ needs.resolve-version.outputs.owner }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: docker buildx imagetools inspect "ghcr.io/${OWNER}/${IMAGE}:${VERSION}"
+
+  build-tarballs:
+    name: Build release tarballs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [resolve-version, coverage-preflight]
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+      OWNER: ${{ needs.resolve-version.outputs.owner }}
+      REPO: ${{ github.repository }}
+      COMMIT: ${{ needs.coverage-preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.coverage-preflight.outputs.commit }}
+          persist-credentials: false
+
+      # Same pinned toolchain as ci.yml, so the shipped binary is built
+      # with the compiler CI tested. Bump both together.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.97.0
+
+      - name: Verify gateway dependency notices
+        run: python3 scripts/gateway-notices.py --check
+
+      - name: Build Rust gateway binary (linux/amd64)
+        run: cargo build --release --locked -p sigrift-gateway
+
+      - name: Package gateway binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/sigrift-gateway dist/
+          cp LICENSE NOTICE dist/
+          cp licenses/gateway/THIRD-PARTY-NOTICES.txt dist/
+          cp README.md dist/
+          tar -czf "dist/sigrift-gateway-${VERSION}-linux-x86_64.tar.gz" \
+              -C dist sigrift-gateway LICENSE NOTICE THIRD-PARTY-NOTICES.txt README.md
+          rm dist/sigrift-gateway dist/LICENSE dist/NOTICE dist/THIRD-PARTY-NOTICES.txt dist/README.md
+
+      - name: Source archive
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --prefix="sigrift-open-${VERSION}/" \
+              -o "dist/sigrift-open-${VERSION}-source.tar.gz" \
+              "$COMMIT"
+
+      - name: Stage environment-preset bundles
+        # Ship the committed synthetic anomaly-baseline presets as signed
+        # release assets (checksummed + cosigned alongside the tarballs below),
+        # so operators can fetch verified presets without cloning.
+        run: |
+          if compgen -G "src/sigrift/bridge/presets/*.sigrift.tar.gz" > /dev/null; then
+            cp src/sigrift/bridge/presets/*.sigrift.tar.gz dist/
+          fi
+
+      - name: Build install-release tarball
+        # Self-contained installer bundle. Contents:
+        # - install-release.sh — pulls pinned :<tag> images, generates
+        #   secrets + TLS, brings up compose
+        # - VERSION — the tag string (sourced by install-release.sh)
+        # - LICENSE + NOTICE — MIT and third-party attribution information
+        # - THIRD-PARTY-NOTICES.txt — full gateway dependency licence texts
+        # - README-INSTALL.txt — short runbook
+        # install-release.sh is also published on its own (for the
+        # download → verify → run path in its header); SHA256SUMS lists it.
+        run: |
+          set -euo pipefail
+          STAGE="sigrift-${VERSION}"
+          IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
+          mkdir -p "$STAGE"
+          cp scripts/install-release.sh "$STAGE/"
+          chmod +x "$STAGE/install-release.sh"
+          cp scripts/install-release.sh dist/install-release.sh
+          cp LICENSE NOTICE "$STAGE/"
+          cp licenses/gateway/THIRD-PARTY-NOTICES.txt "$STAGE/"
+          printf '%s\n' "$VERSION" > "$STAGE/VERSION"
+          cat > "$STAGE/README-INSTALL.txt" <<EOF
+          SigRift ${VERSION} — release installer
+
+          Prereqs: docker, docker compose plugin, python3, openssl.
+
+          Verify the download BEFORE unpacking it. SHA256SUMS lists every
+          release file and is signed by the release workflow of this tag;
+          check that signature, then the checksum of what you downloaded:
+
+              cosign verify-blob \\
+                --certificate-identity '${IDENTITY}' \\
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+                --signature SHA256SUMS.sig \\
+                --certificate SHA256SUMS.pem \\
+                SHA256SUMS
+              sha256sum --check --ignore-missing SHA256SUMS
+
+          To install (the script is interactive once for the admin password):
+
+              bash install-release.sh
+
+          What it does:
+            1. Writes a pinned docker-compose.yml that pulls
+               ghcr.io/${OWNER}/sigrift-{bridge,gateway}:${VERSION}
+               (multi-arch: linux/amd64 + linux/arm64).
+            2. Generates secrets (BRIDGE_MFA_KEY, BRIDGE_AUDIT_KEY,
+               BRIDGE_MASTER_KEY, UC_PROXY_SECRET) into .env and runs the
+               stack in production mode (BRIDGE_ENV=production).
+            3. Generates a self-signed TLS cert into ./tls/ (renewed by
+               re-running it, or by 'bash install-release.sh --renew-tls').
+            4. docker compose pull && up -d, waits for /health.
+
+          The dashboard is published on 127.0.0.1 only. To reach it from
+          other machines, install with SIGRIFT_BIND=0.0.0.0 (or set it in
+          .env later and run 'docker compose up -d').
+
+          See https://github.com/${REPO}/blob/${VERSION}/INSTALL.md
+          for the full guide.
+          EOF
+          tar -czf "dist/sigrift-${VERSION}.tar.gz" "$STAGE"
+          rm -rf "$STAGE"
+
+      - name: SHA-256 checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- *.tar.gz install-release.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tarballs
+          path: dist/
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [resolve-version, coverage-preflight]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.coverage-preflight.outputs.commit }}
+          persist-credentials: false
+
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  verify-release-ref:
+    name: Recheck source and coverage before release tagging
+    needs: [resolve-version, coverage-preflight, build-images, build-tarballs, sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.coverage-preflight.outputs.commit }}
+          persist-credentials: false
+      - env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          COMMIT: ${{ needs.coverage-preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          python3 scripts/check-release-coverage.py \
+            --repository "$REPOSITORY" --tag "$VERSION" --commit "$COMMIT"
+
+  sign-and-release:
+    name: Sign + create GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [resolve-version, build-tarballs, sbom, merge-manifest, verify-release-ref]
+    permissions:
+      contents: write        # create the draft release
+      id-token: write        # cosign keyless
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+      OWNER: ${{ needs.resolve-version.outputs.owner }}
+      PRERELEASE: ${{ needs.resolve-version.outputs.prerelease }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: tarballs
+          path: dist/
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: sbom
+          path: dist/
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Cosign — sign every artefact (keyless via OIDC)
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *.tar.gz install-release.sh SHA256SUMS sbom.cdx.json; do
+            if [ -f "$f" ]; then
+              cosign sign-blob --yes \
+                --output-signature "${f}.sig" \
+                --output-certificate "${f}.pem" \
+                "$f"
+            fi
+          done
+          ls -la
+
+      - name: Check the signatures against the documented identity
+        # The exact command the docs give users: fails the release if the
+        # signing identity is anything but this workflow at this tag.
+        run: |
+          set -euo pipefail
+          cd dist
+          identity="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
+          for f in SHA256SUMS install-release.sh; do
+            cosign verify-blob \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --signature "${f}.sig" --certificate "${f}.pem" "$f"
+          done
+          sha256sum --check SHA256SUMS
+
+      - name: Draft release notes body
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
+          base="https://github.com/${REPO}/releases/download/${VERSION}"
+          cat > dist/RELEASE_NOTES.md <<EOF
+          # SigRift (community edition) ${VERSION}
+
+          MIT-licensed community edition. See CHANGELOG.md for the detailed
+          change list.
+
+          ## Install
+
+          Download the bundle and the signed checksum list, verify both,
+          then run the installer — never pipe a download into a shell:
+
+          \`\`\`bash
+          for f in sigrift-${VERSION}.tar.gz SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+            curl -fsSLO "${base}/\$f"
+          done
+          cosign verify-blob \\
+            --certificate-identity '${identity}' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --signature SHA256SUMS.sig --certificate SHA256SUMS.pem SHA256SUMS
+          sha256sum --check --ignore-missing SHA256SUMS
+          tar xzf sigrift-${VERSION}.tar.gz
+          cd sigrift-${VERSION}
+          bash install-release.sh
+          \`\`\`
+
+          Pulls multi-arch images (\`linux/amd64\` + \`linux/arm64\`)
+          from GHCR, generates secrets + self-signed TLS, and brings up
+          \`https://localhost:8444/\` in production mode, published on
+          127.0.0.1 only (\`SIGRIFT_BIND=0.0.0.0 bash install-release.sh\`
+          to reach it from other machines).
+
+          ## Artefacts
+          - \`sigrift-${VERSION}.tar.gz\`
+            — install bundle (install-release.sh + VERSION + LICENSE + README-INSTALL.txt)
+          - \`install-release.sh\` — the installer on its own
+          - \`sigrift-gateway-${VERSION}-linux-x86_64.tar.gz\`
+            — standalone gateway binary (linux/amd64 only)
+          - \`sigrift-open-${VERSION}-source.tar.gz\`
+            — source tarball
+          - \`sbom.cdx.json\` — CycloneDX SBOM for the whole repository
+          - \`SHA256SUMS\` — sha256 checksums for every file above but the SBOM
+
+          Every artefact is signed with cosign keyless (GitHub OIDC) by
+          \`.github/workflows/release.yml\` running for tag \`${VERSION}\`.
+          Pin exactly that identity when verifying — a regular expression
+          over the repository URL would also accept signatures made by any
+          other workflow or branch of the repository:
+
+          \`\`\`bash
+          cosign verify-blob \\
+            --certificate-identity '${identity}' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --signature SHA256SUMS.sig \\
+            --certificate SHA256SUMS.pem \\
+            SHA256SUMS
+          \`\`\`
+
+          ## Docker images (multi-arch)
+          \`\`\`
+          docker pull ghcr.io/${OWNER}/sigrift-bridge:${VERSION}
+          docker pull ghcr.io/${OWNER}/sigrift-gateway:${VERSION}
+          \`\`\`
+
+          ## Install (manual)
+          See [INSTALL.md](https://github.com/${REPO}/blob/${VERSION}/INSTALL.md)
+          for the full guide.
+          EOF
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.version }}
+          body_path: dist/RELEASE_NOTES.md
+          draft: true
+          prerelease: ${{ needs.resolve-version.outputs.prerelease == 'true' }}
+          files: |
+            dist/*.tar.gz
+            dist/install-release.sh
+            dist/SHA256SUMS
+            dist/sbom.cdx.json
+            dist/*.sig
+            dist/*.pem
