@@ -1354,7 +1354,7 @@ test('scorer weights: a weight the server names keeps its key, and a failed load
 /* Crypto keys (crypto_admin.js)                                       */
 /* ------------------------------------------------------------------ */
 
-const CRYPTO_KEY = { key_id: '6f1c0f5e-1d1a-4c55-9a43-3c8f7e1b2a90', protocol: 'DMR', label: 'site key', algorithm: 'AES-256-CTR', source: 'manual', key_len: 32, created_at: '2026-11-01T00:00:00Z' };
+const CRYPTO_KEY = { key_id: '6f1c0f5e-1d1a-4c55-9a43-3c8f7e1b2a90', protocol: 'dmr', label: 'site key', algorithm: 'AES-256-CTR', source: 'manual', key_len: 32, created_at: '2026-11-01T00:00:00Z' };
 
 test('crypto keys: listed only when the tab opens; store labels render as text; revoke ids round-trip', async () => {
     const page = await adminPage({
@@ -1465,13 +1465,13 @@ for (const [name, keyName, hex, message] of [
 test('crypto key import sends normalised key material with CSRF and clears it from the form', async () => {
     const page = await adminPage({ routes: { 'POST /api/crypto/keys': () => reply(201, { key_id: MARKUP }) } });
     await page.tab('crypto');
-    page.byId('crypto-import-protocol').value = 'DMR';
+    page.byId('crypto-import-protocol').value = 'dmr';
     page.byId('crypto-import-algorithm').value = 'AES-256-CTR';
     page.byId('crypto-import-name').value = '  site key ';
     page.byId('crypto-import-hex').value = ' 00 11\taa BB\n';
     await page.click(page.byId('crypto-import-btn'));
     const [write] = page.writes();
-    assert.deepEqual(call(write), ['POST', '/api/crypto/keys', { protocol: 'DMR', key_name: 'site key', raw_key_hex: '0011aaBB', algorithm: 'AES-256-CTR' }]);
+    assert.deepEqual(call(write), ['POST', '/api/crypto/keys', { protocol: 'dmr', key_name: 'site key', raw_key_hex: '0011aaBB', algorithm: 'AES-256-CTR' }]);
     assertCookieWrite(write);
     const result = page.byId('crypto-import-result');
     assert.equal(result.textContent, 'Key imported: ' + MARKUP);
@@ -1521,7 +1521,7 @@ test('manual decrypt sends the payload and optional key id with CSRF; results an
     ];
     const page = await adminPage({ routes: { 'POST /api/crypto/decrypt': () => answers.shift() } });
     await page.tab('crypto');
-    page.byId('crypto-decrypt-protocol').value = 'P25';
+    page.byId('crypto-decrypt-protocol').value = 'p25';
     page.byId('crypto-decrypt-payload').value = 'de ad be ef';
     const output = page.byId('crypto-decrypt-output');
     await page.click(page.byId('crypto-decrypt-btn'));
@@ -1536,15 +1536,74 @@ test('manual decrypt sends the payload and optional key id with CSRF; results an
 
     const writes = page.writes();
     assert.deepEqual(writes.map(call), [
-        ['POST', '/api/crypto/decrypt', { protocol: 'P25', payload_hex: 'deadbeef' }],
-        ['POST', '/api/crypto/decrypt', { protocol: 'P25', payload_hex: 'deadbeef', key_id: CRYPTO_KEY.key_id }],
-        ['POST', '/api/crypto/decrypt', { protocol: 'P25', payload_hex: 'deadbeef', key_id: CRYPTO_KEY.key_id }],
+        ['POST', '/api/crypto/decrypt', { protocol: 'p25', payload_hex: 'deadbeef' }],
+        ['POST', '/api/crypto/decrypt', { protocol: 'p25', payload_hex: 'deadbeef', key_id: CRYPTO_KEY.key_id }],
+        ['POST', '/api/crypto/decrypt', { protocol: 'p25', payload_hex: 'deadbeef', key_id: CRYPTO_KEY.key_id }],
     ]);
     writes.forEach(w => assertCookieWrite(w));
 });
 
+// The API matches protocols case-sensitively against the key store's names
+// (tests/bridge/test_console_crypto_protocols.py posts these same options).
+test('crypto forms offer and send the key store protocol names, Meshtastic by default', async () => {
+    const page = await adminPage({
+        routes: {
+            'POST /api/crypto/keys': () => reply(201, { key_id: 'k' }),
+            'POST /api/crypto/decrypt': () => reply(200, { success: false }),
+        },
+    });
+    await page.tab('crypto');
+    const values = id => page.byId(id).options.map(option => option.value);
+    assert.deepEqual(values('crypto-import-protocol'), ['meshtastic', 'dmr', 'p25', 'generic']);
+    assert.deepEqual(values('crypto-decrypt-protocol'), ['meshtastic', 'dmr', 'p25']);
+
+    page.byId('crypto-import-name').value = 'site';
+    page.byId('crypto-import-hex').value = '00ff';
+    await page.click(page.byId('crypto-import-btn'));
+    page.byId('crypto-decrypt-payload').value = 'dead';
+    await page.click(page.byId('crypto-decrypt-btn'));
+    assert.deepEqual(page.writes().map(write => call(write)[2].protocol), ['meshtastic', 'meshtastic']);
+});
+
+test('manual decrypt sends the Meshtastic packet ID and source node as numbers', async () => {
+    const page = await adminPage({ routes: { 'POST /api/crypto/decrypt': () => reply(200, { success: false }) } });
+    await page.tab('crypto');
+    page.byId('crypto-decrypt-payload').value = 'dead';
+    const packet = page.byId('crypto-decrypt-packet-id');
+    const node = page.byId('crypto-decrypt-source-node');
+    for (const [packetText, nodeText] of [['0x0BADF00D', '!a1b2c3d4'], [' 195948557 ', '0XA1B2C3D4'], ['', '  ']]) {
+        packet.value = packetText;
+        node.value = nodeText;
+        await page.click(page.byId('crypto-decrypt-btn'));
+    }
+    assert.deepEqual(page.writes().map(call), [
+        ['POST', '/api/crypto/decrypt', { protocol: 'meshtastic', payload_hex: 'dead', packet_id: 195948557, source_node: 2712847316 }],
+        ['POST', '/api/crypto/decrypt', { protocol: 'meshtastic', payload_hex: 'dead', packet_id: 195948557, source_node: 2712847316 }],
+        ['POST', '/api/crypto/decrypt', { protocol: 'meshtastic', payload_hex: 'dead' }],
+    ]);
+    assert.deepEqual(page.alerts, []);
+});
+
+for (const [name, packetText, nodeText, message] of [
+    ['a packet ID that is not a number', 'abc', '', 'Packet ID must be a number: decimal, 0x hex or !hex'],
+    ['a negative source node', '', '-1', 'Source node must be a number: decimal, 0x hex or !hex'],
+    ['a packet ID past the safe integers', '99999999999999999999', '', 'Packet ID must be a number: decimal, 0x hex or !hex'],
+    ['a bare hex prefix', '0x', '', 'Packet ID must be a number: decimal, 0x hex or !hex'],
+]) {
+    test('manual decrypt refuses ' + name + ' before sending', async () => {
+        const page = await adminPage();
+        await page.tab('crypto');
+        page.byId('crypto-decrypt-payload').value = 'dead';
+        page.byId('crypto-decrypt-packet-id').value = packetText;
+        page.byId('crypto-decrypt-source-node').value = nodeText;
+        await page.click(page.byId('crypto-decrypt-btn'));
+        assert.deepEqual(page.alerts, [message]);
+        assert.deepEqual(page.writes(), []);
+    });
+}
+
 test('crypto keys: sparse records, bodiless replies and unexpected decrypt answers are shown as text', async () => {
-    const sparse = { protocol: 'DMR', label: 'site', algorithm: 'AES-256-CTR' };
+    const sparse = { protocol: 'dmr', label: 'site', algorithm: 'AES-256-CTR' };
     const listings = [{ keys: [{ ...sparse, key_id: 'k1' }, { ...sparse, key_id: 'k2' }] }, { keys: [{ ...sparse, key_id: 'k2' }] }, {}];
     const decrypts = [reply(200, { success: false }), reply(200, { note: MARKUP })];
     const page = await adminPage({
@@ -1559,7 +1618,7 @@ test('crypto keys: sparse records, bodiless replies and unexpected decrypt answe
     await page.tab('crypto');
     const tbody = page.byId('crypto-keys-tbody');
     assert.deepEqual(tbody.querySelector('tr').querySelectorAll('td').slice(0, 5).map(td => td.textContent),
-        ['DMR', 'site', 'AES-256-CTR', 'manual', ' bytes']);
+        ['dmr', 'site', 'AES-256-CTR', 'manual', ' bytes']);
 
     await page.click(tbody.querySelector('[data-revoke="k1"]'));
     assert.deepEqual(tbody.querySelectorAll('[data-revoke]').map(b => b.getAttribute('data-revoke')), ['k2'], 'a 204 reloads the list');

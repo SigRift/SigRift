@@ -149,6 +149,19 @@
 
     // ── Manual Decrypt ─────────────────────────────────────────────
 
+    // The Meshtastic nonce fields: an unsigned number as decimal, 0x hex,
+    // or the !-prefixed hex that Meshtastic uses for node IDs.
+    var NONCE_FIELDS = [
+        ['packet_id', 'crypto-decrypt-packet-id', 'Packet ID'],
+        ['source_node', 'crypto-decrypt-source-node', 'Source node']
+    ];
+
+    function parseUnsigned(text) {
+        if (/^[0-9]+$/.test(text)) return Number(text);
+        var hex = /^(?:0x|!)([0-9a-f]+)$/i.exec(text);
+        return hex ? parseInt(hex[1], 16) : NaN;
+    }
+
     function manualDecrypt() {
         var protocol = document.getElementById('crypto-decrypt-protocol');
         var payload = document.getElementById('crypto-decrypt-payload');
@@ -167,6 +180,17 @@
         };
         if (keyId && keyId.value.trim()) {
             body.key_id = keyId.value.trim();
+        }
+        for (var i = 0; i < NONCE_FIELDS.length; i++) {
+            var input = document.getElementById(NONCE_FIELDS[i][1]);
+            var text = input ? input.value.trim() : '';
+            if (!text) continue;
+            var number = parseUnsigned(text);
+            if (!Number.isSafeInteger(number)) {
+                alert(NONCE_FIELDS[i][2] + ' must be a number: decimal, 0x hex or !hex');
+                return;
+            }
+            body[NONCE_FIELDS[i][0]] = number;
         }
 
         apiFetch(API + '/decrypt', {
