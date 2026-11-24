@@ -1262,7 +1262,7 @@ class PersistenceManager:
                         raise
                     # First save of a new, empty installation only. A later
                     # removed/unreadable authority is not silently recreated.
-                    _atomic_write(path, {"webhooks": []})
+                    _atomic_write(path, {"webhooks": []}, mode=0o600)
                     current = []
                 self._base[name] = copy.deepcopy(current)
                 self._sig[name] = _file_signature(path)
@@ -2049,9 +2049,11 @@ class PersistenceManager:
     def _write_webhooks_authority(self, webhooks: list[dict[str, Any]]) -> None:
         self._validate_webhooks_authority(webhooks)
         path = self._path("webhooks")
+        # Owner-only: the file holds each webhook's HMAC signing secret.
         _atomic_write(
             path,
             {"webhooks": webhooks, "saved_at": datetime.now(timezone.utc).isoformat()},
+            mode=0o600,
         )
         with self._lock:
             self._webhooks = copy.deepcopy(webhooks)

@@ -712,7 +712,10 @@ class _HourlyAccumulator:
             try:
                 anomaly = record.get("anomaly_score", 0.0)
                 if self._journal is not None:
-                    from sigrift.edge.summary_protocol import valid_signal_class
+                    from sigrift.edge.summary_protocol import (
+                        valid_record_id,
+                        valid_signal_class,
+                    )
 
                     # Never durably accept a row that the versioned receiver
                     # cannot acknowledge; an invalid row would pin its hour.
@@ -739,8 +742,7 @@ class _HourlyAccumulator:
                         type(record.get("timestamp")) not in (int, float)
                         or record.get("node_id") != self._node_id
                         or not valid_signal_class(record.get("signal_class"))
-                        or not isinstance(record.get("id"), str)
-                        or not record["id"]
+                        or not valid_record_id(record.get("id"))
                         or any(
                             json.loads(raw)["id"] == record["id"]
                             for raw in bucket["raw"]

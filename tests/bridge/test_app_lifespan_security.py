@@ -415,6 +415,15 @@ def test_disabled_background_tasks_still_get_the_final_save(data, caplog, value)
         assert "bg-off-node" in client.app.state.persistence.get_nodes()
 
 
+def test_short_master_and_scanner_keys_warn_at_startup_without_the_key(data, caplog):
+    master, scanner = "short-master-key-123", "short-node-key"
+    caplog.set_level("WARNING", logger="sigrift.bridge.app")
+    _start(data, BRIDGE_MASTER_KEY=master, BRIDGE_LOCAL_NODE_KEY=scanner)
+    assert "BRIDGE_MASTER_KEY is only 20 characters long" in caplog.text
+    assert "BRIDGE_LOCAL_NODE_KEY is only 14 characters long" in caplog.text
+    assert master not in caplog.text and scanner not in caplog.text
+
+
 def test_shutdown_stops_every_periodic_task_before_the_final_save(data):
     with _booted(
         data, BRIDGE_BACKGROUND_TASKS="true", BRIDGE_BASELINE_SAVE_INTERVAL="900"

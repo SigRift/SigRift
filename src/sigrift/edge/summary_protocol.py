@@ -32,6 +32,16 @@ def valid_signal_class(value):
     )
 
 
+def valid_record_id(value):
+    """Portable counterpart of the detection-id rule the gateway and Bridge
+    apply: ``[a-zA-Z0-9_.:-]{1,128}`` without ``..``."""
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,128}", value) is not None
+        and ".." not in value
+    )
+
+
 def receipt(payload):
     return {
         key: payload[key]
@@ -146,8 +156,7 @@ def validate(payload):
     for raw in payload["high_anomaly_detections"]:
         if (
             not isinstance(raw, dict)
-            or not isinstance(raw.get("id"), str)
-            or not raw["id"]
+            or not valid_record_id(raw.get("id"))
             or raw["id"] in raw_ids
         ):
             raise ValueError("Invalid or duplicate RF raw ID")

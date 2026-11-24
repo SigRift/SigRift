@@ -260,8 +260,14 @@ def delete_floor_plan(
     if plan and plan.get("image_path"):
         try:
             Path(plan["image_path"]).unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            # The plan is still deleted below; say which file stays behind.
+            logger.warning(
+                "Floor plan %r: could not remove its image %s: %s",
+                plan_id,
+                plan["image_path"],
+                exc,
+            )
 
     deleted = store.delete_floor_plan(plan_id)
     if not deleted:

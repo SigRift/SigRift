@@ -104,6 +104,10 @@ async def _validate_webhook_url(url: str) -> str:
 
     try:
         await asyncio.to_thread(_resolve_and_check_ip, parsed.hostname)
+    # UnicodeError is a ValueError subclass (getaddrinfo raises it for an
+    # over-long or empty hostname label), so it must be caught first.
+    except (socket.gaierror, OSError, UnicodeError):
+        raise HTTPException(status_code=400, detail="Cannot resolve hostname")
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -113,8 +117,6 @@ async def _validate_webhook_url(url: str) -> str:
                 f"can allow an internal host with {ALLOW_HOSTS_ENV})"
             ),
         )
-    except (socket.gaierror, OSError, UnicodeError):
-        raise HTTPException(status_code=400, detail="Cannot resolve hostname")
     return url
 
 

@@ -590,18 +590,32 @@ class IQStore:
         """
         cutoff = time.time() - (max_age_days * 86400)
         deleted = 0
+        failed = 0
+        first_error: OSError | None = None
         for path in self._base_dir.glob("*.iq.gz"):
             try:
                 if path.stat().st_mtime < cutoff:
                     path.unlink()
                     deleted += 1
                     self._remove_sidecars(path)
-            except OSError:
-                pass
+            except FileNotFoundError:
+                pass  # removed meanwhile (another purge): nothing to do
+            except OSError as exc:
+                # A purge that cannot delete must not look like "nothing old
+                # enough": count it and say so below.
+                failed += 1
+                first_error = first_error or exc
         self.sweep_orphan_sidecars()
         if deleted > 0:
             logger.info(
                 "IQ cleanup: removed %d files older than %d days", deleted, max_age_days
+            )
+        if failed:
+            logger.warning(
+                "IQ cleanup: could not remove %d files in %s (first error: %s)",
+                failed,
+                self._base_dir,
+                first_error,
             )
         return deleted
 
@@ -612,6 +626,8 @@ class IQStore:
         last minute are left alone (their capture may be mid-``store()``).
         """
         removed = 0
+        failed = 0
+        first_error: OSError | None = None
         grace_cutoff = time.time() - _ORPHAN_GRACE_SECONDS
         for suffix in _SIDECAR_SUFFIXES:
             for sidecar in self._base_dir.glob(f"*{suffix}"):
@@ -623,10 +639,21 @@ class IQStore:
                         continue
                     sidecar.unlink()
                     removed += 1
-                except OSError:
-                    pass
+                except FileNotFoundError:
+                    pass  # removed meanwhile: nothing to do
+                except OSError as exc:
+                    failed += 1
+                    first_error = first_error or exc
         if removed:
             logger.info("IQ cleanup: removed %d orphaned sidecar files", removed)
+        if failed:
+            logger.warning(
+                "IQ cleanup: could not remove %d orphaned sidecar files in %s "
+                "(first error: %s)",
+                failed,
+                self._base_dir,
+                first_error,
+            )
         return removed
 
     @staticmethod

@@ -762,7 +762,7 @@ curl -H "X-API-Key: $KEY" \
 <li><strong>Bulk dismiss resolved:</strong> <code>POST /api/detections/anomalies/bulk/reeval-dismiss</code></li>
 <li><strong>Adjust thresholds:</strong> <code>PUT /api/admin/detection-config</code> to tune <code>wifi_anomaly_alert_threshold</code>, dimension weights</li>
 <li><strong>Whitelist known APs:</strong> Add to WiFi whitelist via admin panel</li>
-<li><strong>Alert cooldown:</strong> Anomaly alerts have a 5-minute cooldown per node+frequency bucket</li>
+<li><strong>Alert cooldown:</strong> Per node and 100&nbsp;kHz frequency bucket, a warning anomaly alert waits 5 minutes after the bucket's last alert and a critical one waits 60 seconds, so a source that stays critical can alert once a minute</li>
 <li><strong>Check learning phase:</strong> A new frequency baseline needs ~300 detections before scoring stabilizes. False positives during learning are dampened but not eliminated.</li>
 </ul>
 

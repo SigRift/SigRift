@@ -259,6 +259,26 @@ def test_decrypt_for_a_protocol_without_keys_is_a_404(client: TestClient) -> Non
     assert resp.json()["detail"] == "No keys available for protocol 'dmr_basic'"
 
 
+def test_an_unknown_protocol_is_logged_as_one_escaped_value(
+    client: TestClient, longfast_id: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A named key lets any protocol string reach try_decrypt, which logs
+    # it; repr keeps a newline in it from starting a forged log line.
+    body = {
+        "payload_hex": "00" * 32,
+        "protocol": "meshtastic\n2026 [ERROR] forged",
+        "key_id": longfast_id,
+    }
+    with caplog.at_level("WARNING", logger="sigrift.lib.crypto.aes_decrypt"):
+        resp = client.post("/api/crypto/decrypt", json=body)
+    assert resp.status_code == 200
+    assert resp.json() == NO_CONFIDENT_KEY
+    [message] = [r.getMessage() for r in caplog.records]
+    assert message == (
+        "Unknown protocol for trial decryption: 'meshtastic\\n2026 [ERROR] forged'"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Role gates
 # ---------------------------------------------------------------------------
