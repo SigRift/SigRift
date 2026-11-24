@@ -40,6 +40,16 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          # Test code is not shipped, and its fixtures (fake keys, secrets
+          # logged by assertions) only raise alerts to dismiss. Leave the
+          # test folders out of the analysis. This covers Python; Rust
+          # unit tests sit in #[cfg(test)] modules inside src/ files,
+          # which a path filter cannot reach, so dismiss those alerts as
+          # "used in tests".
+          config: |
+            paths-ignore:
+              - tests
+              - '**/tests'
 
       # Rust needs an actual build for CodeQL to index it.
       - name: Autobuild
