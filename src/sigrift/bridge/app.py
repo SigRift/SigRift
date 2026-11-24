@@ -960,6 +960,29 @@ class CombinedMiddleware:
 # ---------------------------------------------------------------------------
 
 
+#: Control characters a log line must not carry raw: C0 except tab, DEL,
+#: C1, and the Unicode line and paragraph separators.  Any of them can
+#: start what a terminal or a line-splitting tool shows as a new record.
+_LOG_CONTROL_CHARS = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+class SingleLineFormatter(logging.Formatter):
+    """Text formatter that keeps each log record's message on one line.
+
+    Log messages often include values from requests, edge nodes or radio
+    payloads.  A CR or LF in such a value would start a new line in
+    stdout/journald that looks like a separate, forged record (CWE-117),
+    and an ESC sequence could rewrite the previous line in a terminal.
+    This formatter writes such characters as escapes (``\\n``, ``\\x1b``,
+    ...).  A traceback (``exc_info``/``stack_info``) is appended after the
+    message and keeps its own lines.
+    """
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802
+        line = super().formatMessage(record)
+        return _LOG_CONTROL_CHARS.sub(lambda m: repr(m.group())[1:-1], line)
+
+
 def _ensure_root_log_handler(log_level: str) -> None:
     """Attach a stdout handler to the root logger if none exists.
 
@@ -972,7 +995,9 @@ def _ensure_root_log_handler(log_level: str) -> None:
     logs and won't double-log uvicorn's output.
 
     Idempotent: tagged so repeated calls (or multiple workers in one
-    process) don't stack handlers.
+    process) don't stack handlers.  The handler uses
+    :class:`SingleLineFormatter`, so a logged value cannot forge extra
+    log lines.
     """
     root = logging.getLogger()
     root.setLevel(getattr(logging, log_level, logging.INFO))
@@ -980,13 +1005,38 @@ def _ensure_root_log_handler(log_level: str) -> None:
         return
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(
-        logging.Formatter(
+        SingleLineFormatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S%z",
         )
     )
     handler._sigrift_app_handler = True  # type: ignore[attr-defined]
     root.addHandler(handler)
+
+
+#: Shortest BRIDGE_MASTER_KEY / BRIDGE_LOCAL_NODE_KEY that starts without a
+#: warning.  The installers generate 43 characters (secrets.token_urlsafe(32)).
+_MIN_ENV_KEY_LENGTH = 32
+
+
+def _warn_if_short_env_key(name: str, value: str) -> None:
+    """Warn at startup when an operator-set API key is short.
+
+    keys.json keeps a fast, unsalted SHA-256 lookup hash of every API key
+    next to its PBKDF2 hash.  That is fine for long random keys, but a
+    short or hand-picked key could be guessed from a leaked keys.json.
+    Only the length is logged, never the key.
+    """
+    if value and len(value) < _MIN_ENV_KEY_LENGTH:
+        logger.warning(
+            "%s is only %d characters long. Use at least %d random characters, "
+            'for example python3 -c "import secrets; '
+            'print(secrets.token_urlsafe(32))": a short key can be guessed '
+            "from its lookup hash if keys.json leaks.",
+            name,
+            len(value),
+            _MIN_ENV_KEY_LENGTH,
+        )
 
 
 #: Key id under which releases before 2026-11 *also* stored
@@ -1303,7 +1353,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _data_dir.exists():
         try:
             _data_dir.chmod(0o700)
-            for _secret in ("keys.json", ".mac_secret"):
+            # webhooks.json holds webhook signing secrets; releases up to
+            # v0.1.0 wrote it with the umask mode.
+            for _secret in ("keys.json", ".mac_secret", "webhooks.json"):
                 _sf = _data_dir / _secret
                 if _sf.exists():
                     _sf.chmod(0o600)
@@ -2043,8 +2095,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Set it to a strong random string (e.g. python -c "
             '"import secrets; print(secrets.token_urlsafe(32))")'
         )
+    _warn_if_short_env_key("BRIDGE_MASTER_KEY", env_key)
 
     local_node_key = os.environ.get("BRIDGE_LOCAL_NODE_KEY", "").strip()
+    _warn_if_short_env_key("BRIDGE_LOCAL_NODE_KEY", local_node_key)
     if local_node_key and env_key and local_node_key == env_key:
         # The privileged in-stack scanner containers would hold the admin
         # key, and one credential cannot be registered as two keys.

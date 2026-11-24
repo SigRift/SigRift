@@ -15,6 +15,7 @@ Priority levels:
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,6 +24,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from sigrift.bridge.anomaly.baseline import BaselineManager, FrequencyBaseline
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -903,12 +906,23 @@ class AnomalyScorer:
                 power_dbm=power_dbm,
                 bandwidth_hz=bandwidth_hz,
             )
+            if getattr(self, "_sig_match_failing", False):
+                self._sig_match_failing = False
+                logger.info("Threat-signature matching works again")
             if matches:
                 best = matches[0].get("match_score", 0.0)
                 if best >= 0.3:
                     return min(1.0, best)
         except Exception:
-            pass
+            # Scoring goes on without this dimension, but a lasting failure
+            # must not zero it silently: warn once per failure streak.
+            if not getattr(self, "_sig_match_failing", False):
+                self._sig_match_failing = True
+                logger.warning(
+                    "Threat-signature matching failed; the signature dimension "
+                    "scores 0 until it works again",
+                    exc_info=True,
+                )
         return 0.0
 
     @staticmethod

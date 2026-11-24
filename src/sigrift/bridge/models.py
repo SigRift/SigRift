@@ -107,6 +107,19 @@ class BridgeNodeResponse(NodeResponse):
 # ``validate_signal_class`` / ``validate_backend`` refuse.
 _SIGNAL_CLASS_PATTERN = re.compile(r"[a-zA-Z0-9_/.-]{1,128}")
 _BACKEND_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,32}")
+# The gateway's ``validate_record_id``: detection and batch ids appear in
+# URL paths (``/api/detections/{id}/iq``) and in log lines.
+_RECORD_ID_PATTERN = re.compile(r"[a-zA-Z0-9_.:-]{1,128}")
+
+
+def _validate_record_id(v: str, field: str) -> str:
+    """Accept ``[a-zA-Z0-9_.:-]{1,128}`` without ``..``, as the gateway does.
+
+    An empty id passes, as on the gateway, which replaces it.
+    """
+    if v and (not _RECORD_ID_PATTERN.fullmatch(v) or ".." in v):
+        raise ValueError(f"{field} must match [a-zA-Z0-9_.:-]{{1,128}} without '..'")
+    return v
 
 
 class DetectionRecord(BaseModel):
@@ -149,6 +162,11 @@ class DetectionRecord(BaseModel):
     @classmethod
     def _check_node_id(cls, v: str) -> str:
         return _validate_id(v, "node_id")
+
+    @field_validator("detection_id")
+    @classmethod
+    def _check_detection_id(cls, v: str) -> str:
+        return _validate_record_id(v, "detection_id")
 
     @field_validator("signal_class")
     @classmethod
@@ -209,6 +227,11 @@ class DetectionBatch(BaseModel):
     @classmethod
     def _check_node_id(cls, v: str) -> str:
         return _validate_id(v, "node_id")
+
+    @field_validator("batch_id")
+    @classmethod
+    def _check_batch_id(cls, v: str) -> str:
+        return _validate_record_id(v, "batch_id")
 
 
 class DetectionHourlySummary(BaseModel):

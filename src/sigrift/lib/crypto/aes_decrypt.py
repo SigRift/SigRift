@@ -844,7 +844,7 @@ def try_decrypt(
     """
     decryptor = _PROTOCOL_DECRYPTORS.get(protocol)
     if decryptor is None:
-        logger.warning("Unknown protocol for trial decryption: %s", protocol)
+        logger.warning("Unknown protocol for trial decryption: %r", protocol)
         return None
 
     for key_material, key_id in keys:

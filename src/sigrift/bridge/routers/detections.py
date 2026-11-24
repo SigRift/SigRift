@@ -75,6 +75,9 @@ _get_detection_store = get_detection_store
 _node_batch_count: OrderedDict[str, int] = OrderedDict()
 _NODE_BATCH_MAX_ENTRIES = 10_000
 _ANALYSIS_EVERY_N = 5  # run FHSS + correlation every Nth batch per node
+# Whether the last recent-detections fetch for that analysis failed, so a
+# lasting failure is logged once rather than on every Nth batch.
+_recent_fetch_state = {"failing": False}
 
 
 # ---------------------------------------------------------------------------
@@ -504,19 +507,24 @@ async def _maybe_create_anomaly_alerts(
         bucket = _freq_bucket(freq)
         cooldown_key = (node_id, bucket)
 
+        # Severity first: it decides the cooldown.  A critical alert waits
+        # only the short critical cooldown since the bucket's last alert,
+        # so an earlier warning cannot hold back a critical escalation for
+        # the full warning cooldown.
+        severity = "critical" if score >= critical_threshold else "warning"
+        cooldown = (
+            _ANOMALY_ALERT_COOLDOWN_CRITICAL_SECONDS
+            if severity == "critical"
+            else _ANOMALY_ALERT_COOLDOWN_SECONDS
+        )
+
         # Check cooldown.  A key that never alerted has no cooldown: a
         # 0.0 default would count as "alerted at monotonic 0", i.e. at
         # host boot, and suppress the first alert of every bucket for the
         # first cooldown period after a (re)boot.
         last_alert = app_state.anomaly_alert_cooldowns.get(cooldown_key)
-        if (
-            last_alert is not None
-            and now - last_alert < _ANOMALY_ALERT_COOLDOWN_SECONDS
-        ):
+        if last_alert is not None and now - last_alert < cooldown:
             continue
-
-        # Determine severity
-        severity = "critical" if score >= critical_threshold else "warning"
 
         signal_class = getattr(det, "signal_class", "unknown")
         alert = {
@@ -1139,7 +1147,19 @@ async def post_ingest(
                 limit=500,
             )
         except Exception:
-            pass
+            # FHSS then sees only this batch and correlation is skipped;
+            # warn once per failure streak so that does not go unnoticed.
+            if not _recent_fetch_state["failing"]:
+                _recent_fetch_state["failing"] = True
+                logger.warning(
+                    "Could not load recent detections; FHSS analysis uses only "
+                    "the current batch and correlation is skipped until it works",
+                    exc_info=True,
+                )
+        else:
+            if _recent_fetch_state["failing"]:
+                _recent_fetch_state["failing"] = False
+                logger.info("Loading recent detections works again")
 
         try:
             fhss_detector: FHSSDetector | None = getattr(

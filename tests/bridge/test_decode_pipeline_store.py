@@ -572,8 +572,10 @@ def test_ingest_with_unusable_detection_id_still_succeeds(
     client: TestClient, registered_node: str
 ) -> None:
     # The "is the IQ already stored?" check must not turn an id that cannot
-    # name a capture file into a 500 for the whole batch.
+    # name a capture file into a 500 for the whole batch.  This id passes
+    # the gateway's id rule (ASCII, 120 characters), but its ':' makes the
+    # IQ store hex-encode it, and 240 hex characters are too long.
     batch = _batch(registered_node)
-    batch["detections"][0]["id"] = "é" * 150
+    batch["detections"][0]["id"] = "x:" * 60
     resp = client.post("/api/detections/batch", json=batch)
     assert resp.status_code == 201, resp.text

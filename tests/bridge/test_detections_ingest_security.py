@@ -443,8 +443,9 @@ def test_anomaly_alert_cooldowns_expire_and_are_capped_oldest_first(
         the frequencies that alerted."""
         clock[0] = start + at
         seen = {a["detection_id"] for a in persistence.get_alerts()}
+        # A warning-level score: its cooldown is the 300 s one.
         dets = [
-            {"id": f"{node_id}@{at}:{f}", "anomaly_score": 0.95, "freq_hz": f * 1e6}
+            {"id": f"{node_id}-{at}:{f}", "anomaly_score": 0.75, "freq_hz": f * 1e6}
             for f in mhz
         ]
         resp = client.post("/api/detections/batch", json=_batch(node_id, *dets))
@@ -464,6 +465,74 @@ def test_anomaly_alert_cooldowns_expire_and_are_capped_oldest_first(
     # cap of 2: the oldest (102) goes, so it alerts again; 103 and 104 are
     # still cooling down.
     assert alerted(1350, "n1", 102, 103, 104) == [102]
+
+
+def test_a_warning_cooldown_does_not_hold_back_a_critical_alert(
+    client, persistence, monkeypatch
+):
+    # Critical alerts wait only the 60 s critical cooldown since the
+    # bucket's last alert; warnings wait 300 s, whatever came before.
+    monkeypatch.setattr(
+        detections, "_cooldown_last_evict", detections._cooldown_last_evict
+    )
+    # No FHSS/correlation pass (every 5th batch): it may adjust scores.
+    monkeypatch.setattr(detections, "_ANALYSIS_EVERY_N", 10_000)
+    start = time.monotonic() + 20_000.0
+    clock = [start]
+    monkeypatch.setattr(detections, "time", _FakeTime(monotonic=lambda: clock[0]))
+    _register(client, "n1")
+
+    def alerted(at: int, score: float) -> list[str]:
+        """Ingest one detection at 101 MHz at *at* seconds; return the
+        severities of the alerts it created."""
+        clock[0] = start + at
+        seen = {a["alert_id"] for a in persistence.get_alerts()}
+        det = {"id": f"n1-{at}", "anomaly_score": score, "freq_hz": 101e6}
+        resp = client.post("/api/detections/batch", json=_batch("n1", det))
+        assert resp.status_code == 201, resp.text
+        return [
+            a["severity"] for a in persistence.get_alerts() if a["alert_id"] not in seen
+        ]
+
+    assert alerted(0, 0.75) == ["warning"]
+    assert alerted(30, 0.95) == []  # 30 s after the warning
+    assert alerted(61, 0.95) == ["critical"]  # held back 300 s before
+    assert alerted(100, 0.95) == []  # 39 s after the critical one
+    assert alerted(122, 0.95) == ["critical"]
+    assert alerted(200, 0.75) == []  # a warning still waits 300 s
+
+
+def test_a_failing_recent_detections_fetch_is_logged_once_per_streak(
+    client, registered_node, detection_store, monkeypatch, caplog
+):
+    # FHSS + correlation load the last minute of detections; when that
+    # fails they degrade, which is logged once per failure streak.
+    monkeypatch.setattr(detections, "_ANALYSIS_EVERY_N", 1)
+    monkeypatch.setattr(detections, "_recent_fetch_state", {"failing": False})
+    failing = {"on": False}
+    real_get_recent = detection_store.get_recent
+
+    def get_recent(*args, **kwargs):
+        if failing["on"]:
+            raise RuntimeError("database is locked")
+        return real_get_recent(*args, **kwargs)
+
+    monkeypatch.setattr(detection_store, "get_recent", get_recent)
+    caplog.set_level("INFO", logger="sigrift.bridge.routers.detections")
+    for i, fail in enumerate([True, True, False, True]):
+        failing["on"] = fail
+        resp = client.post(
+            "/api/detections/batch", json=_batch(registered_node, {"id": f"r{i}"})
+        )
+        assert resp.status_code == 201, resp.text
+    messages = [
+        r.getMessage() for r in caplog.records if "recent detections" in r.getMessage()
+    ]
+    warning = (
+        "Could not load recent detections; FHSS analysis uses only the current "
+        "batch and correlation is skipped until it works"
+    )
+    assert messages == [warning, "Loading recent detections works again", warning]
 
 
 def test_confidence_floor_keeps_low_confidence_detections_from_alerting(
