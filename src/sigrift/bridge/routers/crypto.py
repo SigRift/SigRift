@@ -18,6 +18,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Keys are stored under the key store's protocol names ("meshtastic", "dmr",
+# "p25"), which are what the admin console sends, but ``try_decrypt`` names
+# its decryptors differently.  This is the translation the decode pipeline
+# uses (``ProtocolDecodePipeline._try_auto_decrypt``), so a stored key meets
+# the same decryptor on either path.  A name not listed here (a decryptor
+# name, say, with an explicit ``key_id``) is passed through unchanged.
+_DECRYPTOR_FOR_PROTOCOL = {
+    "meshtastic": "meshtastic",
+    "dmr": "dmr_basic",
+    "p25": "p25_phase1",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,7 +73,13 @@ class DecryptRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     payload_hex: str = Field(..., min_length=2, description="Encrypted payload as hex")
-    protocol: str = Field(..., description="Protocol for decryption")
+    protocol: str = Field(
+        ...,
+        description=(
+            "Key-store protocol of the keys to try (meshtastic, dmr, p25); "
+            "only meshtastic can produce a verified decryption"
+        ),
+    )
     key_id: str | None = Field(None, description="Specific key ID to use")
     packet_id: int | None = Field(None, description="Packet ID (for Meshtastic nonce)")
     source_node: int | None = Field(
@@ -186,7 +204,7 @@ def decrypt_payload(
 
     result = try_decrypt(
         ciphertext=ciphertext,
-        protocol=body.protocol,
+        protocol=_DECRYPTOR_FOR_PROTOCOL.get(body.protocol, body.protocol),
         keys=keys,
         **params,
     )
