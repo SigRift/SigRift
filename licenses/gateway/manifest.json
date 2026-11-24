@@ -2,7 +2,7 @@
   "format": 1,
   "generator": "cargo-about 0.9.3",
   "inputs": {
-    "Cargo.lock": "405d7962ce47af79fe4d5fd4558f83ddaba891a51db2a24647021ed1ad08ecaf",
+    "Cargo.lock": "d4f22c4d03521dcfe5164a2ef91c7bd072298219452726846b870f19ed2fd032",
     "Cargo.toml": "4d34f75ef8d75e3128a378848231e143260e32a3cfba8f37214cc39bd5a815ee",
     "LICENSE": "37f7d24c512ed525df70a3dbc9b2cb0434865cd9e58c86aa812eccb48556d3f0",
     "licenses/gateway/about.hbs": "7a16a8f6f3ad4a1f3c46f06e23221fd49752e97048fd4c3594754946287ff330",
@@ -12,6 +12,6 @@
     "src/gateway/crates/sigrift-gateway/Cargo.toml": "892ccf4990e91b6f54619baa9b3862a277780367136fcd35472273ad87b88778"
   },
   "output": {
-    "licenses/gateway/THIRD-PARTY-NOTICES.txt": "a4eaa287175170e3ed3bd32318deafa6b004c5b0a21ec9b7f193a7347e13a562"
+    "licenses/gateway/THIRD-PARTY-NOTICES.txt": "a03951f36de4ff751136b73cbdf514ae43787dc982a1215610d472718dac8e5c"
   }
 }
