@@ -8,6 +8,7 @@ name: CI
 # release.yml's coverage preflight refuses to release such a commit.
 # A fix commit meant for release should also touch this file: it is in the
 # `python` and `rust` filters, so its push runs every job the preflight needs.
+# That includes Cargo.lock-only bumps, which on their own match only `rust`.
 on:
   push:
     branches: [main]
