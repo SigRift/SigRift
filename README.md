@@ -9,6 +9,7 @@
 [![Latest release](https://img.shields.io/github/v/release/SigRift/SigRift?sort=semver&label=release)](https://github.com/SigRift/SigRift/releases)
 [![Platforms](https://img.shields.io/badge/platforms-linux%2Famd64%20%7C%20linux%2Farm64-informational)](https://github.com/orgs/SigRift/packages?repo_name=SigRift)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Pi 5 soak](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSigRift%2FSigRift%2Fmain%2Fdocs%2Fbadges%2Fhardware-soak.json)](INSTALL.md#hardware-support)
 
 **Find devices hiding in your spectrum.** SigRift is a self-hosted RF/TSCM
 platform — RTL-SDR, HackRF and USRP hardware feed a multi-node
