@@ -86,6 +86,11 @@ def stamp(installer: Path, release: str) -> None:
                                       % release))
 
 
+# An empty -wal holds no data: whether a reader leaves one behind depends on
+# which other connections are open, so a digest ignores it like the -shm.
+EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
 class World:
     """One fake host, built once per worker and restored for every test."""
 
@@ -148,7 +153,7 @@ class World:
         (but SQLite's shared-memory index, which every reader rewrites)."""
         out = tree_digest(self.d, self.vol(), self.vol("bridge_secrets"))
         return dict((k, v) for k, v in out.items() if "/.sigrift/" not in k
-                    and not k.endswith("-shm"))
+                    and not k.endswith("-shm") and not (k.endswith("-wal") and v[0] == EMPTY))
 
     def replaced(self) -> dict:
         return dict((v, sorted(p.name for p in self.vol(v).glob(".sigrift-replaced-*")))

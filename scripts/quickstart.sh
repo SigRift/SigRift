@@ -4274,7 +4274,8 @@ def cmd_lock_owner(argv):
             pass
         return
     ensure_state_dir(d)
-    write_json(path, {"pid": int(a.get("pid") or os.getppid()), "op": a.get("op", ""),
+    lock_pid = int(a.get("pid") or os.getppid())
+    write_json(path, {"pid": lock_pid, "pid_start": proc_start(lock_pid), "op": a.get("op", ""),
                       "started_at": now_utc(), "log": a.get("log", "")})
 
 
@@ -4534,6 +4535,7 @@ def cmd_journal_set(argv):
             j[k] = v
         elif k == "pid" and v.isdigit():
             j[k] = int(v)
+            j["pid_start"] = proc_start(int(v))
         else:
             j[k] = journal_value(v)
     journal_save(d, j)
@@ -4706,7 +4708,7 @@ def cmd_renew_check(argv):
         return
     state = j.get("state")
     pid = j.get("pid")
-    if state == "running" and isinstance(pid, int) and alive(pid):
+    if state == "running" and isinstance(pid, int) and alive(pid, j.get("pid_start")):
         say("defer an upgrade is running")
         return
     if state == "verify_failed":
@@ -5352,14 +5354,66 @@ def cmd_setsid_exec(argv):
     say(str(pid))
 
 
-def alive(pid):
+def proc_start(pid):
+    """An identity of a live pid that changes when the pid is reused: the
+    boot id and start time on Linux, ps's start time elsewhere. None when it
+    cannot be read."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            stat = f.read().decode("ascii", "replace")
+        start = stat.rsplit(")", 1)[1].split()[19]  # field 22, starttime
+        try:
+            with open("/proc/sys/kernel/random/boot_id") as f:
+                boot = f.read().strip()
+        except OSError:
+            boot = ""
+        return "linux:%s:%s" % (boot, start)
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        import subprocess
+        r = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))],
+                           capture_output=True, text=True, timeout=5)
+        out = r.stdout.strip()
+        return "ps:" + out if r.returncode == 0 and out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def alive(pid, start=None):
+    """Whether pid runs. With start (from proc_start when the pid was
+    recorded), a pid that now belongs to another process (reused after the
+    child ended, or after a reboot) is not alive. Unknown counts as alive."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        pass
+    if proc_zombie(pid):
+        return False
+    if start:
+        now = proc_start(pid)
+        if now is not None and now != start:
+            return False
     return True
+
+
+def proc_zombie(pid):
+    """An ended process its parent has not reaped yet (state Z or X). It still
+    answers kill(pid, 0), and in a container its orphans may never be reaped."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            return f.read().decode("ascii", "replace").rsplit(")", 1)[1].split()[0] in ("Z", "X")
+    except (OSError, IndexError):
+        pass
+    try:
+        import subprocess
+        r = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))],
+                           capture_output=True, text=True, timeout=5)
+        return r.returncode == 0 and r.stdout.strip().startswith("Z")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
 
 
 def cmd_follow(argv):
@@ -5703,7 +5757,7 @@ def cmd_status(argv):
     if j:
         frm, to, state = j.get("from_version"), j.get("to_version"), j.get("state")
         pid = j.get("pid")
-        pid_alive = isinstance(pid, int) and alive(pid)
+        pid_alive = isinstance(pid, int) and alive(pid, j.get("pid_start"))
         if state == "done":
             what = "done at %s" % (j.get("finished_at") or j.get("updated_at"))
         elif state == "aborted":
@@ -6236,7 +6290,7 @@ def op_running(d, j=None):
     journal is active)."""
     owner = read_json(os.path.join(d, LOCK_OWNER)) or {}
     pid = owner.get("pid")
-    if isinstance(pid, int) and pid > 0 and alive(pid):
+    if isinstance(pid, int) and pid > 0 and alive(pid, owner.get("pid_start")):
         return True
     j = j if j is not None else journal_load(d)
     return journal_active(j)
