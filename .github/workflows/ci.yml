@@ -176,9 +176,11 @@ jobs:
           COVERAGE_FILE: .coverage.scripts
         run: |
           python3 scripts/gateway-notices.py --check
+          # Parallel since Phase 1b (restore points and rollback): run
+          # serially the step passed its 20 minutes (phase1b-spec 11).
           python3 -m pytest scripts/tests tests/docs/test_license_packaging.py \
             tests/docs/test_changelog_unreleased.py -q -p no:cacheprovider \
-            --cov --cov-branch --cov-report=
+            -n auto --dist loadgroup --cov --cov-branch --cov-report=
 
       - name: Record script coverage provenance
         if: always()

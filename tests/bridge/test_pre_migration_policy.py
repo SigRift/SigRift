@@ -87,6 +87,15 @@ def has_probe_table(db: Path) -> bool:
         conn.close()
 
 
+
+def logged(caplog: pytest.LogCaptureFixture) -> str:
+    """The captured messages, independent of the handler's formatter.
+
+    Another test can leave a JSON formatter on the handlers, which escapes
+    non-ASCII text (the em dash) in caplog.text; the messages never change.
+    """
+    return "\n".join(r.getMessage() for r in caplog.records)
+
 def test_a_failed_copy_stops_the_upgrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -125,7 +134,7 @@ def test_the_override_migrates_without_a_copy(
     assert (
         "applying 1 pending migration(s) WITHOUT a recovery copy because "
         f"{ALLOW} is set"
-    ) in caplog.text
+    ) in logged(caplog)
     assert list(tmp_path.glob("detections.db.pre-migration*")) == []
 
 
@@ -154,7 +163,7 @@ def test_the_override_also_covers_a_driver_without_the_backup_api(
         with caplog.at_level(logging.WARNING, logger="sigrift.bridge.storage.base"):
             ctx._run_migrations(_WithoutBackup(ctx.get_conn()))
         assert PROBE[0] in applied(Path(ctx.db_path))
-        assert "lacks the online backup API — applying 1" in caplog.text
+        assert "lacks the online backup API — applying 1" in logged(caplog)
     finally:
         ctx.close()
 
@@ -196,8 +205,8 @@ def test_after_a_successful_upgrade_the_copy_is_kept(
         ).fetchone() == (0,)
     finally:
         restored.close()
-    assert f"Pre-migration backup kept: {copy} (" in caplog.text
-    assert "removed automatically 7 days after it was made" in caplog.text
+    assert f"Pre-migration backup kept: {copy} (" in logged(caplog)
+    assert "removed automatically 7 days after it was made" in logged(caplog)
 
 
 def test_low_free_space_removes_the_copy(
@@ -226,7 +235,7 @@ def test_a_disk_80_percent_used_removes_the_copy(
     with caplog.at_level(logging.WARNING, logger="sigrift.bridge.storage.base"):
         SharedContext(db).close()
     assert not Path(str(db) + ".pre-migration").exists()
-    assert "the disk would be 80% used; it is kept only below 80%" in caplog.text
+    assert "the disk would be 80% used; it is kept only below 80%" in logged(caplog)
 
 
 def test_a_database_larger_than_1_gb_needs_its_own_size_free(tmp_path: Path, monkeypatch) -> None:
@@ -463,7 +472,7 @@ def test_a_failing_sweep_never_stops_the_cleanup_loop(
     ctx = SimpleNamespace(sweep_migration_leftovers=broken)
     with caplog.at_level(logging.WARNING, logger="sigrift.bridge.app"):
         asyncio.run(app_module._sweep_migration_leftovers(SimpleNamespace(_ctx=ctx)))
-    assert "Migration leftover sweep failed: disk I/O error" in caplog.text
+    assert "Migration leftover sweep failed: disk I/O error" in logged(caplog)
 
 
 def test_health_warns_while_the_override_is_set(

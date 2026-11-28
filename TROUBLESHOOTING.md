@@ -347,9 +347,214 @@ A `.sigrift-restore-incomplete` marker at the root of the `bridge_data`
 or `bridge_secrets` volume (reported by `--status`) means a restore was
 interrupted and the data is half restored. The installers refuse to
 start a stack on it, and so does the bridge. The installer creates and
-removes it: resume the operation that wrote it, or restore again; remove
-it by hand only if you restored that volume yourself and know the
+removes it: resume the operation that wrote it, or undo it; see
+[A rollback was interrupted](#a-rollback-was-interrupted--the-bridge-says-restore-incomplete).
+Remove it by hand only if you restored that volume yourself and know the
 restore is complete.
+
+---
+
+## An upgrade "was rolled back automatically" (exit 5)
+
+The new version's bridge or gateway never became healthy, and nothing
+had arrived since the restore point the upgrade took (checked live, and
+again with the stack stopped), so the installer put that restore point
+back by itself: the previous version is up and passed its checks. What it
+left:
+
+- `.sigrift/logs/failed-<id>/`: the failed start's `docker compose ps`,
+  the last 5000 lines of the bridge and gateway logs, their health checks
+  and the counts it compared. **These logs hold client addresses,
+  usernames and node ids**: read them before attaching them to an issue,
+  or send them privately ([SECURITY.md](SECURITY.md));
+- `.sigrift-replaced-<id>/` in each data volume: the failed version's data
+  as it was. It is removed by `bash install-release.sh --rollback --finish`
+  or by the next upgrade that succeeds.
+
+Fix the cause (often the logs say it: a setting, the disk, the image), then
+upgrade again as before. To keep a failed upgrade for debugging instead,
+upgrade with `--no-auto-rollback`.
+
+---
+
+## An upgrade failed and was not rolled back (exit 4)
+
+The new version did not become healthy, and the installer left it as it
+was found, for one of these reasons (the message names it):
+
+- **the gateway reported healthy** at some point: the new version served,
+  so it may have taken data;
+- **the gateway ran while no installer watched it** (a power loss or a
+  killed run during the start): whether it was healthy is unknown;
+- **data arrived after the restore point**, or **while it was being
+  checked** (the stack was then started again as it was): a rollback would
+  discard it;
+- **`--no-auto-rollback` was given**, or **its automatic rollback was
+  aborted**;
+- **this upgrade took no restore point** (`--no-snapshot`);
+- **restore point … is damaged**: see `bash install-release.sh
+  --list-snapshots --verify`;
+- **not enough room to stage restore point …**: free space in the Docker
+  volume filesystem (`--rollback --finish` removes copies kept by earlier
+  rollbacks);
+- **the database is encrypted**: the installer cannot tell whether data
+  arrived;
+- **the old images are not on this host**.
+
+Then either fix the cause and `bash install-release.sh --resume` (the
+start is tried again; a new failure decides again, and never rolls back
+by itself after `--no-auto-rollback` or an aborted automatic rollback), or
+roll back by hand: `bash install-release.sh --rollback --dry-run` shows
+what it would discard, and `bash install-release.sh --rollback` (with
+`--confirm <old version>` when it discards something) does it.
+
+---
+
+## Not enough disk space for a restore point
+
+An upgrade (or `--snapshot`) refuses, changing nothing, when the full
+restore point and a reserve of free space do not fit (`df -h` shows the
+filesystems; on a Pi, `/home` and Docker's data are usually one). It
+already removed what it may remove by itself (older upgrade restore
+points, a covered `detections.db.pre-migration`). The message lists each
+of these with its size; `Next:` is the first that alone is enough:
+
+- `bash install-release.sh --rollback --finish`: removes the copies a
+  rollback kept (`.sigrift-replaced-*`);
+- `--exclude iq,pcap`: leaves captures out of the restore point (they stay
+  in place; a rollback to it then keeps the current ones);
+- a manual restore point you no longer need: `rm -rf` the path it names;
+- `SIGRIFT_SNAPSHOT_DIR=/path/on/a/bigger/disk`: a folder of your own,
+  mode 0700 (refused when others can write it or a folder above it, or
+  when it lies in `tls/`, `.sigrift/held/` or Docker's data folder).
+
+`SIGRIFT_SNAPSHOT_RESERVE` (bytes, `500M`, `2G`) changes the reserve; the
+default is 1 GiB or 5 % of the filesystem. A rollback needs room to stage
+the restore point in the Docker volume filesystem instead.
+
+---
+
+## A rollback is refused: RF summary rows differ
+
+The RF summary tables (`rf_summary_streams`, `_generations`,
+`_components`) changed since the restore point, so restoring the
+database would make the summary-mode edge nodes' journals disagree with
+this server (the message names them). Repairing forward keeps them
+consistent ([docs/rf-summary-recovery.md](docs/rf-summary-recovery.md),
+"Downgrade restriction"). To roll back anyway, accept the reset and
+confirm: `bash install-release.sh --rollback <id> --accept-summary-reset
+--confirm <version>`; then those nodes need that document's recovery. A
+restore point from before the RF summary tables existed is never restored
+over a database that has summary rows.
+
+---
+
+## A rollback was interrupted / the bridge says "restore incomplete"
+
+The bridge logs `FATAL: restore incomplete — refusing to start: …
+.sigrift-restore-incomplete exists` while a rollback has the data half
+swapped. Ask the installer where it stands, in the install folder:
+
+```bash
+bash install-release.sh --status
+```
+
+Then follow it (`--resume` or `--abort`):
+
+- `bash install-release.sh --resume` goes on with the rollback from the
+  step it stopped at; every step is safe to repeat, and the swap continues
+  from where each volume's phase file says it stands;
+- `bash install-release.sh --abort` undoes it: the swap is reversed, every
+  file of the files-only restore point the rollback took first is put
+  back, the marker is removed and the version from before starts again.
+  Once the rolled-back bridge has started this needs `--confirm <that
+  version>`: what the restored version wrote since is discarded.
+
+The undo is journaled too (`--status` says `undo … stopped at ab-…` and
+the journal's state is `aborting`). A killed undo goes on with `--resume`
+or `--abort`, and is never resumed as the rollback it was undoing.
+
+A source checkout (`scripts/quickstart.sh`) writes no marker in this
+release (its restore points come later), and its `--status` named in the
+bridge's line does not exist yet: a marker there was left by a restore
+done by hand, see [A restore marker without a journal](#a-restore-marker-without-a-journal).
+
+Only the bridge checks the marker; the gateway does not. While a marker
+exists, never `docker start` a stopped container of this stack and never
+run the held compose file (`docker compose -f .sigrift/held/docker-compose.yml
+up`) by hand: either would start a container on half-restored data.
+
+---
+
+## A rollback cannot read keys.json, the registry or webhooks.json
+
+To keep the revocations made since the restore point (revoked API keys and
+certificates, disabled users and webhooks), a rollback reads the current
+`keys.json` (or its `.bak`), `ca/registry.json`, the CA files,
+`webhooks.json` and the database. When one cannot be read it refuses: a
+rollback without them could re-enable a revoked credential. Repair the
+file first: `keys.json.bak` beside it, a learned-state bundle or a backup
+(the bridge leaves `keys.json.corrupt-<time>` copies it could not parse).
+Only when you accept that everything revoked since the restore point works
+again, roll back with `--no-carry-revocations --confirm <version>`; its
+plan lists what comes back under `COMES BACK`. Sessions are ended either
+way.
+
+---
+
+## A rollback asks for --revert-credentials
+
+Passwords, TOTP secrets, MFA enrolment, webhook URLs and signing secrets
+changed since the restore point are not carried forward (only changes that
+take access away are): after the rollback the old values work again. The
+refusal names whose. To roll back anyway, add `--revert-credentials` (and
+`--confirm <version>` without a terminal); afterwards ask those users to
+change their password or enrol TOTP again, and set the webhook secrets
+again. A newer restore point (`--rollback <id>`, see `--list-snapshots`)
+may avoid it. A credential that changes while the rollback runs stops it
+after the stop, even with `--confirm`: the confirmation covers only what
+the plan showed.
+
+---
+
+## .sigrift-replaced-* or .sigrift-restore-* in a data volume
+
+`.sigrift-replaced-<id>/` holds the data a rollback replaced (the version
+before it, or the failed upgrade's), kept so you can still get it back by
+hand. It doubles that disk use until `bash install-release.sh --rollback
+--finish` or the next upgrade that succeeds removes it; the bridge's
+disk-usage warning may count it meanwhile. `.sigrift-restore-<id>/` is a
+restore point being staged by a rollback; a leftover one belongs to an
+interrupted rollback (`--status`). An upgrade or rollback refuses while a
+staging directory, or a replaced copy that is not finished, exists that no
+journal names ("from an earlier restore that no journal here names").
+
+---
+
+## A restore marker without a journal
+
+`--status` reports `RESTORE INCOMPLETE` but no rollback journal names the
+marker (`.sigrift/journal.json` was removed, or the install folder was
+restored from a backup). Stop and ask before you change anything: the
+data may be half swapped. The phase file `.sigrift-phase` inside each
+`.sigrift-replaced-<id>/` says where each volume's swap stood (`out`,
+`out-done`, `in-done`, `kept-done`, `done`, or `undo-*` during an undo).
+With the stack stopped, a volume in phase `done` holds the restored data
+and the replaced copy beside it; one in an earlier phase still needs its
+entries moved back from the replaced copy. Only once both volumes hold
+one consistent tree, remove `.sigrift-restore-incomplete` from both.
+
+---
+
+## The database fails its integrity check
+
+An upgrade stopped before it changed anything because `PRAGMA
+quick_check` found problems in `detections.db`; every file is back and the
+old version runs again. Do not upgrade a damaged database. Look at the
+bridge's log (`docker compose logs --tail=50 bridge`), restore the
+database from a backup or a learned-state bundle (or rebuild it with the
+SQLite `.recover` command on a copy, with the stack stopped), then upgrade
+again.
 
 ---
 
@@ -837,6 +1042,101 @@ receiver's absolute levels differ. The baseline EWMAs re-adapt with a
 anomalies. It settles on its own as real detections flow — no action
 needed unless it persists well past a few hundred detections per
 active frequency bin.
+
+---
+
+## Archives: `--export` and `--import` errors
+
+| Message begins | What it means | What to try |
+|---|---|---|
+| `... is not a SigRift archive` | the file does not start with `SIGRIFT-ARCHIVE` | name the `.sigrift-archive` file |
+| `... is archive format N` | a newer SigRift wrote it | import with the newest release's installer |
+| `the header of ... is damaged` | a flipped bit or an incomplete copy | `sha256sum FILE` against the sha256 the export printed; copy it again |
+| `... asks for Argon2id with ...` | parameters this release does not accept (refused before any key is derived) | export again with this release |
+| `the passphrase does not open ...` | wrong passphrase (or a header changed on purpose) | try again; a lost passphrase is a lost archive |
+| `the header of ... fails authentication although the passphrase is right` | altered after it was written | use another copy |
+| `... is N bytes shorter / longer than its header says` | cut off, or something appended | copy it again, then `sha256sum` |
+| `segment i of n ... fails authentication` / `holds the data of segment j` / `ends after segment i` / `has N bytes after its last segment` / `the content of ... is not what its header lists` | a damaged, reordered, truncated or forged copy, found while staging; everything the import made was removed | use another copy |
+| `... is archive XXXX, not YYYY` | `--expect` names another (newer) archive | import the file the export printed that value for |
+| `the bridge image ... has no cryptography package` | a damaged or old local image | `docker pull` the release image (or `docker compose build bridge`) |
+| `--export needs a passphrase` / `the passphrase must be 12 to 1024 characters` / `the two passphrases differed` / `the passphrase holds a control ...` / `is too easy to guess` / `the passphrase file ... is not yours` / `is not valid UTF-8` | the passphrase rules of INSTALL.md, "Archives and passphrases" | `chmod 600` the passphrase file, or press Enter at the prompt for a generated one |
+| `... exists; an export never overwrites a file` / `cannot be written there` / `FAT32 holds at most 4 GiB - 1 per file` | the place of FILE | another file name; a directory only you can write; exFAT or ext4 for a large archive, or `--exclude iq,pcap` |
+| `the archive key file of this export/import ... is damaged` | `archive.key` in the state directory was changed or truncated | `--abort`, then the command again |
+| `... is open to group or others` / `is not owned by you` (state directory) | the state directory must be yours and 0700 | `chmod 700` it |
+| `writing ... failed` / `the written file does not verify` | a full or faulty medium; the stack runs again | free space or use another medium, then `--resume` |
+
+## Importing an archive
+
+Every refusal below happens before the import changes anything (it ends
+with `Nothing was changed.`), except the ones marked *late*: those come
+after staging began, and the import has already removed what it made (the
+staging, the volumes it created, the files it wrote, the archive key and
+the decrypted files) before it says so.
+
+| Message begins | What it means | What to try |
+|---|---|---|
+| `the archive's .env cannot be read the way Docker Compose reads it` | the archive's `.env` has a line Compose reads differently from SigRift (an odd quote, a bad continuation) | fix that line in the source's `.env` and export again |
+| `the archive's .env lacks BRIDGE_MFA_KEY` (or `BRIDGE_AUDIT_KEY`), `which production needs while data depends on them` | a source (quickstart) install going to a release install: TOTP secrets or an audit chain depend on a key the source `.env` does not have | put the key the source install used into its `.env` (the running bridge's value), then export again |
+| `the archive's .env audit key cannot be written so that the bridge and the gateway read the same bytes` | the audit secret holds a quote, a line break or edge whitespace that the two readers would trim differently | give the source install a plain `BRIDGE_AUDIT_KEY` (its own value, so the chain still verifies), then export again |
+| `the archive's .env does not match its own data` (*late*) | the export was made from a `.env` that the running bridge did not use (M-IMPORT-KEYS) | export again after `bash install-release.sh` (or `scripts/quickstart.sh`) has checked that install |
+| `the installer could not read the staged data` / `could not check the current data before replacing it` (*late*) | the target image could not read the staged copy, or the current data of a `--replace` | `docker compose logs`, free space, then the import again |
+| `the install this archive came from (...) runs on this host` | the same install runs here, so the import would make a second live gateway of it (M-IMPORT-SAME-RUNNING) | `--export FILE --move` in that folder first, then import that archive |
+| `the install this archive came from is on this host (..., stopped) and was not moved into this archive` | M-IMPORT-SAME-INSTALL: a second copy of one install | `--export FILE --move` in that folder, then import the new archive |
+| `archive XXXXXXXX was already imported here` | M-IMPORT-AGAIN | `--import FILE --replace` in that folder, if replacing it is what you want |
+| `project ... already has volumes on this host` | M-IMPORT-PROJECT-TAKEN | the `--project <name>-N` its Next line names |
+| `port N (the archive's) is in use` | M-IMPORT-PORT-BUSY: edges dial the archive's port | stop what holds it, or `UC_PORT=<free port>` (then re-point the edges) |
+| `the archive binds the dashboard to ...` | M-IMPORT-BIND: `SIGRIFT_BIND` names an address of the old host | `SIGRIFT_BIND=<an address of this host>` |
+| `the archive's database is encrypted` | M-IMPORT-UNVERIFIED: its audit chain, keys and summaries cannot be checked | `--accept-unverified` if you accept that |
+| `the install this archive came from still answers at ... with the same certificate` | M-IMPORT-SOURCE-LIVE: the old gateway is up | stop it (or `--export --move` there); `--allow-live-source` only if two gateways is what you want |
+| `the archive is schema N, newer than this installer's bridge` / `the archive is vX, newer than this installer's release` | a newer SigRift made it | import with the newest release's installer |
+| `... already holds ... with data; --import fills an empty install` | M-IMPORT-NOT-EMPTY | an empty folder, or `--replace` (a pre-import restore point keeps the current data) |
+| `... was moved to another host on ...` | M-MOVED-HERE: this folder was moved; an import here needs `--replace` and an archive of the same install | see "The folder says it was moved" |
+| `... (in ...), the same install ..., runs on this host; reactivating here would start a second live gateway` | `--reactivate` while the imported copy runs on this host (a same-host switch) | `--export FILE --move` in that copy's folder, then `--reactivate` here |
+| `the current data and the archive each hold audit entries the other lacks` (`--replace`; *late* when found in the staged copy) | the two copies of the install parted: both changed after a common point, so neither is an older copy of the other | decide which copy to keep. To take the archive's data as it is: the command again with `--no-carry-revocations` (typed confirmation); to keep the current data, export it again instead |
+| `the installer cannot tell whether the current data or the archive is the newer copy` (`--replace`) | an audit chain is missing or unreadable on one side: an empty or unreadable audit log, a head entry without a chain value, an archive without its head's chain value | `--no-carry-revocations` if the archive's data as it is, is what you want |
+| `the current data revoked, disabled or deleted N API keys (...) ... that the archive still has, and no audit entry records it` (`--replace`; *late* when found after the plan) | the bridge revokes API keys, client certificates and protocol keys without an audit entry, so the chains cannot say which copy is newer for them, and importing the archive as it is would make them work again (M-IMPORT-UNRECORDED) | keep the current data (export it again, or do not replace); or `--no-carry-revocations` (typed confirmation), then revoke them again |
+| `the current ... cannot be read, so the import cannot check what was revoked or deleted here without an audit entry` | keys.json, the registry, the CA files or webhooks.json of the current data cannot be read, so nothing revoked here could be seen | repair it (see "A rollback cannot read keys.json, the registry or webhooks.json"), or `--no-carry-revocations` |
+| `the staged copy's audit head is not the archive's` / `the staged copy's audit head entry is not the one the archive's manifest names` (*late*) | the staged data does not end at the audit entry the archive's manifest names | the import again; if it repeats, export the archive again |
+| `the current data changed after the import was planned` (*late*) | the relation found once the stack was stopped is not the one the plan showed | the import again; `--dry-run` shows the new plan |
+| `the plan did not show all of it ... started without a confirmation` / `something the plan did not show would come back` (*late*) | the current stack wrote data (or changed a credential) while the import staged, or the staged copy showed rows the current data has and the archive lacks (both copies wrote after they parted); the confirmation covered only what the plan listed | `--confirm <project>` (or type it), after a `--dry-run` |
+| `this import would bring back credentials changed here since` | the current data is newer and a password, TOTP or webhook secret changed here since the archive was made; the archive's value would work again | ask the users to change it again afterwards and add `--revert-credentials`, or export a newer archive |
+| `the RF summary rows changed here since` | the current data is newer and summary-mode nodes sent rows the archive lacks | `--accept-summary-reset`, then docs/rf-summary-recovery.md for those nodes |
+| `the current ... cannot be read, so the import cannot carry the revocations` | keys.json, the registry, the CA files or webhooks.json of the current data cannot be read | repair it (see "A rollback cannot read keys.json, the registry or webhooks.json"), or `--no-carry-revocations` |
+
+`--import --replace` relates the two copies by their audit chains before it
+changes anything (INSTALL.md, "Replacing an install's data"): it carries
+revocations from the current data only when that is the newer copy, never
+when the archive continues it, and it refuses when an API key, certificate
+or protocol key revoked here without an audit entry would work again. Its
+plan lists DISCARDS, KEEPS and UNRECORDED, and the
+current data is kept as the pre-import restore point and the replaced copy
+(until `--rollback --finish` or the next successful upgrade).
+
+## "The folder says it was moved"
+
+`... was moved to another host on ... (archive XXXXXXXX ...)`: an
+`--export --move` left this install stopped and held so that only one
+gateway serves its keys. If the archive was imported elsewhere, leave it;
+its volumes can be removed with the `docker volume rm` line `--status`
+prints. To run it here again: `bash install-release.sh --reactivate`
+(`scripts/quickstart.sh --reactivate` in a checkout), and stop the imported
+copy first.
+
+## "An import stopped at the start"
+
+The import restored the data and started the bridge, which did not become
+healthy. The archive and the install it came from are unchanged. Look at
+`docker compose logs --tail=50 bridge`, fix the cause, then
+`bash install-release.sh --resume`; or remove what the import restored with
+`bash install-release.sh --abort --confirm <project>`.
+
+## "Two gateways serve the same edges"
+
+An archive imported while its source still runs (`--allow-live-source`, a
+`--reactivate`, a restored backup) gives two gateways with the same CA and
+keys; edges split between them and summary journals disagree. Stop one
+(`docker compose stop`, or `--export FILE --move` on it), then point every
+edge at the one that stays.
 
 ---
 

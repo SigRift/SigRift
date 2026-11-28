@@ -52,7 +52,8 @@ OLD_INSTALLER_SHA256 = "16222231e2a5b6ddad70d699214505c37a1181df68736eb2c74a5bb3
 NEW_BRIDGE = "ghcr.io/sigrift/sigrift-bridge:v0.2.0"
 NEW_GATEWAY = "ghcr.io/sigrift/sigrift-gateway:v0.2.0"
 STUB_HEAD = "# SigRift hold stub"
-LIFECYCLE_BLOCKS = ("lifecycle-tool", "lifecycle-engine", "identity", "preflight", "lifecycle")
+LIFECYCLE_BLOCKS = ("lifecycle-tool", "lifecycle-engine", "identity", "preflight", "lifecycle",
+                    "state-tool", "state-engine", "restore", "archive-engine", "move")
 SNAPSHOT_FILES = load_lifecycle_tool().SNAPSHOT_FILES
 INSTALLED_ENV_B = INSTALLED_ENV.replace(KEY_A, KEY_B)
 # A full installer run against the fake host starts some 150 processes;
@@ -175,16 +176,19 @@ def test_upgrade_runs_pull_snapshot_installer_stop_hold_switch_bridge_then_rest(
     assert not any(re.search(r"^compose (up|stop|start)|^stop ", a) for a in argvs[:pull_g])
     # The steps, in order, each recorded once.
     j = journal(old)
-    assert j["steps"] == ["snapshot", "installer", "stop", "hold", "switch", "start-bridge",
-                          "start-rest", "verify", "record"]
+    # 1b: prechecks and the full restore point once the stack is held.
+    assert j["steps"] == ["snapshot", "installer", "stop", "hold", "prechecks", "restore-point",
+                          "switch", "start-bridge", "start-rest", "verify", "record"]
     assert j["done"] == j["steps"] and j["state"] == "done"
     assert j["images"]["bridge"].startswith(NEW_BRIDGE + "@sha256:")
+    # The parent's lines and the child's share one N (10 with an installer step).
     for n, text in ((1, "preflight ok"), (2, "images pulled"), (3, "restore point"),
                     (4, "installer and release files installed"),
-                    (5, "stack stopped and held"), (6, "compose, VERSION and .env switched"),
-                    (7, "bridge healthy"), (8, "schema 57; MFA ok")):
-        assert f"==> [{n}/8] {text}" in r.stdout, (n, r.stdout)
-    assert r.stdout.index("[3/8]") < r.stdout.index("[4/8]") < r.stdout.index("[5/8]")
+                    (5, "stack stopped and held"), (6, "database checked"),
+                    (7, "restore point "), (8, "compose image tags updated, VERSION and .env switched"),
+                    (9, "bridge healthy"), (10, "schema 57; MFA ok")):
+        assert f"==> [{n}/10] {text}" in r.stdout, (n, r.stdout)
+    assert r.stdout.index("[3/10]") < r.stdout.index("[4/10]") < r.stdout.index("[5/10]")
     assert f"SigRift v0.2.0 is up in {old.resolve()}." in r.stdout
     assert_upgraded(host, old)
 
@@ -286,7 +290,7 @@ def test_files_only_snapshot_is_taken_before_any_file_change(host, tmp_path):
     new = unpacked_release(tmp_path)
     r = run_installer(new, host=host)
     assert r.returncode == 0, r.stdout + r.stderr
-    [snap] = snapshots(old)
+    [snap] = [s for s in snapshots(old) if s.name.endswith("-files")]
     manifest_bytes = (snap / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     assert manifest["kind"] == "files" and manifest["reason"] == "upgrade"
@@ -463,13 +467,15 @@ def test_bridge_that_never_turns_healthy_stops_with_exit_4_and_the_journal(host,
     old = release_install(host, tmp_path)
     new = unpacked_release(tmp_path)
     host.update(health={"bridge": "unhealthy"})
-    r = run_installer(new, host=host, env={"FAKE_CLOCK_STEP": "100"})
+    # 1b would roll this upgrade back by itself (it never became healthy and
+    # took no data); --no-auto-rollback keeps it for debugging.
+    r = run_installer(new, "--no-auto-rollback", host=host, env={"FAKE_CLOCK_STEP": "100"})
     out = r.stdout + r.stderr
     assert r.returncode == 4, out
     assert "The bridge did not become healthy within" in out
-    # Typed in the new folder: the new installer, naming the install folder
-    # (which may still hold an installer without --resume).
-    assert f"Then: bash install-release.sh --resume {old.resolve()}" in out
+    assert "It was not rolled back automatically, because --no-auto-rollback was given." in out
+    # Typed in the new folder: the rollback works in the install folder.
+    assert f"Next: cd {old.resolve()} && bash install-release.sh --rollback" in out
     j = journal(old)
     assert j["state"] == "failed" and j["next"] == "start-bridge" and j["bridge_started_at"]
     assert j["error"] == "start-bridge: exit 4"
@@ -511,6 +517,8 @@ def test_critical_section_survives_a_lost_terminal(host, tmp_path):
 
 KILLS = {
     "stop": (r"^compose stop$", 1),
+    # 1b: the database check on the stopped data (the quiesce engine run).
+    "prechecks": (r"--name sigrift-lc-\S+-quiesce-", 1),
     "switch": (r"^compose config --environment$", [1, 1]),
     "start-bridge": (r"--remove-orphans bridge$", 1),
     "start-rest": (r"--remove-orphans( --force-recreate gateway)?$", 1),
@@ -601,15 +609,16 @@ def test_abort_after_the_new_bridge_started_is_refused(host, tmp_path):
     old = release_install(host, tmp_path)
     new = unpacked_release(tmp_path)
     host.update(health={"bridge": "unhealthy"})
-    r = run_installer(new, host=host, env={"FAKE_CLOCK_STEP": "100"})
+    r = run_installer(new, "--no-auto-rollback", host=host, env={"FAKE_CLOCK_STEP": "100"})
     assert r.returncode == 4
     before = tree_digest(old)
     host.clear_log()
     r = run_installer(old, "--abort", host=host)
     assert r.returncode == 3, r.stdout + r.stderr
     assert "may have migrated the database, which v0.1.0 cannot read; --abort only undoes " \
-        "an upgrade that stopped before that." in r.stderr
-    assert r.stderr.rstrip().splitlines()[-2:] == ["Next: bash install-release.sh --resume",
+        "an upgrade that stopped before that. Its restore point " in r.stderr
+    # 1b: M-ABORT-USE-ROLLBACK, the restore point can undo it.
+    assert r.stderr.rstrip().splitlines()[-2:] == ["Next: bash install-release.sh --rollback",
                                                    "Nothing was changed."]
     assert tree_digest(old) == before and changing_calls(host) == []
 
@@ -804,7 +813,8 @@ def test_status_reports_identity_version_journal_restore_points_and_others(host,
             "schema    57 (the bridge image knows up to 57)",
             "journal   upgrade v0.1.0 -> v0.2.0 done at ",
             "next      nothing to do",
-            "restore   1 files-only restore points (newest ",
+            "restore   1 full (",
+            ", 1 files-only; 0 incomplete",
             "TLS       tls/cert.pem expires ",
             "others    sigrift-src (source, running, "):
         assert needle in r.stdout, (needle, r.stdout)
@@ -868,8 +878,9 @@ def test_every_secret_or_data_carrying_docker_run_has_log_driver_none(host, tmp_
     tls = [" ".join(a) for a in runs if "--label com.sigrift.lifecycle=tls" in " ".join(a)]
     assert engine and tls
     for joined in engine:
-        assert "--user 1500:1500 --cap-drop ALL" in joined, joined
-        assert "--label com.sigrift.lifecycle=engine" in joined
+        assert "--user 1500:1500" in joined and "--cap-drop ALL" in joined, joined
+        assert "--label com.sigrift.lifecycle=engine" in joined or \
+            "--label com.sigrift.lifecycle=state-engine" in joined, joined
     for joined in tls:
         assert "--cap-drop ALL --cap-add DAC_OVERRIDE" in joined, joined
     assert all("--security-opt no-new-privileges" in j for j in engine + tls)
@@ -1031,12 +1042,13 @@ def test_docs_describe_the_guarded_upgrade():
     section = install.split("\n### Upgrading a release install\n", 1)[1].split("\n### ", 1)[0]
     # LC_DOWNGRADE_NEXT points there.
     tool = shared_block(INSTALL_RELEASE, "identity")
-    assert "LC_DOWNGRADE_NEXT='see \"Going back\" in INSTALL.md, \"Upgrading a release install\"'" in tool
-    assert "\n#### Going back\n" in section
+    # 1b: the way back is the rollback itself.
+    assert "LC_DOWNGRADE_NEXT='bash install-release.sh --rollback'" in tool
+    assert "\n#### Rolling back\n" in section and "\n#### Restore points\n" in section
+    assert "\n#### Going back\n" not in section
     for needle in ("bash install-release.sh --dry-run", "--upgrade /path/to/the/install",
                    "`# SigRift hold stub`", "`.sigrift/journal.json`", "--keep-running-secrets",
-                   "--adopt-project NAME", "--new-instance", "**The data volumes are not copied "
-                   "by this installer yet.**", "bash install-release.sh --abort",
+                   "--adopt-project NAME", "--new-instance", "bash install-release.sh --abort",
                    "`BRIDGE_KEYSTORE_KEY`", "SIGRIFT_UPGRADE_PROMPT_SECONDS"):
         assert needle in section, needle
     # F12: edge_data is the scan service's; the edge-install unit has no
@@ -1255,13 +1267,27 @@ def test_resume_accept_closes_an_upgrade_that_failed_its_checks(host, tmp_path):
     assert tool_run(host, old, "renew-check", ".").stdout.strip() == "proceed"
     r = run_installer(old, "--resume", host=host)
     assert r.returncode == 4 and journal(old)["state"] == "verify_failed"
+    # A copy an earlier rollback kept: an accepted upgrade did not succeed,
+    # so it is not removed (E22; finish_pending stays).
+    rb = "20261126T120000Z"
+    for v in ("bridge_data", "bridge_secrets"):
+        kept = host.volume("sigrift-v010_" + v) / (".sigrift-replaced-" + rb)
+        kept.mkdir(parents=True)
+        (kept / ".sigrift-phase").write_text(json.dumps({"format": 1, "phase": "done",
+                                                         "rb_id": rb}))
+    (old / ".sigrift" / "install.json").write_text(json.dumps({
+        "format": 1, "install_id": journal(old)["install_id"], "history": [],
+        "finish_pending": [{"id": rb, "bytes": 1, "created_at": "2026-11-26T12:00:00Z"}]}))
     r = run_installer(old, "--resume", "--accept", host=host)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "checks failed and were accepted (the database is at migration 56, not 57)" in r.stdout
+    assert "this upgrade replaces it" not in r.stdout
+    assert (host.volume("sigrift-v010_bridge_data") / (".sigrift-replaced-" + rb)).is_dir()
     j = journal(old)
     assert j["state"] == "done" and j["accepted_error"] and j["accepted_at"]
-    history = json.loads((old / ".sigrift" / "install.json").read_text())["history"]
-    assert history[-1]["result"] == "accepted"
+    rec = json.loads((old / ".sigrift" / "install.json").read_text())
+    history = rec["history"]
+    assert history[-1]["result"] == "accepted" and [x["id"] for x in rec["finish_pending"]] == [rb]
     # --accept is for that case only.
     r = run_installer(old, "--resume", "--accept", host=host)
     assert r.returncode == 0 and "Nothing to resume" in r.stdout

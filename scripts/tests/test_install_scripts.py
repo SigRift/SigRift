@@ -822,6 +822,11 @@ def test_workflows_parse():
         "identity",
         "preflight",
         "lifecycle",
+        "state-tool",
+        "state-engine",
+        "restore",
+        "archive-engine",
+        "move",
     ],
 )
 def test_new_shared_blocks_identical_in_both_installers(name):
@@ -840,6 +845,11 @@ def test_lifecycle_blocks_follow_the_backend_subnet_block_in_order():
                 "identity",
                 "preflight",
                 "lifecycle",
+                "state-tool",
+                "state-engine",
+                "restore",
+                "archive-engine",
+                "move",
             )
         ]
         assert starts == sorted(starts), path.name

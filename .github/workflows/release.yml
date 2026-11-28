@@ -339,8 +339,27 @@ jobs:
           IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
           mkdir -p "$STAGE"
           cp scripts/install-release.sh "$STAGE/"
+          # The installer knows the release it ships in (INSTALLER_RELEASE, E26);
+          # the signed dist copy is this stamped file.
+          python3 - "$VERSION" "$STAGE/install-release.sh" <<'PY'
+          import re, sys
+          version, path = sys.argv[1], sys.argv[2]
+          text = open(path, encoding="utf-8").read()
+          new, n = re.subn(r"(?m)^INSTALLER_RELEASE=dev$", "INSTALLER_RELEASE=" + version, text)
+          if n != 1:
+              sys.exit("expected exactly one INSTALLER_RELEASE=dev line, found %d" % n)
+          m = re.search(r"(?m)^LC_TEMPLATE_SINCE=(v[0-9]+\.[0-9]+\.[0-9]+)$", new)
+          if not m:
+              sys.exit("LC_TEMPLATE_SINCE not found")
+          key = lambda v: tuple(int(x) for x in re.match(r"v(\d+)\.(\d+)\.(\d+)", v).groups())
+          # Only a real release tag is held to the floor: the packaging test runs this
+          # step with VERSION=v0.0.0-license-test (tests/docs/test_license_packaging.py).
+          if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?", version) and key(version) < key(m.group(1)):
+              sys.exit("LC_TEMPLATE_SINCE %s is newer than this release %s" % (m.group(1), version))
+          open(path, "w", encoding="utf-8").write(new)
+          PY
           chmod +x "$STAGE/install-release.sh"
-          cp scripts/install-release.sh dist/install-release.sh
+          cp "$STAGE/install-release.sh" dist/install-release.sh
           cp LICENSE NOTICE "$STAGE/"
           cp licenses/gateway/THIRD-PARTY-NOTICES.txt "$STAGE/"
           printf '%s\n' "$VERSION" > "$STAGE/VERSION"

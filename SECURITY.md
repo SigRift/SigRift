@@ -310,6 +310,30 @@ The admin UI persists to `data/session_binding.json`; the gateway reads from env
 - **TOTP secrets:** Fernet-encrypted at rest
 - **Database:** SQLite (filesystem permissions; for encryption at rest use filesystem-level encryption — SQLCipher is not yet supported end to end, see [DEPLOYMENT.md](src/sigrift/bridge/DEPLOYMENT.md#data-at-rest-encryption))
 - **Backups:** Recommend encrypted filesystem (dm-crypt, LUKS)
+- **Restore points** (release installs, `install-release.sh`): a full restore point holds every secret of the install (`.env`, `tls/key.pem`, `ca.key`) and both data volumes in plaintext, in `.sigrift/snapshots/` (or `SIGRIFT_SNAPSHOT_DIR`), mode 0700, files 0600, sealed with a MAC under `.sigrift/rp.key`. They are not off-host backups; remove old ones after rotating a key (INSTALL.md, "Restore points")
+- **State archives** (`--export`, docs/state-archive-format.md): one file holds
+  everything a full restore point holds (the database, hashed API keys,
+  webhook signing secrets, the embedded CA's private key, the gateway TLS
+  key, the `.env` secrets), encrypted with AES-256-GCM in a STREAM
+  construction under a random data key that Argon2id (256 MiB, 3 passes)
+  derives a key-wrapping key for from the passphrase; an HMAC over the
+  header commits to the key. Anyone with the file and its passphrase can
+  impersonate the gateway to its edge nodes. Whoever has the file can guess
+  passphrases offline without limit, at one Argon2id run each (about 0.27 s
+  of one core on the review host): use the generated passphrase (120 bits)
+  or a long one. Format v1 proves origin, not freshness: an older archive
+  under the same passphrase imports unless `--import --expect <value>` names
+  the newer one. The install's state directory (`.sigrift/`, or
+  quickstart's `~/.local/state/sigrift/<project>/`) holds the archive's key
+  while an export or import runs and belongs in the same backup class as
+  the secrets. After an archive is lost, rotate: every API key, the
+  `BRIDGE_MASTER_KEY`, admin passwords and TOTP, webhook signing secrets,
+  the TLS pair (and the edges' `ca.pem`), and the embedded CA with the client
+  certificates it issued.
+- **Review status of the archive format:** archive format v1 had a crypto
+  design review and a code review in November 2026 by AI agents, not an
+  independent human audit. No independent cryptographic review of the
+  format or its code has been done as of this release.
 
 ### Data volume isolation (docker-compose default)
 

@@ -98,40 +98,173 @@ LC_UPGRADE_DIR=""
 LC_NEW_INSTANCE=0
 LC_ADOPT_PROJECT=""
 LC_KEEP_RUNNING_SECRETS=0
-# install (the default), status, resume, abort, or continue (the detached
-# part of an upgrade, started by the installer itself).
+# install (the default), status, resume, abort, rollback, finish,
+# snapshot, list-snapshots, or continue (the detached part of an
+# operation, started by the installer itself).
 LC_COMMAND=install
 LC_CONTINUE_ID=""
-# The install folder --status, --resume and --abort act on, when named.
+# The install folder --status, --resume, --abort (and the 1b commands) act
+# on, when named.
 LC_COMMAND_DIR=""
 LC_ACCEPT=0
+# Phase 1b: restore points and rollback.
+LC_JSON=0
+LC_VERIFY=0
+LC_VERIFY_ID=""
+LC_RB_ID=""
+LC_CONFIRM=""
+LC_ACCEPT_SUMMARY_RESET=0
+LC_NO_CARRY=0
+LC_ACCEPT_UNVERIFIED=0
+LC_REVERT_CREDENTIALS=0
+LC_NO_AUTO_ROLLBACK=0
+LC_NO_SNAPSHOT=0
+LC_EXCLUDE=""
+# Phase 2: archives and moves (--export, --import, --reactivate).
+LC_MV_FILE=""
+LC_MV_FILE_TYPED=""
+LC_MOVE=0
+LC_FROM_DIR=""
+LC_IMPORT_PROJECT=""
+LC_REPLACE=0
+LC_REGEN_TLS=0
+LC_ALLOW_LIVE=0
+LC_EXPECT=""
 
 release_usage() {
     echo "usage: $0 [--dry-run] [--upgrade DIR | --new-instance | --adopt-project NAME] [--keep-running-secrets]" >&2
-    echo "       $0 --status [DIR] | --resume [--accept] [DIR] | --abort [--dry-run] [DIR] | --renew-tls" >&2
+    echo "                          [--no-auto-rollback] [--exclude iq,pcap] [--no-snapshot]" >&2
+    echo "       $0 --rollback [ID] [--dry-run] [--confirm VERSION] [--accept-summary-reset]" >&2
+    echo "                          [--no-carry-revocations] [--accept-unverified] [--revert-credentials]" >&2
+    echo "       $0 --rollback --finish [--dry-run]" >&2
+    echo "       $0 --snapshot [--exclude iq,pcap] [--dry-run]" >&2
+    echo "       $0 --list-snapshots [--json] [--verify [ID]]" >&2
+    echo "       $0 --status [--json] [DIR] | --resume [--accept] [DIR] | --abort [--dry-run] [--confirm VERSION] [DIR] | --renew-tls" >&2
+    echo "       $0 --export FILE [--move] [--from DIR] [--exclude iq,pcap] [--dry-run]" >&2
+    echo "       $0 --import FILE [--project NAME] [--replace [--no-carry-revocations] [--accept-summary-reset]" >&2
+    echo "                          [--revert-credentials]] [--regenerate-tls] [--allow-live-source]" >&2
+    echo "                          [--accept-unverified] [--confirm PROJECT] [--expect HC16] [--dry-run]" >&2
+    echo "       $0 --reactivate [--confirm PROJECT] [--dry-run]" >&2
     exit 2
 }
 
 release_parse_args() {
-    local count="$#" chosen=0
+    local count="$#" chosen=0 upgrade_flags=0 rb_flags=0 finish=0 export_flags=0 import_flags=0
+    lc_set_command() {
+        [ "$LC_COMMAND" = install ] || release_usage
+        LC_COMMAND=$1
+    }
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --renew-tls) RENEW_TLS_ONLY=1 ;;
-            --status|--resume|--abort)
-                [ "$LC_COMMAND" = install ] || release_usage
-                LC_COMMAND=${1#--}
+            --status|--resume|--abort|--snapshot|--list-snapshots)
+                lc_set_command "${1#--}"
+                ;;
+            --rollback|--rollback=?*)
+                lc_set_command rollback
+                if [ "${1#--rollback=}" != "$1" ]; then
+                    LC_RB_ID=${1#--rollback=}
+                elif [ "$#" -ge 2 ] && [ "${2#--}" = "$2" ] && [ "${2#*/}" = "$2" ]; then
+                    # The next argument is the restore point's id when it is
+                    # not an option and not a folder.
+                    LC_RB_ID=$2
+                    shift
+                fi
+                ;;
+            --finish)
+                [ "$LC_COMMAND" = rollback ] && [ -z "$LC_RB_ID" ] || release_usage
+                finish=1
+                LC_COMMAND=finish
                 ;;
             --lc-continue)
-                # The detached part of an upgrade (lc_run_detached); not for
-                # operators. lc_continue checks the lock and the journal id.
+                # The detached part of an operation (lc_run_detached); not
+                # for operators. lc_continue checks the lock and the journal id.
                 [ "$#" -eq 2 ] && [ "$count" -eq 2 ] && [ "${LC_LOCK_INHERITED:-0}" = 1 ] \
                     || release_usage
                 LC_COMMAND="continue"
                 LC_CONTINUE_ID=$2
                 shift
                 ;;
+            --export|--export=?*|--import|--import=?*)
+                if [ "${1%%=*}" = --export ]; then lc_set_command export; else lc_set_command import; fi
+                if [ "${1#*=}" != "$1" ]; then
+                    LC_MV_FILE=${1#*=}
+                else
+                    [ "$#" -ge 2 ] && [ -n "$2" ] || release_usage
+                    LC_MV_FILE=$2
+                    shift
+                fi
+                # An archive is renamed into place: never a pipe (2.1).
+                [ "$LC_MV_FILE" != - ] || release_usage
+                ;;
+            --reactivate) lc_set_command reactivate ;;
+            --move) LC_MOVE=1; export_flags=$((export_flags + 1)) ;;
+            --from=?*) LC_FROM_DIR=${1#*=}; export_flags=$((export_flags + 1)) ;;
+            --from)
+                [ "$#" -ge 2 ] && [ -n "$2" ] || release_usage
+                LC_FROM_DIR=$2
+                export_flags=$((export_flags + 1))
+                shift
+                ;;
+            --project=?*|--project|--expect=?*|--expect)
+                local val
+                if [ "${1#*=}" != "$1" ]; then
+                    val=${1#*=}
+                else
+                    [ "$#" -ge 2 ] && [ -n "$2" ] || release_usage
+                    val=$2
+                    shift
+                fi
+                case "$1" in
+                    --project*) LC_IMPORT_PROJECT=$val ;;
+                    *)
+                        # HC16: 16 hex digits, any case (2.1).
+                        [[ "$val" =~ ^[0-9A-Fa-f]{16}$ ]] || release_usage
+                        LC_EXPECT=$(printf '%s' "$val" | tr 'A-F' 'a-f')
+                        ;;
+                esac
+                import_flags=$((import_flags + 1))
+                ;;
+            --replace) LC_REPLACE=1; import_flags=$((import_flags + 1)) ;;
+            --regenerate-tls) LC_REGEN_TLS=1; import_flags=$((import_flags + 1)) ;;
+            --allow-live-source) LC_ALLOW_LIVE=1; import_flags=$((import_flags + 1)) ;;
             --dry-run) LC_DRY_RUN=1 ;;
             --accept) LC_ACCEPT=1 ;;
+            --json) LC_JSON=1 ;;
+            --verify|--verify=?*)
+                LC_VERIFY=1
+                if [ "${1#--verify=}" != "$1" ]; then
+                    LC_VERIFY_ID=${1#--verify=}
+                elif [ "$#" -ge 2 ] && [ "${2#--}" = "$2" ] && [ "${2#*/}" = "$2" ]; then
+                    LC_VERIFY_ID=$2
+                    shift
+                fi
+                ;;
+            --confirm=?*) LC_CONFIRM=${1#*=} ;;
+            --confirm)
+                [ "$#" -ge 2 ] && [ -n "$2" ] || release_usage
+                LC_CONFIRM=$2
+                shift
+                ;;
+            --accept-summary-reset) LC_ACCEPT_SUMMARY_RESET=1; rb_flags=$((rb_flags + 1)) ;;
+            --no-carry-revocations) LC_NO_CARRY=1; rb_flags=$((rb_flags + 1)) ;;
+            --accept-unverified) LC_ACCEPT_UNVERIFIED=1; rb_flags=$((rb_flags + 1)) ;;
+            --revert-credentials) LC_REVERT_CREDENTIALS=1; rb_flags=$((rb_flags + 1)) ;;
+            --no-auto-rollback) LC_NO_AUTO_ROLLBACK=1; upgrade_flags=$((upgrade_flags + 1)) ;;
+            --no-snapshot) LC_NO_SNAPSHOT=1; upgrade_flags=$((upgrade_flags + 1)) ;;
+            --exclude=?*|--exclude)
+                if [ "${1#--exclude=}" != "$1" ]; then
+                    LC_EXCLUDE=${1#--exclude=}
+                else
+                    [ "$#" -ge 2 ] || release_usage
+                    LC_EXCLUDE=$2
+                    shift
+                fi
+                case ",${LC_EXCLUDE}," in
+                    ,iq,|,pcap,|,iq,pcap,|,pcap,iq,) ;;
+                    *) release_usage ;;
+                esac
+                ;;
             --new-instance) LC_NEW_INSTANCE=1; chosen=$((chosen + 1)) ;;
             --keep-running-secrets) LC_KEEP_RUNNING_SECRETS=1 ;;
             --upgrade=?*) LC_UPGRADE_DIR=${1#*=}; chosen=$((chosen + 1)) ;;
@@ -144,8 +277,12 @@ release_parse_args() {
                 ;;
             -*) release_usage ;;
             *)
-                # The install folder of --status, --resume or --abort.
-                case "$LC_COMMAND" in status|resume|abort) ;; *) release_usage ;; esac
+                # The install folder of --status, --resume, --abort and the
+                # 1b commands.
+                case "$LC_COMMAND" in
+                    status|resume|abort|rollback|finish|snapshot|list-snapshots) ;;
+                    *) release_usage ;;
+                esac
                 [ -z "$LC_COMMAND_DIR" ] || release_usage
                 LC_COMMAND_DIR=$1
                 ;;
@@ -155,17 +292,57 @@ release_parse_args() {
     if [ "$chosen" -gt 1 ] || { [ "$RENEW_TLS_ONLY" -eq 1 ] && [ "$count" -ne 1 ]; }; then
         release_usage
     fi
-    # --status, --resume and --abort take one folder and no other option
-    # (--resume takes --accept, --abort takes --dry-run).
-    local extra=$((count - 1))
-    [ -z "$LC_COMMAND_DIR" ] || extra=$((extra - 1))
+    # Each command takes only its own options (2.1); any mix is a usage error.
+    [ "$LC_COMMAND" = install ] || [ "$LC_COMMAND" = continue ] || [ "$LC_KEEP_RUNNING_SECRETS" = 0 ] \
+        || release_usage
     case "$LC_COMMAND" in
-        status) [ "$extra" -eq 0 ] || release_usage ;;
-        resume) [ "$extra" -eq "$LC_ACCEPT" ] || release_usage ;;
-        abort) [ "$extra" -eq "$LC_DRY_RUN" ] || release_usage ;;
-        *) [ "$LC_ACCEPT" -eq 0 ] || release_usage ;;
+        status) [ "$LC_DRY_RUN$LC_ACCEPT$LC_VERIFY$rb_flags$upgrade_flags$chosen" = 000000 ] \
+            && [ -z "$LC_CONFIRM$LC_EXCLUDE$LC_RB_ID" ] || release_usage ;;
+        resume) [ "$LC_DRY_RUN$LC_JSON$LC_VERIFY$rb_flags$upgrade_flags$chosen" = 000000 ] \
+            && [ -z "$LC_CONFIRM$LC_EXCLUDE" ] || release_usage ;;
+        abort) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags$upgrade_flags$chosen" = 000000 ] \
+            && [ -z "$LC_EXCLUDE" ] || release_usage ;;
+        rollback) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$upgrade_flags$chosen" = 00000 ] \
+            && [ -z "$LC_EXCLUDE" ] || release_usage ;;
+        finish) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags$upgrade_flags$chosen" = 000000 ] \
+            && [ -z "$LC_CONFIRM$LC_EXCLUDE" ] || release_usage ;;
+        snapshot) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags$chosen" = 00000 ] \
+            && [ "$LC_NO_AUTO_ROLLBACK$LC_NO_SNAPSHOT" = 00 ] && [ -z "$LC_CONFIRM" ] || release_usage ;;
+        list-snapshots) [ "$LC_DRY_RUN$LC_ACCEPT$rb_flags$upgrade_flags$chosen" = 00000 ] \
+            && [ -z "$LC_CONFIRM$LC_EXCLUDE" ] || release_usage ;;
+        install) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags" = 0000 ] && [ -z "$LC_CONFIRM" ] \
+            || release_usage ;;
     esac
-    # A relative folder is relative to where the command was typed.
+    # Phase 2 (2.1): --move and --from only with --export; --project,
+    # --replace, --regenerate-tls, --allow-live-source and --expect only with
+    # --import. 1b's guard flags (--accept-summary-reset, --revert-credentials,
+    # --no-carry-revocations) go with --import --replace only: its plan
+    # compares the current data with the archive and runs 1b's guards on it
+    # (phase2-notes F-D21); a fresh import has no current data to guard.
+    [ "$LC_COMMAND" = export ] || [ "$export_flags" = 0 ] || release_usage
+    [ "$LC_COMMAND" = import ] || [ "$import_flags" = 0 ] || release_usage
+    case "$LC_COMMAND" in
+        export) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags$chosen$LC_NO_AUTO_ROLLBACK$LC_NO_SNAPSHOT" = 0000000 ] \
+            && [ -z "$LC_CONFIRM$LC_COMMAND_DIR" ] || release_usage ;;
+        import) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$chosen$upgrade_flags" = 00000 ] && [ -z "$LC_EXCLUDE$LC_COMMAND_DIR" ] \
+            || release_usage
+            [ "$LC_ACCEPT_SUMMARY_RESET$LC_NO_CARRY$LC_REVERT_CREDENTIALS" = 000 ] || [ "$LC_REPLACE" = 1 ] \
+                || release_usage ;;
+        reactivate) [ "$LC_ACCEPT$LC_JSON$LC_VERIFY$rb_flags$upgrade_flags$chosen" = 000000 ] \
+            && [ -z "$LC_EXCLUDE$LC_COMMAND_DIR" ] || release_usage ;;
+    esac
+    : "$finish"
+    # A relative file or folder is relative to where the command was typed.
+    LC_MV_FILE_TYPED=$LC_MV_FILE
+    case "$LC_MV_FILE" in
+        ""|/*) ;;
+        "~"/*) LC_MV_FILE="${HOME}/${LC_MV_FILE#"~"/}" ;;
+        *) LC_MV_FILE="${LC_CALLER_DIR}/${LC_MV_FILE}" ;;
+    esac
+    case "$LC_FROM_DIR" in
+        ""|/*) ;;
+        *) LC_FROM_DIR="${LC_CALLER_DIR}/${LC_FROM_DIR}" ;;
+    esac
     case "$LC_UPGRADE_DIR" in
         ""|/*|"~"*) ;;
         *) LC_UPGRADE_DIR="${LC_CALLER_DIR}/${LC_UPGRADE_DIR}" ;;
@@ -176,6 +353,12 @@ release_parse_args() {
     esac
 }
 release_parse_args "$@"
+# 2.4: --export and --import move the operator's stdin to fd 4 at once,
+# so no other command of this run can read it; only lc_state_tool's
+# passphrase reader (ar-wrap, ar-probe) and --replace's confirmation do.
+case "$LC_COMMAND" in
+    export|import) exec 4<&0 0</dev/null ;;
+esac
 
 # ── Version ──────────────────────────────────────────────────────────
 # Priority: SIGRIFT_VERSION env > VERSION file next to this script > "main".
@@ -201,6 +384,11 @@ fi
 case "$LC_COMMAND" in
     install) echo "==> SigRift release: ${VERSION}" ;;
 esac
+
+# The release this installer shipped in. release.yml writes the tag on the
+# next line; a checkout says dev. An in-place upgrade to a newer minor
+# release than this one is refused: unpack that release and run its installer.
+INSTALLER_RELEASE=dev
 
 OWNER="${SIGRIFT_OWNER:-sigrift}"
 if ! [[ "$OWNER" =~ ^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?$ ]]; then
@@ -1137,7 +1325,10 @@ PROJECT_LABEL = "com.docker.compose.project"
 VOLUME_LABEL = "com.docker.compose.volume"
 SERVICE_LABEL = "com.docker.compose.service"
 WORKDIR_LABEL = "com.docker.compose.project.working_dir"
-STATE_DIR = ".sigrift"
+# Phase 2 (8.1): quickstart's state directory, outside the checkout, plays
+# .sigrift/ when LC_STATE_DIR names it (an absolute path; os.path.join(d,
+# STATE_DIR) is then that path).
+STATE_DIR = os.environ.get("LC_STATE_DIR") or ".sigrift"
 HOST_RECORD = os.path.join(STATE_DIR, "install.json")
 VOLUME_RECORD = ".sigrift-install.json"
 RELEASE_HEADER = "# Generated by install-release.sh @ "
@@ -1229,10 +1420,11 @@ def refuse(message, details=(), next_cmd=""):
     nothing changed: it says where the upgrade stopped and exits 4."""
     lines = ["Error: " + message] + ["  " + d for d in details]
     if os.environ.get("LC_CRITICAL") == "1":
-        lines += ["  The upgrade stopped at step %s and changed nothing more; fix this, "
+        what = os.environ.get("LC_OP_WHAT") or "the upgrade"
+        lines += ["  %s stopped at step %s and changed nothing more; fix this, "
                   "then resume it (%s) or undo it (%s)." % (
-                      os.environ.get("LC_STEP") or "?", lifecycle_cmd("--resume"),
-                      lifecycle_cmd("--abort")),
+                      what[:1].upper() + what[1:], os.environ.get("LC_STEP") or "?",
+                      lifecycle_cmd("--resume"), lifecycle_cmd("--abort")),
                   "Next: " + next_cmd]
         sys.stderr.write("\n".join(lines) + "\n")
         sys.stderr.flush()
@@ -1253,9 +1445,24 @@ def say(text):
 
 def q(text):
     """TEXT as one shell word, for a path or a name in a printed command:
-    a folder like `/srv/x; curl ... #` must not run more when pasted."""
+    a folder like `/srv/x; curl ... #` must not run more when pasted. A
+    text with C0, C1 or DEL is written in bash's $'...' form, each such
+    character as the \\xNN of its UTF-8 bytes, so it pastes back to the
+    same name and never reaches the terminal raw (phase2-spec 11, Appendix
+    C, P)."""
     import shlex
-    return shlex.quote(str(text))
+    s = str(text)
+    if not any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in s):
+        return shlex.quote(s)
+    out = []
+    for c in s:
+        if ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f:
+            out.append("".join("\\x%02x" % b for b in c.encode("utf-8")))
+        elif c in "\\'":
+            out.append("\\" + c)
+        else:
+            out.append(c)
+    return "$'" + "".join(out) + "'"
 
 
 def installer_prog(installer):
@@ -1297,6 +1504,8 @@ def lifecycle_cmd(args, d=None):
     folder), with the installer the operator just ran: the install folder
     may still hold an older one that has none of them."""
     d = os.path.realpath(d or os.getcwd())
+    if os.environ.get("LC_INSTALLER") == "quickstart":
+        return "scripts/quickstart.sh " + args
     caller = os.environ.get("LC_CALLER_DIR") or ""
     if not caller or same_path(caller, d):
         return "bash install-release.sh " + args
@@ -1677,6 +1886,9 @@ class Project(object):
         self.kind = "unknown"
         self.version = "unknown"
         self.port = ""
+        # Phase 2 (1.2): its bridge_data holds a move marker (any archive):
+        # never an automatic target, never "the same install".
+        self.moved_away = False
 
     @property
     def has_data(self):
@@ -1702,6 +1914,9 @@ class Project(object):
         if self.hint:
             folder += " (its volume record names %s, which does not confirm it)" % self.hint
         name = self.name if self.valid else "%s (invalid name)" % self.name[:60]
+        if self.moved_away:
+            return "%s  %s, moved away, %s  %s; remove it with: docker volume rm %s" % (
+                name, self.version, port, folder, " ".join(sorted(self.volumes.values())))
         return "%s  %s, %s, %s  %s" % (name, self.version, self.state, port, folder)
 
     def owned_by(self, d):
@@ -1847,6 +2062,9 @@ def classify_host(helper, volumes=None):
                 else:
                     p.hint = hint
         p.folder_exists = bool(p.folder) and os.path.isdir(p.folder)
+        if p.valid and p.state != "running" and helper:
+            m = read_volume_marker(p.volumes["bridge_data"], helper)
+            p.moved_away = bool(m and m.get("op") == "move")
         p.kind = project_kind(p)
         if p.folder_exists:
             p.version = installed_version(p.folder)
@@ -1968,6 +2186,8 @@ def atomic_write(path, data, mode):
 
 def ensure_state_dir(dir_path):
     path = os.path.join(dir_path, STATE_DIR)
+    if os.path.isabs(STATE_DIR) and not os.path.isdir(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path), 0o700)
     if not os.path.isdir(path):
         os.mkdir(path, 0o700)
         give_owner(path, owner_for(dir_path))
@@ -2059,7 +2279,12 @@ def run_engine(image, project, op, source, extra=None, volumes=None):
     bootstrap = os.environ.get("LC_ENGINE_BOOTSTRAP") or ""
     if not image or not bootstrap or not source:
         return {"format": 1, "ok": False, "error": "no bridge image or engine to run"}
-    args = helper_run_args("engine", "1500:1500") + ["-i", "--entrypoint", "python3"]
+    import secrets
+    args = helper_run_args("engine", "1500:1500") + [
+        "-i", "--name", "sigrift-lc-%s-%s-%s" % (project or "none", op, secrets.token_hex(3))]
+    if project:
+        args += ["--label", "%s.project=%s" % (LIFECYCLE_LABEL, project)]
+    args += ["--entrypoint", "python3"]
     if project:
         vols = project_volumes(project, volumes)
         if "bridge_data" in vols:
@@ -2223,6 +2448,9 @@ def folder_kind(d, installer):
     env = os.path.lexists(os.path.join(d, ".env"))
     head = first_line(os.path.join(d, "docker-compose.yml"))
     if head.startswith(HOLD_HEADER):
+        # Phase 2 (1.2): held, moved.json present and no active journal.
+        if moved_info(d) and not journal_active(journal_load(d)):
+            return "moved"
         return "held"
     if installer == "quickstart":
         return "existing" if env else "new"
@@ -2588,6 +2816,14 @@ def decide_existing(c, d, auto=False):
     d = os.path.realpath(d)
     kind = folder_kind(d, c.installer)
     auto_flag = "1" if auto else "0"
+    if kind == "moved":
+        m = moved_info(d) or {}
+        project = m.get("project") or env_pin(d) or derive_project(d)
+        if os.environ.get("LC_MOVED_OK") != "1":
+            moved_here_refusal(d, m, c.installer)
+        return decision(c, LC_KIND="moved", LC_TARGET_DIR=d, LC_PROJECT=project,
+                        LC_PROJECT_HOW="pinned", LC_AUTO=auto_flag, LC_HAS_DATA="1",
+                        LC_INSTALL_ID=m.get("install_id") or "")
     if kind == "held":
         project = (journal_load(d) or {}).get("project") or env_pin(d) or derive_project(d)
         return decision(c, LC_KIND="held", LC_TARGET_DIR=d, LC_PROJECT=project,
@@ -2838,7 +3074,9 @@ def cmd_identity(argv):
         refuse("could not ask Docker which SigRift installs this host has (%s exited %d)."
                % (e.what, e.rc), next_cmd=e.what)
     c.projects = projects
-    c.installs = [p for p in projects.values() if p.has_data]
+    # A moved-away project (1.2) is listed, never a target or "this host's
+    # install".
+    c.installs = [p for p in projects.values() if p.has_data and not p.moved_away]
     if a.get("target"):
         target = os.path.realpath(os.path.expanduser(a["target"]))
         validate_target(c, target)
@@ -3476,14 +3714,18 @@ def cmd_engine_image(argv):
 
 def cmd_engine_run(argv):
     """engine-run --image I --project P --op OP [--env-file F] [--bridge ID]
-    [--record-file F]: engine source on fd 3, reply JSON on stdout."""
+    [--record-file F] [--audit-at N]: engine source on fd 3, reply JSON on
+    stdout. --audit-at: the facts also name the audit entry N's chain tag
+    (phase2-notes F-D21)."""
     a = parse_flags(argv, {"image": True, "project": True, "op": True, "env-file": True,
-                           "bridge": True, "record-file": True})
+                           "bridge": True, "record-file": True, "audit-at": True})
     source = read_fd3()
     op = a.get("op", "facts")
     extra = {}
     if op == "facts":
         extra["candidates"] = build_candidates(a.get("env_file"), a.get("bridge", ""))
+        if (a.get("audit_at") or "").isdigit():
+            extra["audit_at"] = [int(a["audit_at"])]
     elif op == "write-record":
         rec = json.loads(read_text(a["record_file"]) or "{}")
         extra["record"] = rec
@@ -3517,19 +3759,44 @@ def sha256_file(path):
 
 
 def cmd_write_host_record(argv):
-    """Host record after a healthy run; prints the volume record to write."""
+    """Host record after a healthy run; writes the volume record to write
+    into --volume-record. 1b: --with-journal takes the restore point, the
+    env_written tags, bridge_started_at and verify_notes from this folder's
+    journal (never from argv); an install id is never minted while
+    .sigrift/install-id exists (E32), and that file is kept equal to the
+    record's."""
     a = parse_flags(argv, {"dir": True, "op": True, "project": True, "install-type": True,
                            "from": True, "to": True, "installer": True,
                            "installer-version": True, "env-result": True,
                            "moved-from": True, "schema": True, "snapshot": True,
-                           "volume-record": True, "result": True})
+                           "volume-record": True, "result": True, "install-id": True,
+                           "with-journal": False, "cause": True, "replaced": True,
+                           "automatic": True, "snapshot-dir": True, "compose-template": True,
+                           "compose-template-sha256": True, "compose-files-now": False,
+                           "audit-export-sha256": True, "finish-pending-add": True,
+                           "finish-pending-clear": True, "restore-point": True,
+                           "last-op": True, "restored-from": True, "upgrade-entry": False,
+                           "entry-extra": True, "record-extra": True, "set-install-id": True,
+                           "volume-extra": True, "export-add": True})
     d = os.path.realpath(a.get("dir", "."))
     rec = host_record(d) or {}
+    if a.get("set_install_id") and re.fullmatch(r"[0-9a-f-]{36}", a["set_install_id"]):
+        # Phase 2 (G10): the install id travels with the data (an import, or
+        # a rollback to a pre-import point).
+        if rec:
+            rec["install_id"] = a["set_install_id"]
+        else:
+            a["install_id"] = a["set_install_id"]
+    j = (journal_load(d) or {}) if a.get("with_journal") else {}
     first = not rec.get("install_id")
     now = now_utc()
     if first:
-        import uuid
-        rec = {"format": 1, "install_id": str(uuid.uuid4()), "created_at": now,
+        iid = a.get("install_id") or (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip() \
+            or j.get("install_id")
+        if not re.fullmatch(r"[0-9a-f-]{36}", iid or ""):
+            import uuid
+            iid = str(uuid.uuid4())
+        rec = {"format": 1, "install_id": iid, "created_at": now,
                "first_version": a.get("from") if a.get("op") != "install" and
                a.get("from") not in (None, "", "unknown") else a.get("to"),
                "history": [], "config_migrations": [], "compose_template_sha256": None}
@@ -3537,12 +3804,13 @@ def cmd_write_host_record(argv):
     if moved and rec.get("working_dir") and not same_path(rec["working_dir"], d):
         say("==> This install moved from %s to %s; its records were updated." % (
             rec["working_dir"], d))
+    release = a.get("installer_version", "") or "dev"
+    installer = dict(rec.get("installer") or {})
+    if a.get("installer"):
+        installer = {"release": release, "sha256": sha256_file(a["installer"])}
     rec.update({"format": 1, "install_type": a.get("install_type", "release"),
                 "project": a.get("project", ""), "working_dir": d, "host_id": host_id(),
-                "version": a.get("to", ""), "updated_at": now,
-                "installer": {"version": a.get("installer_version", ""),
-                              "sha256": sha256_file(a["installer"]) if a.get("installer")
-                              else None}})
+                "version": a.get("to", ""), "updated_at": now, "installer": installer})
     if a.get("schema"):
         try:
             rec["schema"] = int(a["schema"])
@@ -3557,20 +3825,89 @@ def cmd_write_host_record(argv):
         if cm not in cms:
             cms.append(cm)
     rec["config_migrations"] = cms
+    if a.get("snapshot_dir") or j.get("snapshot_dir"):
+        dirs = rec.get("snapshot_dirs") or []
+        sdir = a.get("snapshot_dir") or j.get("snapshot_dir")
+        if sdir not in dirs:
+            dirs.append(sdir)
+        rec["snapshot_dirs"] = dirs
+    if a.get("compose_template"):
+        rec["compose_template"] = a["compose_template"]
+    if a.get("compose_template_sha256"):
+        rec["compose_template_sha256"] = a["compose_template_sha256"]
+    if a.get("compose_files_now"):
+        rec["compose_files_sha256"] = compose_files_now(d)
+    pending = [x for x in rec.get("finish_pending") or [] if isinstance(x, dict)]
+    if a.get("finish_pending_clear"):
+        gone = set(a["finish_pending_clear"].split(","))
+        pending = [x for x in pending if "all" not in gone and x.get("id") not in gone]
+    if a.get("finish_pending_add"):
+        rid, _, rest = a["finish_pending_add"].partition(":")
+        size, _, frm = rest.partition(":")
+        pending = [x for x in pending if x.get("id") != rid]
+        pending.append({"id": rid, "created_at": now, "from_version": frm or None,
+                        "bytes": int(size) if size.isdigit() else 0})
+    rec["finish_pending"] = pending
     history = rec.get("history") or []
-    history.append({"at": now, "op": a.get("op", "rerun"), "from": a.get("from", ""),
-                    "to": a.get("to", ""), "result": a.get("result") or "ok",
-                    "snapshot": a.get("snapshot") or None})
+    if a.get("upgrade_entry") and isinstance(j.get("upgrade"), dict):
+        up = j["upgrade"]
+        history.append({"at": now, "op": "upgrade", "from": up.get("from_version"),
+                        "to": up.get("to_version"), "result": "rolled_back",
+                        "cause": None, "snapshot": up.get("snapshot"),
+                        "restore_point": up.get("restore_point"), "replaced": None,
+                        "journal": up.get("id"), "bridge_started_at": up.get("bridge_started_at"),
+                        "env_written": up.get("env_written") or {},
+                        "audit_export_sha256": None, "verify_notes": up.get("verify_notes") or []})
+    entry = {"at": now, "op": a.get("op", "rerun"), "from": a.get("from", ""),
+             "to": a.get("to", ""), "result": a.get("result") or "ok",
+             "snapshot": a.get("snapshot") or None}
+    if a.get("with_journal") or a.get("cause") or a.get("restore_point"):
+        entry.update({"cause": a.get("cause") or None,
+                      "restore_point": a.get("restore_point") or j.get("restore_point"),
+                      "replaced": a.get("replaced") or None, "journal": j.get("id"),
+                      "bridge_started_at": j.get("bridge_started_at"),
+                      "env_written": j.get("env_written") or {} if a.get("op") in (
+                          "upgrade", "adopt") else {},
+                      "audit_export_sha256": a.get("audit_export_sha256") or None,
+                      "verify_notes": j.get("verify_notes") or []})
+        if a.get("automatic"):
+            entry["automatic"] = a["automatic"] == "1"
+    for key, target in (("entry_extra", entry), ("record_extra", rec)):
+        if a.get(key):
+            extra = json.loads(a[key])
+            if isinstance(extra, dict):
+                target.update(extra)
+    if a.get("export_add"):
+        x = json.loads(a["export_add"])
+        if isinstance(x, dict):
+            rec["exports"] = ([e for e in rec.get("exports") or [] if isinstance(e, dict)]
+                              + [x])[-10:]
+    history.append(entry)
     rec["history"] = history[-50:]
     write_host_record(d, rec)
+    # E32: the install id file follows the record (it wins from now on).
+    if (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip() != rec["install_id"]:
+        atomic_write(os.path.join(d, INSTALL_ID_FILE), (rec["install_id"] + "\n").encode(), 0o600)
     if a.get("volume_record"):
         vol = {"format": 1, "install_id": rec["install_id"], "project": rec["project"],
                "working_dir": d, "host_id": rec["host_id"],
                "install_type": rec["install_type"],
-               "installer_version": a.get("installer_version", ""),
+               "installer_version": release,
                "first_version": rec.get("first_version"), "last_version": rec["version"],
                "tls_cert_sha256": sha256_file(os.path.join(d, "tls", "cert.pem")),
-               "updated_at": now}
+               "updated_at": now, "last_op": a.get("last_op") or a.get("op") or None,
+               "restored_from": a.get("restored_from") or None,
+               "rolled_back_at": now if a.get("restored_from") else None}
+        # Phase 2 (9.3): imported_from (without history_tail) and exports.
+        if isinstance(rec.get("imported_from"), dict):
+            vol["imported_from"] = dict((k, v) for k, v in rec["imported_from"].items()
+                                        if k != "history_tail")
+        if rec.get("exports"):
+            vol["exports"] = rec["exports"][-10:]
+        if a.get("volume_extra"):
+            extra = json.loads(a["volume_extra"])
+            if isinstance(extra, dict):
+                vol.update(extra)
         atomic_write(a["volume_record"], json.dumps(vol).encode(), 0o600)
 
 
@@ -3623,7 +3960,9 @@ def cmd_plan(argv):
     upgrade; the run has changed nothing when it is printed."""
     a = parse_flags(argv, {"dir": True, "project": True, "pin": True, "from": True,
                            "to": True, "env-result": True, "others": True, "mode": True,
-                           "source-dir": True, "newest": True, "tls": True, "owner": True})
+                           "source-dir": True, "newest": True, "tls": True, "owner": True,
+                           "space": True, "no-snapshot": True, "auto-rollback": True,
+                           "compose": True, "exclude": True})
     d = os.path.realpath(a.get("dir", "."))
     facts = load_facts()
     try:
@@ -3637,8 +3976,9 @@ def cmd_plan(argv):
     say("  target    %s (project %s, %s)" % (d, project, pinned))
     frm, to = a.get("from", "unknown"), a.get("to", "")
     if a.get("owner"):
-        say("  images    ghcr.io/%s/sigrift-bridge:%s, ghcr.io/%s/sigrift-gateway:%s" % (
-            a["owner"], to, a["owner"], to))
+        say("  images    ghcr.io/%s/sigrift-bridge:%s, ghcr.io/%s/sigrift-gateway:%s%s" % (
+            a["owner"], to, a["owner"], to, " (local, SIGRIFT_PULL=never)"
+            if os.environ.get("SIGRIFT_PULL") == "never" else ""))
     if mode == "fresh":
         say("  version   %s (a new install; the images are pulled before anything is written)"
             % to)
@@ -3660,6 +4000,13 @@ def cmd_plan(argv):
         say("  compose   written for %s" % to)
     elif frm == to:
         say("  compose   kept")
+    elif a.get("compose") in ("custom",):
+        say("  compose   edited by hand -> image tags only (the diff goes to the log)")
+    elif a.get("compose") == "below-floor":
+        say("  compose   below the template's first release -> image tags only")
+    elif a.get("compose") and a["compose"] != "not-installer":
+        say("  compose   installer template %s -> regenerated for %s (old file kept as "
+            "docker-compose.yml.bak.*~)" % (a["compose"], to))
     else:
         say("  compose   image tags updated in place (old file kept as "
             "docker-compose.yml.bak.*~)")
@@ -3681,15 +4028,47 @@ def cmd_plan(argv):
             "kept as install-release.sh.bak.*~)" % d)
     elif mode != "fresh":
         say("  installer the one in %s" % d)
+    sp = json_arg(a, "space")
     if mode == "fresh":
         say("  restore   nothing to keep yet (a new install)")
-    else:
+    elif mode != "upgrade":
         say("  restore   files-only restore point in %s/.sigrift/snapshots/ (.env, compose, "
-            "VERSION, tls, installer); the data volumes are not copied by this installer "
-            "yet: to keep a copy first, see INSTALL.md \"Upgrading a release install\"" % d)
+            "VERSION, tls, installer)" % d)
+    elif a.get("no_snapshot") == "1":
+        say("  restore   NO restore point (--no-snapshot, SIGRIFT_I_HAVE_A_BACKUP=1): --rollback "
+            "cannot undo this upgrade; a files-only restore point is still taken")
+    else:
+        est = sp.get("est") or {}
+        rem = ", ".join(("restore point %s" % r.get("id")) if r.get("kind") == "prune" else
+                        "detections.db.pre-migration" for r in sp.get("remedies") or [])
+        say("  restore   full restore point in %s (~%s: database %s, captures %s%s, other %s; "
+            "gzip -1); %s free, needs %s incl. a %s reserve%s; kept: 2 upgrade points + 10 "
+            "files-only; restore points are not off-host backups" % (
+                sp.get("root") or os.path.join(d, SNAPSHOTS),
+                human_bytes(int(sp.get("rp") or 0)), human_bytes(int(est.get("db") or 0)),
+                human_bytes(int(est.get("captures") or 0)),
+                " (left out: --exclude iq,pcap)" if a.get("exclude") else "",
+                human_bytes(int(est.get("other") or 0)), human_bytes(int(sp.get("free") or 0)),
+                human_bytes(int((sp.get("need") or 0))), human_bytes(int(sp.get("reserve") or 0)),
+                ("; removes first: %s" % rem) if rem else ""))
+    if mode == "upgrade" and a.get("no_snapshot") != "1":
+        if a.get("auto_rollback") == "0":
+            say("  if it fails  left as it is for you to look at (--no-auto-rollback); "
+                "bash install-release.sh --rollback undoes it")
+        else:
+            say("  if it fails  rolls back by itself when the new version never becomes healthy "
+                "and took no data (--no-auto-rollback keeps a failed upgrade for debugging)")
+        if sp.get("note") and a.get("auto_rollback") != "0":
+            say("  " + sp["note"])
     if mode == "upgrade":
-        say("  downtime  the stack stops from the switch until the new bridge is healthy "
-            "(about 1-3 min, plus migration time)")
+        pend = [x for x in (host_record(d) or {}).get("finish_pending") or []
+                if isinstance(x, dict)]
+        for x in pend:
+            say("  kept copy the copy kept by the rollback of %s (%s) is removed once this "
+                "upgrade is verified" % (x.get("created_at") or x.get("id"),
+                                         human_bytes(int(x.get("bytes") or 0))))
+        say("  downtime  the stack stops for the database check and the restore point, then "
+            "until the new bridge is healthy (about 1-3 min, plus migration time)")
     elif mode == "rerun":
         say("  downtime  none planned (a re-run recreates only containers whose settings "
             "changed)")
@@ -3716,7 +4095,10 @@ LOGS = os.path.join(STATE_DIR, "logs")
 HELD = os.path.join(STATE_DIR, "held")
 EXIT_LOCK_DEFERRED = 5
 EXIT_LOCK_UNSUPPORTED = 6
-ACTIVE_STATES = ("running", "failed", "verify_failed")
+ACTIVE_STATES = ("running", "failed", "verify_failed", "aborting")
+TERMINAL_STATES = ("done", "aborted")
+JOURNAL_ARCHIVE_KEEP = 50
+INSTALL_ID_FILE = os.path.join(STATE_DIR, "install-id")
 OVERRIDES = ("docker-compose.override.yml", "docker-compose.override.yaml")
 # What a files-only restore point holds, each when present: everything an
 # upgrade, a re-run or a TLS renewal may change outside the volumes.
@@ -3724,6 +4106,12 @@ SNAPSHOT_FILES = (".env", "docker-compose.yml") + OVERRIDES + (
     "VERSION", "install-release.sh", "LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.txt",
     "README-INSTALL.txt", "tls/cert.pem", "tls/key.pem", ".sigrift-scanners.yml",
     ".sigrift/install.json")
+if os.path.isabs(STATE_DIR):
+    # A source install (phase2-spec 8.1): the checkout's files; the state
+    # directory is not inside it, so its install.json is not a member.
+    SNAPSHOT_FILES = (".env", "docker-compose.yml") + OVERRIDES + (
+        "tls/cert.pem", "tls/key.pem", ".sigrift-scanners.yml",
+        ".sigrift-scanners-pending.json")
 # What --upgrade DIR installs into DIR from the newly unpacked release.
 RELEASE_FILES = ("install-release.sh", "LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.txt",
                  "README-INSTALL.txt")
@@ -3848,33 +4236,102 @@ def container_image_id(cid):
     return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
 
 
-def cmd_journal_new(argv):
-    """journal-new --dir D --op OP --steps a,b --done a --from F --to T ...
-
-    Variables to carry into the detached run come as KEY=VALUE lines on
-    fd 3 (no secrets: decision values, versions, flags). Prints the id.
-    """
-    a = parse_flags(argv, {"dir": True, "op": True, "steps": True, "done": True,
-                           "from": True, "to": True, "owner": True, "project": True,
-                           "source-dir": True, "snapshot": True, "was-running": True,
-                           "images": True, "bridge": True, "gateway": True, "pin": True,
-                           "project-how": True})
-    d = os.path.realpath(a.get("dir", "."))
+def logs_dir(d):
     ensure_state_dir(d)
     logs = os.path.join(d, LOGS)
     if not os.path.isdir(logs):
         os.mkdir(logs, 0o700)
         give_owner(logs, owner_for(os.path.join(d, STATE_DIR)))
     os.chmod(logs, 0o700)
+    return logs
+
+
+def new_journal_id(d, op):
+    """A fresh id (UTC stamp, -n when taken) that names no log, archive or
+    lifecycle entry yet."""
+    logs = logs_dir(d)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     jid, n = stamp, 1
-    while os.path.lexists(os.path.join(logs, "%s-%s.log" % (a.get("op", "upgrade"), jid))):
+    cur = (journal_load(d) or {}).get("id")
+    while jid == cur or any(os.path.lexists(os.path.join(logs, x % jid)) for x in (
+            "%s-%%s.log" % op, "journal-%s.json", "rollback-%s")):
         n += 1
         jid = "%s-%d" % (stamp, n)
-    log = os.path.join(LOGS, "%s-%s.log" % (a.get("op", "upgrade"), jid))
+    return jid
+
+
+def new_log(d, op, jid):
+    logs = logs_dir(d)
+    log = os.path.join(LOGS, "%s-%s.log" % (op, jid))
     fd = os.open(os.path.join(d, log), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     give_owner(fd, owner_for(logs))
     os.close(fd)
+    return log
+
+
+def journal_archive(d, j):
+    """A copy of journal J in .sigrift/logs/journal-<id>.json (0600); the
+    newest JOURNAL_ARCHIVE_KEEP are kept."""
+    if not j or not j.get("id"):
+        return
+    logs = logs_dir(d)
+    write_json(os.path.join(logs, "journal-%s.json" % j["id"]), j)
+    olds = sorted((n for n in os.listdir(logs) if n.startswith("journal-") and
+                   n.endswith(".json")),
+                  key=lambda n: os.lstat(os.path.join(logs, n)).st_mtime)
+    for n in olds[:-JOURNAL_ARCHIVE_KEEP]:
+        try:
+            os.unlink(os.path.join(logs, n))
+        except OSError:
+            pass
+
+
+def mint_install_id(d, given=""):
+    """E32: the install id of a new journal: GIVEN, else the host record's,
+    else .sigrift/install-id, else a new uuid4 written there (0600) first."""
+    if given:
+        return given
+    rec = host_record(d) or {}
+    if rec.get("install_id"):
+        return rec["install_id"]
+    text = (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip()
+    if re.fullmatch(r"[0-9a-f-]{36}", text):
+        return text
+    import uuid
+    iid = str(uuid.uuid4())
+    ensure_state_dir(d)
+    atomic_write(os.path.join(d, INSTALL_ID_FILE), (iid + "\n").encode(), 0o600)
+    return iid
+
+
+def cmd_journal_new(argv):
+    """journal-new --dir D --op OP --steps a,b --done a --from F --to T ...
+
+    Variables to carry into the detached run come as KEY=VALUE lines on
+    fd 3 (no secrets: decision values, versions, flags). --extra JSON adds
+    op-specific fields (no secrets). A finished journal is archived first;
+    an active one is never replaced (exit 1). Prints the id.
+    """
+    a = parse_flags(argv, {"dir": True, "op": True, "steps": True, "done": True,
+                           "from": True, "to": True, "owner": True, "project": True,
+                           "source-dir": True, "snapshot": True, "was-running": True,
+                           "images": True, "bridge": True, "gateway": True, "pin": True,
+                           "project-how": True, "install-id": True, "extra": True,
+                           "jid": True})
+    d = os.path.realpath(a.get("dir", "."))
+    old = journal_load(d)
+    if journal_active(old):
+        sys.stderr.write("lc_tool journal-new: %s holds an active journal (%s %s); it is "
+                         "never replaced\n" % (d, old.get("op"), old.get("state")))
+        sys.exit(1)
+    if old:
+        journal_archive(d, old)
+    op = a.get("op", "upgrade")
+    jid = a.get("jid") or new_journal_id(d, op)
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z(-[0-9]+)?", jid):
+        sys.exit("lc_tool journal-new: --jid is not a journal id")
+    log = new_log(d, op, jid)
+    iid = mint_install_id(d, a.get("install_id") or "")
     facts = load_facts() or {}
     db, cnt = facts.get("db") or {}, facts.get("counts") or {}
     env = candidate(facts, "env") or {}
@@ -3904,7 +4361,14 @@ def cmd_journal_new(argv):
          # The daemon the stack runs on: --resume and --abort refuse another.
          "host_id": host_id(),
          "vars": read_kv_fd3(), "bridge_started_at": None, "pid": None, "log": log,
-         "started_at": now_utc(), "error": None}
+         "started_at": now_utc(), "error": None, "install_id": iid}
+    if a.get("extra"):
+        extra = json.loads(a["extra"])
+        if not isinstance(extra, dict):
+            sys.exit("lc_tool journal-new: --extra is not a JSON object")
+        j.update(extra)
+    if op == "rollback":
+        j["rb_id"] = jid
     pending = journal_pending(j)
     j["next"] = pending[0] if pending else ""
     journal_save(d, j)
@@ -3950,12 +4414,33 @@ def journal_value(v):
     return v
 
 
+def set_dotted(obj, key, value):
+    parts = key.split(".")
+    for k in parts[:-1]:
+        if not isinstance(obj.get(k), dict):
+            obj[k] = {}
+        obj = obj[k]
+    obj[parts[-1]] = value
+
+
 def cmd_journal_set(argv):
-    """journal-set DIR KEY=VALUE... (null, true, false, @now are typed)."""
+    """journal-set DIR KEY=VALUE... (null, true, false, @now are typed), or
+    journal-set DIR --json KEY: the value is JSON read from fd 3 and KEY may
+    be dotted (auto_rollback.stage); no value passes through argv."""
     d = argv[0]
     j = journal_load(d)
     if not j:
         sys.exit("lc_tool: no journal in %s" % d)
+    if argv[1:2] == ["--json"]:
+        key = argv[2]
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*(\.[a-z0-9_]+)*", key):
+            sys.exit("lc_tool journal-set: invalid key %r" % key)
+        value = json.loads(read_fd3().decode("utf-8") or "null")
+        if value == "@now":
+            value = now_utc()
+        set_dotted(j, key, value)
+        journal_save(d, j)
+        return
     for item in argv[1:]:
         k, _, v = item.partition("=")
         if k in ("installer_backups", "held"):
@@ -4008,8 +4493,11 @@ def cmd_journal_check(argv):
     refuses (M-INTERRUPTED, M-VERIFY-FAILED, a hold without a journal).
     """
     d = argv[0]
-    a = parse_flags(argv[1:], {"to": True, "requested": True, "held": True})
+    a = parse_flags(argv[1:], {"to": True, "requested": True, "held": True, "req": True})
     j = journal_load(d)
+    if journal_active(j) and j.get("op") in ("rollback", "snapshot", "finish", "export",
+                                              "import", "reactivate"):
+        interrupted_op_refusal(d, j, a.get("req") or "a re-run")
     if not journal_active(j):
         if a.get("held") == "1":
             refuse("%s/docker-compose.yml is the hold stub of an upgrade, but no upgrade is in "
@@ -4031,6 +4519,35 @@ def cmd_journal_check(argv):
     refuse("an upgrade to %s was interrupted at step %s, so this run (%s) cannot start "
            "another." % (j.get("to_version"), step, to or "a re-run"),
            next_cmd=resume_cmd(d, j))
+
+
+def op_phrase(j):
+    """What the journal's operation is, for M-INTERRUPTED-OP."""
+    op = j.get("op")
+    if op == "rollback":
+        v = j.get("to_version") or "?"
+        if j.get("state") == "aborting":
+            return "the undo (--abort) of a rollback to %s" % v
+        return "a rollback to %s" % v
+    if op == "snapshot":
+        return "a restore point (--snapshot)"
+    if op == "finish":
+        return "a --rollback --finish"
+    if op == "export":
+        return "an export (--export%s)" % (" --move" if (j.get("flags") or {}).get("move")
+                                          else "")
+    if op == "import":
+        return "an import (--import)"
+    if op == "reactivate":
+        return "a --reactivate"
+    return "an upgrade to %s" % (j.get("to_version") or "?")
+
+
+def interrupted_op_refusal(d, j, req):
+    refuse("%s started at %s was interrupted at step %s, so this run (%s) cannot start "
+           "another operation." % (op_phrase(j), j.get("started_at") or "?",
+                                   j.get("next") or "?", req),
+           next_cmd=lifecycle_cmd("--resume", d))
 
 
 def cmd_journal_guard(argv):
@@ -4101,6 +4618,11 @@ def cmd_renew_check(argv):
     j = journal_load(d)
     if not journal_active(j):
         say("proceed")
+        return
+    if j.get("op") in ("rollback", "snapshot", "finish"):
+        # 1b: any other operation in progress holds the certificate back
+        # (a rollback also restores tls/ when it is undone).
+        say("defer %s is in progress (step %s)" % (op_phrase(j), j.get("next") or "?"))
         return
     state = j.get("state")
     pid = j.get("pid")
@@ -4248,10 +4770,18 @@ def make_dirs(path):
 
 
 def take_snapshot(d, reason, frm, to, installer_version, project, install_id):
-    """A files-only restore point of DIR; -> (id, reused)."""
+    """A files-only restore point of DIR; -> (id, reused). Under a hold it
+    is the logical view: docker-compose.yml and the overrides come from
+    .sigrift/held/, and the hold stub itself is never recorded."""
     files, missing, blobs = [], [], {}
+    held = is_held(d)
     for rel in SNAPSHOT_FILES:
         p = os.path.join(d, rel)
+        if held and (rel == "docker-compose.yml" or rel in OVERRIDES):
+            p = os.path.join(d, HELD, rel)
+            if rel == "docker-compose.yml" and not os.path.lexists(p):
+                raise ValueError("docker-compose.yml is the hold stub and the real one is not in "
+                                 "%s" % HELD)
         if os.path.islink(p):
             files.append({"path": rel, "symlink": os.readlink(p)})
             continue
@@ -4261,6 +4791,9 @@ def take_snapshot(d, reason, frm, to, installer_version, project, install_id):
         if not os.path.isfile(p):
             continue
         data, via = read_file_bytes(p, rel)
+        if rel == "docker-compose.yml" and data.startswith(HOLD_HEADER.encode()):
+            raise ValueError("docker-compose.yml is the hold stub and the real one is not in "
+                             "%s" % HELD)
         files.append({"path": rel, "sha256": sha256_bytes(data), "bytes": len(data),
                       "mode": "%04o" % stat.S_IMODE(os.lstat(p).st_mode), "via_helper": via})
         blobs[rel] = data
@@ -4492,6 +5025,43 @@ services:
     restart: "no"
     command: ["sh", "-c", "echo 'SigRift is mid-upgrade: run bash install-release.sh --status' >&2; exit 1"]
 """
+# Phase 2 (1.2, G8): the stub of a folder whose install moved to another host.
+MOVE_STUB = """%s: this install was moved to another host.
+# The real files are in the state directory's held/. This placeholder
+# starts nothing that touches the data. Run: %s --status
+name: %s
+services:
+  sigrift-held:
+    image: %s
+    network_mode: none
+    restart: "no"
+    command: ["sh", "-c", "echo 'SigRift was moved to another host (archive %s): run %s --status' >&2; exit 1"]
+"""
+
+
+def hold_stub(project, reason="upgrade", archive_id="", inst=""):
+    if reason == "move":
+        inst = inst if inst in ("bash install-release.sh", "scripts/quickstart.sh") \
+            else "bash install-release.sh"
+        aid = re.sub(r"[^0-9a-f-]", "", archive_id or "")[:8] or "?"
+        return MOVE_STUB % (HOLD_HEADER, inst, project, helper_image() or "alpine", aid, inst)
+    return STUB % (HOLD_HEADER, project, helper_image() or "alpine")
+
+
+def move_file(src, dst):
+    """rename(2), or, across filesystems (quickstart's state dir may be on
+    another one than the checkout, phase2-spec 8.1), copy beside DST, fsync,
+    rename into place, then unlink SRC."""
+    import errno
+    try:
+        os.replace(src, dst)
+    except OSError as e:
+        if e.errno != errno.EXDEV or os.path.islink(src):
+            raise
+        with open(src, "rb") as f:
+            data = f.read()
+        atomic_write(dst, data, stat.S_IMODE(os.lstat(src).st_mode))
+        os.unlink(src)
 
 
 def is_held(d):
@@ -4504,7 +5074,8 @@ def cmd_hold(argv):
     file's place (one rename, so there is no moment without either). A
     plain `docker compose up` or a reboot then starts nothing that touches
     the data; even `down -v` there removes no volume. Idempotent."""
-    a = parse_flags(argv, {"dir": True, "project": True})
+    a = parse_flags(argv, {"dir": True, "project": True, "reason": True, "archive-id": True,
+                           "inst": True, "from-file": True})
     d = os.path.realpath(a["dir"])
     held = os.path.join(d, HELD)
     ensure_state_dir(d)
@@ -4514,21 +5085,30 @@ def cmd_hold(argv):
     os.chmod(held, 0o700)
     compose = os.path.join(d, "docker-compose.yml")
     names = []
-    if not is_held(d):
+    if not valid_project(a["project"]):
+        sys.exit("lc_tool hold: invalid project name")
+    stub = hold_stub(a["project"], a.get("reason") or "upgrade", a.get("archive_id") or "",
+                     a.get("inst") or "")
+    if a.get("from_file") and not os.path.lexists(os.path.join(held, "docker-compose.yml")):
+        # An import (6.2 hold): the compose file it rendered is the held one.
+        with open(a["from_file"], "rb") as f:
+            atomic_write(os.path.join(held, "docker-compose.yml"), f.read(), 0o644)
+        atomic_write(compose, stub.encode(), 0o644)
+    elif not is_held(d):
         with open(compose, "rb") as f:
             data = f.read()
         mode = stat.S_IMODE(os.lstat(compose).st_mode)
         atomic_write(os.path.join(held, "docker-compose.yml"), data, mode)
-        if not valid_project(a["project"]):
-            sys.exit("lc_tool hold: invalid project name")
-        stub = STUB % (HOLD_HEADER, a["project"], helper_image() or "alpine")
         atomic_write(compose, stub.encode(), mode)
+    elif a.get("reason"):
+        # Rewrite the stub's text only (mv-mark: reason move).
+        atomic_write(compose, stub.encode(), stat.S_IMODE(os.lstat(compose).st_mode))
     if os.path.isfile(os.path.join(held, "docker-compose.yml")):
         names.append("docker-compose.yml")
     for ov in OVERRIDES:
         p = os.path.join(d, ov)
         if os.path.lexists(p):
-            os.replace(p, os.path.join(held, ov))
+            move_file(p, os.path.join(held, ov))
         if os.path.lexists(os.path.join(held, ov)):
             names.append(ov)
     fsync_dir(held)
@@ -4546,9 +5126,9 @@ def cmd_unhold(argv):
     held = os.path.join(d, HELD)
     for ov in OVERRIDES:
         if os.path.lexists(os.path.join(held, ov)):
-            os.replace(os.path.join(held, ov), os.path.join(d, ov))
+            move_file(os.path.join(held, ov), os.path.join(d, ov))
     if os.path.lexists(os.path.join(held, "docker-compose.yml")):
-        os.replace(os.path.join(held, "docker-compose.yml"), os.path.join(d, "docker-compose.yml"))
+        move_file(os.path.join(held, "docker-compose.yml"), os.path.join(d, "docker-compose.yml"))
     fsync_dir(d)
     try:
         os.rmdir(held)
@@ -4571,6 +5151,22 @@ def project_containers(project, running_only):
     return rows
 
 
+def lifecycle_containers(project):
+    """Leftover lifecycle containers of PROJECT (a killed run's): a state
+    engine or 1a engine with its project label, or a 1a engine or helper
+    that mounts one of its volumes."""
+    vols = set(project_volumes(project).values())
+    ids = []
+    fmt = '{{.ID}}\t{{.Label "%s"}}\t{{.Mounts}}' % LIFECYCLE_PROJECT_LABEL
+    for line in docker_lines("docker ps", "ps", "-a", "--filter", "label=" + LIFECYCLE_LABEL,
+                             "--format", fmt):
+        parts = (line.split("\t") + ["", ""])[:3]
+        mounts = set(m.strip() for m in parts[2].split(",") if m.strip())
+        if parts[0] and (parts[1] == project or mounts & vols):
+            ids.append(parts[0])
+    return ids
+
+
 def cmd_stop_project(argv):
     """stop-project --project P: stop every running container labelled
     with the project (the stub's, a scanner's), then check that no
@@ -4579,6 +5175,8 @@ def cmd_stop_project(argv):
     a = parse_flags(argv, {"project": True})
     project = a["project"]
     try:
+        for cid in lifecycle_containers(project):
+            docker("rm", "-f", cid)
         ids = [r[0] for r in project_containers(project, True)]
         if ids:
             r = docker("stop", "--time", "30", *ids, timeout=300)
@@ -4753,9 +5351,11 @@ def cmd_verify_upgrade(argv):
     the new bridge image) against the journal's from before the stop.
     Prints what it checked; exit 1 with the reason on a regression."""
     d = argv[0]
-    a = parse_flags(argv[1:], {"target-schema": True, "project": True, "bridge": True})
+    a = parse_flags(argv[1:], {"target-schema": True, "project": True, "bridge": True,
+                               "state-file": True, "rf-file": True})
     facts = load_facts()
-    pre = (journal_load(d) or {}).get("pre") or {}
+    j = journal_load(d) or {}
+    pre = j.get("pre") or {}
     if a.get("project") and not a.get("bridge"):
         # The facts were read from the project's volumes; the stack that
         # runs must be that project's too (a shell or another daemon could
@@ -4806,14 +5406,58 @@ def cmd_verify_upgrade(argv):
                 "valid" if ok else "unchanged (it did not verify before either)",
                 pre_head if pre_head is not None else "none", head))
     det, pre_det = cnt.get("detections_max_id"), pre.get("detections_max_id")
+    notes = []
+    pre_state = j.get("pre_state") if isinstance(j.get("pre_state"), dict) else None
     if isinstance(det, int) and isinstance(pre_det, int) and det < pre_det:
-        problems.append("the highest detection id fell from %d to %d" % (pre_det, det))
+        newest = epoch_utc(((pre_state or {}).get("marks") or {}).get("detections_newest_ts"))
+        taken = epoch_utc(j.get("prechecks_at"))
+        if newest is not None and taken is not None and taken - newest > 86400:
+            # An idle install: retention may remove its newest rows at the
+            # first start of the new version.
+            notes.append("verify: detections newest row id %d -> %d; the newest detection was "
+                         "older than a day at the restore point (retention)" % (pre_det, det))
+        else:
+            problems.append("the highest detection id fell from %d to %d" % (pre_det, det))
     elif isinstance(pre_det, int):
         done.append("detections max id not lower")
+    st = read_json_file(a["state_file"]) if a.get("state_file") else None
+    if isinstance(st, dict) and pre_state:
+        before = (pre_state.get("marks") or {}).get("tables") or {}
+        after = (st.get("marks") or {}).get("tables") or {}
+        queue = set((pre_state.get("marks") or {}).get("queue") or [])
+        for t_ in sorted(before):
+            if t_ in queue or t_ in ("detections", "audit_log"):
+                continue
+            b, n = before.get(t_), after.get(t_)
+            if isinstance(b, int) and isinstance(n, int) and n < b:
+                notes.append("verify: %s newest row id %d -> %d; retention or a deletion since "
+                             "the restore point" % (t_, b, n))
+    rf = read_json_file(a["rf_file"]) if a.get("rf_file") else None
+    if isinstance(rf, dict):
+        sm, fm = n_of(rf.get("streams_missing")), n_of(rf.get("fences_missing"))
+        if sm or fm:
+            problems.append("%d RF summary stream rows and %d generation fences of the restore "
+                            "point are missing" % (sm, fm))
+        else:
+            done.append("RF fences kept")
+    if notes:
+        j = journal_load(d) or {}
+        j["verify_notes"] = notes
+        journal_save(d, j)
+        for n in notes:
+            sys.stderr.write(n + "\n")
     if problems:
         say("; ".join(problems))
         sys.exit(1)
     say("; ".join(done))
+
+
+def epoch_utc(text):
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", str(text or ""))
+    if not m:
+        return None
+    import calendar
+    return calendar.timegm(tuple(int(x) for x in m.groups()) + (0, 0, 0))
 
 
 # ── --status ────────────────────────────────────────────────────────────
@@ -4850,11 +5494,43 @@ def human_bytes(n):
         n /= 1024.0
 
 
+def default_rollback_target(d):
+    """E23 (the state tool's rule): the full restore point of the upgrade
+    that installed the current version, or None."""
+    for e in reversed((host_record(d) or {}).get("history") or []):
+        if not isinstance(e, dict):
+            continue
+        if e.get("op") == "rollback":
+            return None
+        if e.get("op") in ("upgrade", "adopt") and e.get("result") == "ok" and \
+                e.get("restore_point"):
+            return e["restore_point"]
+    return None
+
+
+def last_auto_rollback(j):
+    if not j:
+        return None
+    if j.get("op") == "rollback" and j.get("cause") == "auto":
+        up = j.get("upgrade") or {}
+        ar = up.get("auto_rollback") or {}
+        return {"upgrade": up.get("id"), "decision": ar.get("decision") or "rollback",
+                "reason": ar.get("reason")}
+    ar = j.get("auto_rollback") or {}
+    if j.get("op") == "upgrade" and ar.get("decision"):
+        return {"upgrade": j.get("id"), "decision": ar.get("decision"), "reason": ar.get("reason")}
+    return None
+
+
 def cmd_status(argv):
-    """status DIR [--installer I]: where this install stands (read-only)."""
+    """status DIR [--installer I] [--json] [--rp-list F]: where this install
+    stands (read-only). While an operation runs (E37) it starts no
+    container: schema, markers and the replaced copies then come from the
+    facts the operation cached last."""
     d = os.path.realpath(argv[0])
-    a = parse_flags(argv[1:], {"installer": True})
+    a = parse_flags(argv[1:], {"installer": True, "json": False, "rp-list": True})
     installer = a.get("installer", "release")
+    as_json = bool(a.get("json"))
     source = read_fd3()
     if not os.path.lexists(os.path.join(d, ".env")) and \
             not os.path.lexists(os.path.join(d, "docker-compose.yml")):
@@ -4866,6 +5542,9 @@ def cmd_status(argv):
                 details = ["SigRift installs on this host:"] + install_list(installs)
         except DockerError:
             pass
+        if as_json:
+            say(json.dumps({"format": 1, "dir": d, "installed": False}, sort_keys=True))
+            return
         refuse("%s holds no SigRift install (no .env or docker-compose.yml)." % d, details,
                next_cmd="%s --status <one of the folders above>" % installer_prog("release")
                if details else installer_prog("release"))
@@ -4875,11 +5554,9 @@ def cmd_status(argv):
     project = pin or (j or {}).get("project") or compose_name(d) or derive_project(d)
     held = is_held(d)
     kind = hr.get("install_type") or ("source" if is_checkout(d) else "release")
-    say("SigRift install in %s" % d)
-    say("  identity  project %s (%s), install id %s, %s install" % (
-        project, "pinned in .env" if pin else "not pinned yet",
-        (hr.get("install_id") or "none yet")[:8] + ("..." if hr.get("install_id") else ""),
-        kind))
+    running_op = op_running(d, j)
+    iid = hr.get("install_id") or (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip() \
+        or (j or {}).get("install_id") or None
     try:
         rows = docker_lines("docker ps -a", "ps", "-a", "--filter",
                             "label=%s=%s" % (PROJECT_LABEL, project), "--format",
@@ -4891,6 +5568,134 @@ def cmd_status(argv):
     for line in rows:
         parts = (line.split("\t") + [""] * 5)[:5]
         svcs.setdefault(parts[0], parts)
+    health = {}
+    for s in ("bridge", "gateway"):
+        if s not in svcs:
+            health[s] = "missing"
+        elif svcs[s][1] == "running":
+            health[s] = "running/%s" % health_of(svcs[s][2])
+        else:
+            health[s] = svcs[s][1]
+    schema = {"live": None, "image_newest": None, "note": None}
+    facts = None
+    if running_op:
+        facts = newest_cached_facts(d)
+        schema["note"] = "not read while an operation runs"
+    else:
+        bridge = svcs.get("bridge")
+        image = engine_image(installer, compose_owner(d) or "", installed_version(d),
+                             bridge[4] if bridge else "", [d, os.path.join(d, HELD)], project)
+        if image and source:
+            facts = facts_for(project, os.path.join(d, ".env"), "", image, source)
+            info = run_engine(image, "", "image-info", source)
+            schema["image_newest"] = info.get("newest_migration")
+            if not facts.get("ok"):
+                schema["note"] = facts.get("error") or "the engine gave no answer"
+        else:
+            schema["note"] = "no bridge image here"
+    if facts and facts.get("ok") is not False:
+        db = facts.get("db") or {}
+        schema["live"] = "encrypted" if db.get("encrypted") else db.get("schema")
+        if running_op:
+            schema["note"] = "not read while an operation runs"
+    markers = {"bridge_data": None, "bridge_secrets": None}
+    fm = (facts or {}).get("markers") or {}
+    for v in markers:
+        markers[v] = fm.get(v)
+    if facts and not fm and facts.get("restore_marker"):
+        for v in (facts.get("restore_markers") or []):
+            if v in markers:
+                markers[v] = {"unparsed": True}
+    lifecycle = (facts or {}).get("lifecycle") or {}
+    replaced = [{"id": r.get("id"), "volume": r.get("volume"), "phase": r.get("phase"),
+                 "bytes": r.get("bytes")} for r in lifecycle.get("replaced") or []]
+    rpl = read_json_file(a["rp_list"]) if a.get("rp_list") else None
+    rpl = rpl if isinstance(rpl, dict) else {}
+    points = rpl.get("restore_points") or []
+    incomplete = rpl.get("incomplete_restore_points") or []
+    fp = [{"id": x.get("id"), "bytes": x.get("bytes"),
+           "finish_cmd": "bash install-release.sh --rollback --finish"}
+          for x in hr.get("finish_pending") or [] if isinstance(x, dict)]
+    target = default_rollback_target(d)
+    rollback_cmd = "bash install-release.sh --rollback" if any(
+        p.get("id") == target and p.get("complete") for p in points) else None
+    nxt, jinfo, jline = "nothing to do", None, None
+    if j:
+        frm, to, state = j.get("from_version"), j.get("to_version"), j.get("state")
+        pid = j.get("pid")
+        pid_alive = isinstance(pid, int) and alive(pid)
+        if state == "done":
+            what = "done at %s" % (j.get("finished_at") or j.get("updated_at"))
+        elif state == "aborted":
+            what = "aborted at %s" % (j.get("finished_at") or j.get("updated_at"))
+        elif state == "verify_failed":
+            what = "VERIFY FAILED: %s" % (j.get("error") or "see the log")
+            nxt = "%s (runs the checks again), or keep it as it is: %s" % (
+                lifecycle_cmd("--resume", d), lifecycle_cmd("--resume --accept", d)) \
+                if j.get("op") == "upgrade" else lifecycle_cmd("--resume", d)
+        elif state == "failed":
+            what = "FAILED at step %s: %s" % (j.get("next") or "?", j.get("error") or "see the log")
+            nxt = resume_cmd(d, j)
+        elif state == "aborting" and not pid_alive:
+            what = "UNDO INTERRUPTED at step %s" % (j.get("next") or "?")
+            nxt = lifecycle_cmd("--resume", d)
+        elif pid_alive:
+            what = "RUNNING step %s (pid %d)" % (j.get("next") or "?", pid)
+            nxt = "tail -f %s" % q(os.path.join(d, j.get("log") or ""))
+        else:
+            what = "INTERRUPTED at step %s (pid gone)" % (j.get("next") or "?")
+            nxt = resume_cmd(d, j)
+        jline = "%s %s -> %s %s; log %s" % (j.get("op"), frm, to, what, j.get("log"))
+        if journal_active(j) and j.get("op") == "upgrade" and not j.get("bridge_started_at") \
+                and state != "verify_failed":
+            nxt += "; or undo it: %s" % lifecycle_cmd("--abort", d)
+        elif journal_active(j) and j.get("op") == "upgrade" and j.get("restore_point") and \
+                not pid_alive:
+            nxt += "; or roll it back: %s" % here("bash install-release.sh --rollback")
+        jinfo = {"op": j.get("op"), "id": j.get("id"), "state": state, "next": j.get("next") or None,
+                 "cause": j.get("cause"), "error": j.get("error"), "pid_alive": pid_alive,
+                 "from_version": frm, "to_version": to}
+    tls = {"expires": None, "self_signed": None}
+    cert = os.path.join(d, "tls", "cert.pem")
+    if os.path.isfile(cert):
+        tls["expires"] = openssl_out("x509", "-in", cert, "-noout", "-enddate").partition("=")[2] \
+            or None
+        subj = openssl_out("x509", "-in", cert, "-noout", "-subject").partition("=")[2]
+        iss = openssl_out("x509", "-in", cert, "-noout", "-issuer").partition("=")[2]
+        tls["self_signed"] = bool(subj) and subj == iss
+    try:
+        # No helper container reads volume records while an operation runs.
+        projects, _ = classify_host("" if running_op else helper_image())
+        others = [p for p in projects.values() if p.has_data and p.name != project]
+    except DockerError:
+        others = []
+    moved, imported, state_dir, keeps = status_phase2(d, j, hr)
+    if moved and not journal_active(j):
+        nxt = "nothing to do here: moved to another host (undo: %s --reactivate)" % (
+            installer_prog(installer))
+    if as_json:
+        out = {"format": 1, "dir": d, "installed": True,
+               "moved": moved, "imported": imported, "state_dir": state_dir,
+               "keeps": keeps,
+               "identity": {"project": project, "pinned": bool(pin), "install_id": iid,
+                            "install_type": kind},
+               "version": installed_version(d),
+               "installer_release": (hr.get("installer") or {}).get("release") or
+               os.environ.get("INSTALLER_RELEASE") or None,
+               "schema": schema, "health": health, "journal": jinfo, "next": nxt,
+               "held": held, "markers": markers, "last_auto_rollback": last_auto_rollback(j),
+               "restore_points": points, "incomplete_restore_points": incomplete,
+               "replaced": replaced, "finish_pending": fp, "rollback_cmd": rollback_cmd,
+               "tls": tls, "missing_roots": rpl.get("missing_roots") or [],
+               "others": [{"project": p.name, "kind": p.kind, "state": p.state,
+                           "folder": p.folder or None} for p in sorted(others,
+                                                                     key=lambda p: p.name)]}
+        say(json.dumps(out, indent=1, sort_keys=True))
+        return
+    say("SigRift install in %s" % d)
+    say("  identity  project %s (%s), install id %s, %s install" % (
+        project, "pinned in .env" if pin else "not pinned yet",
+        (iid or "none yet")[:8] + ("..." if iid else ""), kind))
     images = ", ".join("%s %s" % (s, svcs[s][3]) for s in ("bridge", "gateway") if s in svcs)
     say("  version   %s; %s" % (installed_version(d),
                                ("containers: " + images) if images
@@ -4899,73 +5704,2052 @@ def cmd_status(argv):
         ("%s running/%s" % (s, health_of(svcs[s][2]))) if svcs[s][1] == "running"
         else "%s %s" % (s, svcs[s][1]) for s in ("bridge", "gateway") if s in svcs)
         or "nothing runs"))
-    schema = "unknown (no bridge image here)"
-    bridge = svcs.get("bridge")
-    image = engine_image(installer, compose_owner(d) or "", installed_version(d),
-                         bridge[4] if bridge else "", [d, os.path.join(d, HELD)], project)
-    marker = False
-    if image and source:
-        facts = facts_for(project, os.path.join(d, ".env"), "", image, source)
-        info = run_engine(image, "", "image-info", source)
-        if facts.get("ok"):
-            marker = bool(facts.get("restore_marker"))
-            db = facts.get("db") or {}
-            live = "encrypted" if db.get("encrypted") else db.get("schema")
-            schema = "%s (the bridge image knows up to %s)" % (
-                live if live is not None else "none", info.get("newest_migration", "unknown"))
-        else:
-            schema = "unknown (%s)" % (facts.get("error") or "the engine gave no answer")
-    say("  schema    %s" % schema)
-    nxt = "nothing to do"
-    if j:
-        frm, to, state = j.get("from_version"), j.get("to_version"), j.get("state")
-        if state == "done":
-            what = "done at %s" % (j.get("finished_at") or j.get("updated_at"))
-        elif state == "aborted":
-            what = "aborted at %s" % (j.get("finished_at") or j.get("updated_at"))
-        elif state == "verify_failed":
-            what = "VERIFY FAILED: %s" % (j.get("error") or "see the log")
-            nxt = "%s (runs the checks again), or keep it as it is: %s" % (
-                lifecycle_cmd("--resume", d), lifecycle_cmd("--resume --accept", d))
-        elif state == "failed":
-            what = "FAILED at step %s: %s" % (j.get("next") or "?", j.get("error") or "see the log")
-            nxt = resume_cmd(d, j)
-        else:
-            pid = j.get("pid")
-            if isinstance(pid, int) and alive(pid):
-                what = "RUNNING step %s (pid %d)" % (j.get("next") or "?", pid)
-                nxt = "tail -f %s" % q(os.path.join(d, j.get("log") or ""))
-            else:
-                what = "INTERRUPTED at step %s (pid gone)" % (j.get("next") or "?")
-                nxt = resume_cmd(d, j)
-        say("  journal   %s %s -> %s %s; log %s" % (j.get("op"), frm, to, what, j.get("log")))
-        if journal_active(j) and not j.get("bridge_started_at") and state != "verify_failed":
-            nxt += "; or undo it: %s" % lifecycle_cmd("--abort", d)
+    if running_op:
+        say("  schema    not read while an operation runs (%s at step %s)" % (
+            (j or {}).get("op") or "an installer run", (j or {}).get("next") or "?"))
+    elif schema["live"] is not None or schema["image_newest"] is not None:
+        say("  schema    %s (the bridge image knows up to %s)" % (
+            schema["live"] if schema["live"] is not None else "none",
+            schema["image_newest"] if schema["image_newest"] is not None else "unknown"))
+    else:
+        say("  schema    unknown (%s)" % (schema["note"] or "no bridge image here"))
+    if jline:
+        say("  journal   %s" % jline)
     else:
         say("  journal   no upgrade has run here yet")
-    if held:
+    if j and j.get("state") == "aborting":
+        say("  undo      the undo of the rollback to %s stopped at %s; finish it: %s" % (
+            j.get("to_version"), j.get("next") or "?", lifecycle_cmd("--resume", d)))
+    lar = last_auto_rollback(j)
+    if lar:
+        word = {"rollback": "rolled back automatically: %s" % (lar.get("reason") or
+                                                              "it never became healthy"),
+                "aborted": "its automatic rollback was aborted"}.get(
+            lar["decision"], "not rolled back: %s" % (lar.get("reason") or lar["decision"]))
+        say("  last      upgrade to %s %s" % (
+            ((j.get("upgrade") or {}) if j.get("op") == "rollback" else j).get("to_version"),
+            word))
+    if moved:
+        say("  moved     to another host on %s (archive %s, %s)" % (
+            moved.get("at"), str(moved.get("archive_id"))[:8], esc(moved.get("file"))))
+    elif held:
         say("  hold      docker-compose.yml is the hold stub; the real files are in %s/" % HELD)
-    if marker:
-        say("  marker    %s is in the data volume: a restore was interrupted, so no stack may "
-            "start on this data" % RESTORE_MARKER)
+    if imported:
+        say("  imported  archive %s at %s" % (str(imported.get("archive_id"))[:8],
+                                                imported.get("at")))
+    for line in keeps:
+        say("  on disk   %s" % line)
+    on = [v for v in ("bridge_data", "bridge_secrets") if markers.get(v)]
+    if on:
+        m0 = markers[on[0]] or {}
+        say("  marker    RESTORE INCOMPLETE in %s (%s %s, step %s)" % (
+            " and ".join(on), m0.get("op") or "?", m0.get("id") or "?",
+            (j or {}).get("next") or "?") + ("" if j and journal_active(j) else
+                                              "; no journal names it: TROUBLESHOOTING.md, "
+                                              "\"A restore marker without a journal\""))
     say("  next      %s" % nxt)
-    snaps = list_snapshots(d)
-    complete = [s for s in snaps if s.complete]
-    incomplete = [s for s in snaps if not s.complete]
-    if complete:
-        say("  restore   %d files-only restore points (newest %s, %s); %d incomplete" % (
-            len(complete), complete[0].id, human_bytes(complete[0].bytes()), len(incomplete)))
+    full = [p for p in points if p.get("kind") == "full" and p.get("complete")]
+    files_only = [p for p in points if p.get("kind") == "files" and p.get("complete")]
+    if points or incomplete:
+        tgt = next((p["id"] for p in full if p.get("default_target")), None)
+        say("  restore   %d full%s, %d files-only; %d incomplete%s" % (
+            len(full), (" (%s, %s%s)" % (full[0]["id"], human_bytes(full[0].get("bytes") or 0),
+                                         "; --rollback target %s" % tgt if tgt else ""))
+            if full else "", len(files_only), len(incomplete),
+            (" (%s)" % ", ".join(x.get("path") or x.get("id") for x in incomplete))
+            if incomplete else ""))
     else:
-        say("  restore   no restore points yet%s" % (
-            "; %d incomplete" % len(incomplete) if incomplete else ""))
+        snaps = list_snapshots(d)
+        complete = [s for s in snaps if s.complete]
+        inc = [s for s in snaps if not s.complete]
+        if complete:
+            say("  restore   %d files-only restore points (newest %s, %s); %d incomplete" % (
+                len(complete), complete[0].id, human_bytes(complete[0].bytes()), len(inc)))
+        else:
+            say("  restore   no restore points yet%s" % (
+                "; %d incomplete" % len(inc) if inc else ""))
+    for root in rpl.get("missing_roots") or []:
+        say("  restore   %s is not there now (an unmounted disk?); its restore points are not "
+            "listed" % root)
+    by_id = {}
+    for r in replaced:
+        by_id.setdefault(r["id"], []).append(r)
+    for rid, rs in sorted(by_id.items()):
+        say("  kept      .sigrift-replaced-%s in %s; remove with --rollback --finish" % (
+            rid, " and ".join("%s (%s%s)" % (r["volume"], human_bytes(r.get("bytes") or 0),
+                                             "" if r.get("phase") == "done" else
+                                             ", phase %s" % r.get("phase")) for r in rs)))
     say("  TLS       %s" % tls_line(d))
-    try:
-        projects, _ = classify_host(helper_image())
-        others = [p for p in projects.values() if p.has_data and p.name != project]
-    except DockerError:
-        others = []
     for p in sorted(others, key=lambda p: p.name):
         say("  others    %s (%s, %s, %s)" % (p.name, p.kind, p.state, p.folder or "folder not known"))
+
+
+
+# ── Phase 1b: rollback, restore points and the journal of every op ─────
+#
+# The restore block (bash) runs the rollback, the snapshot and the finish;
+# the state tool (state-tool block) does the data work. What lives here:
+# the journal of those ops (hand-off, the undo), the plan and the
+# confirmation rules of a rollback, its late guard, its checks, and the
+# messages, all from the JSON the state tool leaves in its result files.
+
+LIFECYCLE_PROJECT_LABEL = LIFECYCLE_LABEL + ".project"
+CRED_KINDS = ("passwords_changed", "totp_changed", "mfa_changed", "webhook_urls_changed",
+              "webhook_secrets_changed", "env_keys", "keys_rotated_back")
+SETTING_KINDS = ("roles_raised", "key_roles_raised", "env_keys_reverted",
+                 "compose_files_edited")
+
+
+def read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return obj
+
+
+def json_arg(a, key):
+    """The JSON object in the file a[key] names ({} when absent)."""
+    if not a.get(key):
+        return {}
+    obj = read_json_file(a[key])
+    return obj if isinstance(obj, dict) else {}
+
+
+def n_of(v):
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, dict):
+        return sum(n_of(x) for x in v.values())
+    if isinstance(v, list):
+        return len(v)
+    return 0
+
+
+def plural(n, one, many=None):
+    return "%d %s" % (n, one if n == 1 else (many or one + "s"))
+
+
+def nc_names(cmp_):
+    """NOT CARRIED of a compare reply: {credentials: {kind: [names]},
+    settings: {kind: [names]}}, empty lists dropped."""
+    nc = cmp_.get("not_carried") or {}
+    out = {"credentials": {}, "settings": {}}
+    for part, kinds in (("credentials", CRED_KINDS), ("settings", SETTING_KINDS)):
+        for k in kinds:
+            v = sorted(str(x) for x in ((nc.get(part) or {}).get(k) or []))
+            if v:
+                out[part][k] = v
+    return out
+
+
+def discards_any(disc):
+    for k, v in (disc or {}).items():
+        if k in ("since", "rf"):
+            continue
+        if n_of(v):
+            return True
+    return False
+
+
+def discards_counts(disc):
+    """The DISCARDS block reduced to counts (the journal's confirmed plan)."""
+    out = {}
+    for k, v in (disc or {}).items():
+        if k in ("since", "rf"):
+            continue
+        if isinstance(v, dict):
+            out[k] = dict((x, n_of(y)) for x, y in v.items() if n_of(y))
+        else:
+            out[k] = n_of(v)
+    return out
+
+
+def short_discards(disc):
+    """A short list of what a rollback discards, for one message line."""
+    disc = disc or {}
+    parts = []
+    rows = disc.get("rows") or {}
+    for t in sorted(rows, key=lambda x: (-n_of(rows[x]), x)):
+        n = n_of(rows[t])
+        if not n:
+            continue
+        if t == "detections":
+            parts.append(plural(n, "detection"))
+        elif t == "audit_log":
+            parts.append(plural(n, "audit entry", "audit entries"))
+        else:
+            parts.append("%s %s" % (plural(n, "row"), t))
+    for t, n in sorted((disc.get("new_tables") or {}).items()):
+        if n_of(n):
+            parts.append("%s in the new table %s" % (plural(n_of(n), "row"), t))
+    upd = sum(n_of(v) for v in (disc.get("updated") or {}).values())
+    if upd:
+        parts.append("%s changed in place" % plural(upd, "row"))
+    if n_of(disc.get("summaries_changed_hours")):
+        parts.append(plural(n_of(disc["summaries_changed_hours"]), "summary hour"))
+    if disc.get("state_files_changed"):
+        parts.append("state files %s" % ", ".join(disc["state_files_changed"]))
+    for key, one in (("api_keys_created", "API key"), ("client_certs_issued", "client certificate"),
+                     ("users_created", "user"), ("webhooks_created", "webhook"),
+                     ("crypto_keys_imported", "protocol decryption key"),
+                     ("captures_added", "capture")):
+        if n_of(disc.get(key)):
+            parts.append(plural(n_of(disc[key]), one))
+    if n_of(disc.get("old_ca_certs")):
+        parts.append("%s of the replaced CA" % plural(n_of(disc["old_ca_certs"]),
+                                                       "client certificate"))
+    return ", ".join(parts) or "nothing"
+
+
+def short_not_carried(names):
+    c, s = names.get("credentials") or {}, names.get("settings") or {}
+    parts = []
+    if c.get("passwords_changed"):
+        parts.append("the passwords of %s" % ", ".join(c["passwords_changed"]))
+    totp = sorted(set(c.get("totp_changed", []) + c.get("mfa_changed", [])))
+    if totp:
+        parts.append("TOTP or MFA of %s" % ", ".join(totp))
+    if c.get("webhook_urls_changed"):
+        parts.append("webhook URLs of %s" % ", ".join(c["webhook_urls_changed"]))
+    if c.get("webhook_secrets_changed"):
+        parts.append("webhook secrets of %s" % ", ".join(c["webhook_secrets_changed"]))
+    if c.get("env_keys") or c.get("keys_rotated_back"):
+        parts.append("BRIDGE_MASTER_KEY")
+    if s.get("roles_raised"):
+        parts.append("the roles of %s" % ", ".join(s["roles_raised"]))
+    if s.get("key_roles_raised"):
+        parts.append("the roles of API keys %s" % ", ".join(s["key_roles_raised"]))
+    if s.get("env_keys_reverted"):
+        parts.append(".env keys %s" % ", ".join(s["env_keys_reverted"]))
+    if s.get("compose_files_edited"):
+        parts.append("the hand edits of %s" % ", ".join(s["compose_files_edited"]))
+    return "; ".join(parts)
+
+
+def credentials_phrase(names, since):
+    c = names.get("credentials") or {}
+    parts = []
+    if c.get("passwords_changed"):
+        parts.append("passwords of %s" % ", ".join(c["passwords_changed"]))
+    totp = sorted(set(c.get("totp_changed", []) + c.get("mfa_changed", [])))
+    if totp:
+        parts.append("TOTP or MFA of %s" % ", ".join(totp))
+    if c.get("webhook_urls_changed"):
+        parts.append("webhook URL of %s" % ", ".join(c["webhook_urls_changed"]))
+    if c.get("webhook_secrets_changed"):
+        parts.append("webhook secret of %s" % ", ".join(c["webhook_secrets_changed"]))
+    if c.get("env_keys") or c.get("keys_rotated_back"):
+        parts.append("the BRIDGE_MASTER_KEY of %s" % since)
+    return "; ".join(parts)
+
+
+def rp_manifest(root, rid):
+    """manifest.json of full restore point RID under ROOT ({} when unreadable).
+    Only for messages and checks after the state tool verified its MAC."""
+    if not root or not rid or "/" in rid:
+        return {}
+    m = read_json(os.path.join(root, rid, "manifest.json"))
+    return m or {}
+
+
+def journal_manifest(d, j=None):
+    j = j if j is not None else (journal_load(d) or {})
+    root = j.get("rp_root") or j.get("restore_point_root") or os.path.join(d, SNAPSHOTS)
+    return rp_manifest(root, j.get("restore_point"))
+
+
+def cmd_journal_handoff(argv):
+    """journal-handoff DIR --op rollback --cause auto|interrupted-upgrade
+    --restore-point ID --files-snapshot ID --steps a,b --done a,b [--extra JSON]
+
+    The upgrade journal becomes a rollback journal in one atomic replace of
+    journal.json (E24): the rollback journal carries over the upgrade's
+    vars, project, owner, source dir, images and previous images, embeds
+    the upgrade journal as `upgrade` (state rolled_back inside), and keeps
+    its log for cause auto (the follower watches that .rc). The upgrade
+    journal is archived too. Prints the new id."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"op": True, "cause": True, "restore-point": True,
+                               "files-snapshot": True, "steps": True, "done": True,
+                               "extra": True})
+    up = journal_load(d)
+    if not up or up.get("op") != "upgrade":
+        sys.exit("lc_tool journal-handoff: %s holds no upgrade journal" % d)
+    cause = a.get("cause", "auto")
+    jid = new_journal_id(d, "rollback")
+    log = up.get("log") if cause == "auto" else new_log(d, "rollback", jid)
+    embedded = dict(up)
+    embedded["state"] = "rolled_back"
+    steps = [s for s in (a.get("steps") or "").split(",") if s]
+    done = [s for s in (a.get("done") or "").split(",") if s]
+    j = {"format": 1, "id": jid, "rb_id": jid, "op": "rollback", "state": "running",
+         "cause": cause, "steps": steps, "done": done, "next": "",
+         "from_version": up.get("to_version"), "to_version": up.get("from_version"),
+         "current_version": up.get("to_version"), "restore_point": a.get("restore_point"),
+         "rp_root": up.get("restore_point_root") or (
+             up["rp_partial"].get("root") if isinstance(up.get("rp_partial"), dict) else None),
+         "files_snapshot": a.get("files_snapshot"), "upgrade": embedded,
+         "bridge_started_at": None, "audit_entry": None, "pid": None, "log": log,
+         "started_at": now_utc(), "error": None}
+    for k in ("vars", "project", "owner", "source_dir", "images", "previous_images",
+              "was_running", "working_dir", "host_id", "pin", "project_how", "install_id",
+              "snapshot_dir"):
+        if k in up:
+            j[k] = up[k]
+    if a.get("extra"):
+        j.update(json.loads(a["extra"]))
+    j.update({"id": jid, "rb_id": jid, "op": "rollback", "cause": cause, "state": "running"})
+    pending = journal_pending(j)
+    j["next"] = pending[0] if pending else ""
+    journal_archive(d, embedded)
+    journal_save(d, j)
+    say(jid)
+
+
+def cmd_journal_abort_begin(argv):
+    """journal-abort-begin DIR --confirmed 0|1: one atomic write turns the
+    rollback journal into the journaled undo (state aborting, the steps of
+    LC_ABORT_ROLLBACK_STEPS, the forward steps kept for --status). When the
+    rollback had not stopped the stack yet (a manual one in rb-stage), the
+    undo leaves the serving stack alone."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"confirmed": True, "steps": True})
+    j = journal_load(d)
+    if not j or j.get("op") != "rollback":
+        sys.exit("lc_tool journal-abort-begin: no rollback journal in %s" % d)
+    if j.get("state") == "aborting":
+        return
+    steps = [s for s in (a.get("steps") or "").split(",") if s]
+    forward_done = list(j.get("done") or [])
+    done = []
+    if "stop" not in forward_done:
+        done = [s for s in ("ab-stop", "ab-hold", "ab-unhold", "ab-start") if s in steps]
+    j["abort"] = {"started_at": now_utc(), "forward_steps": list(j.get("steps") or []),
+                  "forward_done": forward_done, "forward_next": j.get("next"),
+                  "forward_state": j.get("state"), "confirmed": a.get("confirmed") == "1"}
+    j.update({"state": "aborting", "steps": steps, "done": done, "error": None})
+    pending = journal_pending(j)
+    j["next"] = pending[0] if pending else ""
+    journal_save(d, j)
+
+
+def cmd_journal_abort_end(argv):
+    """journal-abort-end DIR: the undo's last write. The rollback journal,
+    state aborted, is archived; for the causes auto and interrupted-upgrade
+    the embedded upgrade journal becomes journal.json again (state failed;
+    for auto also decision aborted and no_auto_rollback, so a --resume never
+    rolls back by itself). Prints the cause. --late REASON: a rollback that
+    refused at rb-guard and changed nothing (8.2): the rollback journal
+    ends aborted with REASON, and a taken-over upgrade's journal is back as
+    it was (state failed), with no aborted_rollback."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"late": True})
+    j = journal_load(d)
+    if not j or j.get("op") != "rollback":
+        sys.exit("lc_tool journal-abort-end: no rollback journal in %s" % d)
+    j["state"] = "aborted"
+    j["finished_at"] = now_utc()
+    j["next"] = ""
+    if a.get("late"):
+        j["error"] = a["late"]
+    cause = j.get("cause") or "manual"
+    up = j.get("upgrade") if cause in ("auto", "interrupted-upgrade") else None
+    journal_archive(d, j)
+    if isinstance(up, dict) and up.get("op") == "upgrade" and a.get("late"):
+        up = dict(up)
+        up["state"] = "failed"
+        up["pid"] = None
+        up["error"] = "its rollback (--rollback) refused at %s and changed nothing" % a["late"]
+        journal_save(d, up)
+    elif isinstance(up, dict) and up.get("op") == "upgrade":
+        up = dict(up)
+        up["state"] = "failed"
+        up["error"] = "its rollback was undone (--abort)"
+        if cause == "auto":
+            ar = dict(up.get("auto_rollback") or {})
+            ar.update({"decision": "aborted", "reason": "its automatic rollback was aborted"})
+            up["auto_rollback"] = ar
+            flags = dict(up.get("flags") or {})
+            flags["no_auto_rollback"] = True
+            up["flags"] = flags
+        up["pid"] = None
+        up["aborted_rollback"] = {"rb_id": j.get("rb_id") or j.get("id"),
+                                  "files_snapshot": j.get("files_snapshot"), "at": now_utc()}
+        journal_save(d, up)
+    else:
+        journal_save(d, j)
+    say(cause)
+
+
+def cmd_journal_busy(argv):
+    """journal-busy DIR --req REQUEST [--finish]: refuse while any journal is
+    active (M-INTERRUPTED-OP; --finish: M-FINISH-ACTIVE)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"req": True, "finish": False})
+    j = journal_load(d)
+    if not journal_active(j):
+        return
+    if a.get("finish"):
+        refuse("a %s is in progress here (step %s); the copies kept by rollbacks may still be "
+               "needed to undo it." % (j.get("op"), j.get("next") or "?"),
+               next_cmd=lifecycle_cmd("--status", d))
+    interrupted_op_refusal(d, j, a.get("req") or "this run")
+
+
+def cmd_rb_journal_check(argv):
+    """rb-journal-check DIR [--id ID]: what --rollback does with the journal.
+    Prints `none`, or `takeover` (an interrupted or verify-failed upgrade
+    whose bridge started: its restore point is the target); refuses an
+    upgrade that stopped before its bridge started (M-RB-ABORT-INSTEAD) and
+    any active rollback, snapshot or finish (M-INTERRUPTED-OP)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"id": True, "req": True})
+    j = journal_load(d)
+    if not journal_active(j):
+        say("none")
+        return
+    if j.get("op") != "upgrade":
+        interrupted_op_refusal(d, j, a.get("req") or "--rollback")
+    if not j.get("bridge_started_at"):
+        refuse("the upgrade to %s stopped at step %s, before the new bridge started, so the data "
+               "is unchanged; --abort puts the files back without a restore."
+               % (j.get("to_version"), j.get("next") or "?"),
+               next_cmd=lifecycle_cmd("--abort", d))
+    if not j.get("restore_point"):
+        refuse("there is nothing to roll back here: no upgrade of this install took a full "
+               "restore point (an older installer installed it, or it ran with --no-snapshot).",
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    say("takeover")
+
+
+def cmd_cache_facts(argv):
+    """cache-facts DIR: this run's facts (LC_FACTS_JSON; no secret values)
+    into .sigrift/logs/<op>-<id>.facts.json, which --status and
+    --list-snapshots read while an operation runs (E37)."""
+    d = os.path.realpath(argv[0])
+    j = journal_load(d) or {}
+    facts = load_facts()
+    if not facts or not j.get("id"):
+        return
+    path = os.path.join(logs_dir(d), "%s-%s.facts.json" % (j.get("op") or "op", j["id"]))
+    write_json(path, facts)
+
+
+def newest_cached_facts(d):
+    logs = os.path.join(d, LOGS)
+    try:
+        names = [n for n in os.listdir(logs) if n.endswith(".facts.json")]
+    except OSError:
+        return None
+    if not names:
+        return None
+    names.sort(key=lambda n: os.lstat(os.path.join(logs, n)).st_mtime)
+    return read_json(os.path.join(logs, names[-1]))
+
+
+def op_running(d, j=None):
+    """E37: an operation runs here (lock-owner.json names a live pid, or the
+    journal is active)."""
+    owner = read_json(os.path.join(d, LOCK_OWNER)) or {}
+    pid = owner.get("pid")
+    if isinstance(pid, int) and pid > 0 and alive(pid):
+        return True
+    j = j if j is not None else journal_load(d)
+    return journal_active(j)
+
+
+def project_of(d, j=None):
+    j = j if j is not None else (journal_load(d) or {})
+    return env_pin(d) or j.get("project") or (host_record(d) or {}).get("project") or \
+        compose_name(d) or derive_project(d)
+
+
+def cmd_msg_summary(argv):
+    """msg-summary --compare F [--not-carried]: what a compare result says
+    arrived, short; --not-carried: only what a rollback would bring back
+    ('' when nothing)."""
+    a = parse_flags(argv, {"compare": True, "not-carried": False})
+    disc, names = summary_of(a.get("compare"))
+    if disc is None:
+        say("unknown")
+        return
+    if a.get("not_carried"):
+        nc = short_not_carried(names)
+        if nc:
+            say(nc)
+        return
+    s = short_discards(disc)
+    nc = short_not_carried(names)
+    say(s + (("; it would bring back: " + nc) if nc else ""))
+
+
+def cmd_rp_env_has_audit_key(argv):
+    """rp-env-has-audit-key DIR --rp ID: 1 when the restore point's .env sets
+    BRIDGE_AUDIT_KEY or BRIDGE_AUDIT_SECRET (the current master key is then
+    kept, E12), else 0."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"rp": True})
+    j = journal_load(d) or {}
+    root = j.get("restore_point_root") or j.get("rp_root") or os.path.join(d, SNAPSHOTS)
+    rid = a.get("rp") or ""
+    if "/" in rid:
+        sys.exit(2)
+    env = env_effective(read_text(os.path.join(root, rid, "files", ".env")) or "")
+    say("1" if any(env.get(k) for k in AUDIT_KEYS) else "0")
+
+
+def cmd_started_since(argv):
+    """started-since --project P --since T: exit 0 when a container of the
+    project started after T (State.StartedAt), else 1."""
+    a = parse_flags(argv, {"project": True, "since": True})
+    since = epoch_utc(a.get("since"))
+    try:
+        rows = [r[0] for r in project_containers(a["project"], False)]
+    except DockerError:
+        sys.exit(0)
+    for cid in rows:
+        r = docker("inspect", "--format", "{{json .State}}", cid)
+        try:
+            st = json.loads(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else {}
+        except ValueError:
+            st = {}
+        t_ = epoch_utc((st or {}).get("StartedAt"))
+        if since is None or (t_ is not None and t_ > since):
+            sys.exit(0)
+    sys.exit(1)
+
+
+def cmd_cached_facts(argv):
+    """cached-facts DIR: the facts an operation cached last ({} when none)."""
+    say(json.dumps(newest_cached_facts(os.path.realpath(argv[0])) or {}))
+
+
+def snapshot_owner_ok(uid, d):
+    """The state tool's owner rule: you, or under sudo (euid 0) also the
+    owner of the install folder (1a keeps that owner on what it writes)."""
+    if uid == os.geteuid():
+        return True
+    if os.geteuid() != 0 or not d:
+        return False
+    try:
+        return uid == os.stat(d).st_uid
+    except OSError:
+        return False
+
+
+def snapshot_dir_problem(path, d):
+    """Why a restore-point root is unsafe (the state tool's rule, checked
+    here before anything changes), or None."""
+    real = os.path.realpath(path)
+    if os.path.lexists(path):
+        s = os.lstat(path)
+        if stat.S_ISLNK(s.st_mode) or not stat.S_ISDIR(s.st_mode):
+            return "is not a directory"
+        if not snapshot_owner_ok(s.st_uid, d):
+            return "is not owned by you"
+        if stat.S_IMODE(s.st_mode) & 0o022:
+            return "is writable by group or others"
+        if stat.S_IMODE(s.st_mode) & 0o077:
+            return "does not keep mode 0700"
+    anc = os.path.dirname(real)
+    while True:
+        try:
+            a = os.stat(anc)
+        except OSError:
+            a = None
+        if a is not None and a.st_mode & 0o022 and not a.st_mode & stat.S_ISVTX:
+            return "lies under %s, which others can write without the sticky bit" % anc
+        if anc == os.path.dirname(anc):
+            break
+        anc = os.path.dirname(anc)
+    inside = [os.path.realpath(os.path.join(d, "tls")), os.path.realpath(os.path.join(d, HELD))]
+    root = docker_root()
+    if root:
+        inside.append(os.path.realpath(root))
+    for r in inside:
+        if real == r or real.startswith(r.rstrip("/") + "/"):
+            return "is inside tls/, .sigrift/held/ or Docker's data directory"
+    return None
+
+
+def cmd_snapshot_dir_check(argv):
+    """snapshot-dir-check DIR --project P --cmd CMD: SIGRIFT_SNAPSHOT_DIR (when
+    set) is a safe place for restore points (M-SNAPSHOT-DIR-UNSAFE)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"project": True, "cmd": True})
+    base = os.environ.get("SIGRIFT_SNAPSHOT_DIR") or ""
+    if not base:
+        return
+    iid = (host_record(d) or {}).get("install_id") or \
+        (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip() or "x"
+    for path in (os.path.join(os.path.abspath(base), "%s-%s" % (a["project"], iid[:8])),):
+        why = snapshot_dir_problem(path, d)
+        if why:
+            refuse("SIGRIFT_SNAPSHOT_DIR=%s %s; restore points hold every secret of this install, "
+                   "and a rollback starts what they hold." % (base, why),
+                   next_cmd="mkdir -m 0700 -p /path/of/your/own && SIGRIFT_SNAPSHOT_DIR="
+                            "/path/of/your/own %s" % (a.get("cmd") or installer_prog("release")))
+
+
+def cmd_pre_keep_known(argv):
+    """pre-keep-known DIR: after prechecks refilled the journal's flat `pre`
+    keys from the quiesced state, a key the quiesced state could not read
+    (null) keeps the value 1a's facts gave before the stop (fd 3: that
+    `pre`), so an unknown never replaces a known baseline."""
+    d = os.path.realpath(argv[0])
+    try:
+        old = json.loads(read_fd3().decode("utf-8") or "{}")
+    except ValueError:
+        old = {}
+    j = journal_load(d)
+    if not j or not isinstance(old, dict):
+        return
+    pre = dict(j.get("pre") or {})
+    for k, v in old.items():
+        if pre.get(k) is None and v is not None:
+            pre[k] = v
+    j["pre"] = pre
+    journal_save(d, j)
+
+
+def cmd_op_running(argv):
+    """op-running DIR: exit 0 while an operation runs here (E37), else 1."""
+    sys.exit(0 if op_running(os.path.realpath(argv[0])) else 1)
+
+
+def cmd_project_of(argv):
+    say(project_of(os.path.realpath(argv[0])))
+
+
+def cmd_volumes_check(argv):
+    """volumes-check --project P: both data volumes exist (M-VOLUMES-MISSING)."""
+    a = parse_flags(argv, {"project": True})
+    p = a["project"]
+    vols = project_volumes(p)
+    for v in ("bridge_data", "bridge_secrets"):
+        if v not in vols:
+            refuse("the data volume %s_%s of project %s does not exist (removed with docker "
+                   "compose down -v?), so there is nothing to restore into; restoring into new "
+                   "volumes comes with --import." % (p, v, p),
+                   next_cmd="docker volume ls --filter label=%s=%s" % (PROJECT_LABEL, q(p)))
+
+
+def image_inspect(ref, fmt):
+    r = docker("image", "inspect", "--format", fmt, ref)
+    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+
+
+def compose_service_images(path):
+    """{service: image} of a compose file (bridge and gateway, by line)."""
+    out, svc = {}, None
+    for line in (read_text(path) or "").splitlines():
+        m = re.match(r"^  ([a-z][a-z0-9_-]*):\s*$", line)
+        if m:
+            svc = m.group(1)
+        m = re.match(r"^    image:\s*(\S+)\s*$", line)
+        if m and svc in ("bridge", "gateway"):
+            out[svc] = m.group(1)
+    return out
+
+
+def cmd_rp_images(argv):
+    """rp-images DIR --out F: the images of the version a restore point taken
+    now holds (bridge and gateway: ref, id, digest), from the journal's
+    previous images and the held (or current) compose file."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"out": True, "from": True})
+    j = journal_load(d) or {}
+    compose = os.path.join(d, HELD, "docker-compose.yml") if is_held(d) else \
+        os.path.join(d, "docker-compose.yml")
+    refs = compose_service_images(compose)
+    prev = j.get("previous_images") or {}
+    out = {}
+    for svc in ("bridge", "gateway"):
+        ref = refs.get(svc) or ""
+        iid = prev.get(svc) or (image_inspect(ref, "{{.Id}}") if ref else "")
+        digest = image_inspect(iid or ref, "{{index .RepoDigests 0}}") if (iid or ref) else ""
+        out[svc] = {"ref": ref or None, "id": iid or None, "digest": digest or None}
+    write_json(a["out"], out)
+
+
+def cmd_switch_record(argv):
+    """switch-record DIR --env-result JSON: after the switch, the journal's
+    env_written (sha256[:16] of each .env key the edit added or changed;
+    bootstrap keys never) and compose_files_sha256 (E12)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"env-result": True})
+    j = journal_load(d)
+    if not j:
+        sys.exit("lc_tool switch-record: no journal in %s" % d)
+    try:
+        res = json.loads(a.get("env_result") or "{}")
+    except ValueError:
+        res = {}
+    eff = env_effective(read_text(os.path.join(d, ".env")) or "")
+    import hashlib
+    tags = {}
+    for k in list(res.get("adds") or []) + list(res.get("replaces") or []):
+        if KEY_CLASSES.get(k) in ("bootstrap", "identity") or not eff.get(k):
+            continue
+        tags[k] = hashlib.sha256(eff[k].encode("utf-8")).hexdigest()[:16]
+    for cm in res.get("cm") or []:
+        key = next((x.get("key") for x in CONFIG_MIGRATIONS if x.get("id") == cm), None)
+        if key and eff.get(key) and KEY_CLASSES.get(key) != "bootstrap":
+            tags[key] = hashlib.sha256(eff[key].encode("utf-8")).hexdigest()[:16]
+    j["env_written"] = tags
+    j["compose_files_sha256"] = compose_files_now(d)
+    journal_save(d, j)
+
+
+def compose_files_now(d):
+    out = {}
+    for name in ("docker-compose.yml",) + OVERRIDES:
+        p = os.path.join(d, name)
+        out[name] = sha256_file(p) if os.path.isfile(p) else None
+    if out.get("docker-compose.override.yaml") is None:
+        out.pop("docker-compose.override.yaml", None)
+    return out
+
+
+def tree_bytes(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for name in files + dirs:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+CARRY_SOURCES = (("keys", "keys.json and keys.json.bak"), ("registry", "ca/registry.json"),
+                 ("ca", "the CA files"), ("webhooks", "webhooks.json"), ("db", "database"))
+
+
+def unreadable_sources(cmp_):
+    why = cmp_.get("why_not_checkable") or ""
+    return [text for k, text in CARRY_SOURCES if re.search(r"(^|; )%s cannot be read" % k, why)
+            or (k == "db" and "the live database cannot be read" in why)]
+
+
+def encrypted(cmp_):
+    return "the database is encrypted" in (cmp_.get("why_not_checkable") or "")
+
+
+def rb_flags(a):
+    return {"accept_summary_reset": bool(a.get("accept_summary_reset")),
+            "no_carry": bool(a.get("no_carry_revocations")),
+            "accept_unverified": bool(a.get("accept_unverified")),
+            "revert_credentials": bool(a.get("revert_credentials"))}
+
+
+RB_FLAG_SPEC = {"accept-summary-reset": False, "no-carry-revocations": False,
+                "accept-unverified": False, "revert-credentials": False}
+
+
+def cmd_rb_guards(argv):
+    """rb-guards --compare F --resolve F --cmd CMD [flags]: the refusals of
+    6.3 step 7 after the RF guard, in order: carry sources unreadable
+    (M-RB-CARRY-UNREADABLE), an encrypted database (M-RB-UNVERIFIED), and
+    credentials that would come back (M-RB-CREDENTIALS, whose Next is the
+    dry run, never the override)."""
+    a = parse_flags(argv, dict(RB_FLAG_SPEC, compare=True, resolve=True, cmd=True))
+    cmp_, res = json_arg(a, "compare"), json_arg(a, "resolve")
+    v, rid = res.get("from_version") or "?", res.get("id") or "?"
+    since = (res.get("created_at") or "?")
+    cmd = a.get("cmd") or "bash install-release.sh --rollback"
+    bad = unreadable_sources(cmp_)
+    if bad and not a.get("no_carry_revocations"):
+        refuse("the current %s cannot be read, so the rollback cannot keep the revocations made "
+               "since %s; restoring without them could re-enable revoked credentials."
+               % (" and ".join(bad), since),
+               ["Repair or restore that file first (TROUBLESHOOTING.md, \"A rollback cannot read "
+                "keys.json, the registry or webhooks.json\").",
+                "Only if you accept that every key, certificate and user revoked since %s works "
+                "again: %s --no-carry-revocations --confirm %s (its plan lists them under COMES "
+                "BACK)." % (since, cmd if rid in cmd.split() else "%s %s" % (cmd, rid), v)],
+               next_cmd=lifecycle_cmd("--status"))
+    if encrypted(cmp_) and not a.get("accept_unverified"):
+        refuse("the database is encrypted, so the installer cannot check the RF summary rows, "
+               "carry revocations forward or verify the restore.",
+               next_cmd="%s --accept-unverified --confirm %s" % (cmd, v))
+    names = nc_names(cmp_)
+    if names["credentials"] and not a.get("revert_credentials"):
+        refuse("this rollback to %s would bring back credentials changed since %s: %s; their old "
+               "values would work again." % (v, since, credentials_phrase(names, since)),
+               ["Ask the users to change them again afterwards, or roll back to a newer restore "
+                "point.",
+                "To roll back anyway, add --revert-credentials (and --confirm %s without a "
+                "terminal)." % v],
+               next_cmd="%s --dry-run" % cmd)
+
+
+def tls_note(d, root, rid):
+    """The plan's tls/ words: unchanged, or kept (newer than the point's)."""
+    m = rp_manifest(root, rid)
+    entry = next((f for f in m.get("files") or [] if f.get("path") == "tls/cert.pem"), None)
+    cur = sha256_file(os.path.join(d, "tls", "cert.pem"))
+    if not entry or entry.get("sha256") == cur:
+        return "unchanged"
+    old = os.path.join(root, rid, "files", "tls", "cert.pem")
+    end = openssl_out("x509", "-in", old, "-noout", "-enddate").partition("=")[2]
+    return "kept (newer than the restore point's, which expires %s)" % (end or "unknown")
+
+
+def cmd_rb_plan(argv):
+    """rb-plan --compare F --resolve F --images F --space F --current V
+    --dry-run 0|1 --stack-running 0|1 --cmd CMD [flags] --out F: prints the
+    rollback plan (8.5) and writes the decision (whether a typed
+    confirmation is needed, the plan to confirm, short summaries)."""
+    a = parse_flags(argv, dict(RB_FLAG_SPEC, compare=True, resolve=True, images=True,
+                               space=True, current=True, out=True, cmd=True,
+                               **{"dry-run": True, "stack-running": True, "pulled": True}))
+    d = os.getcwd()
+    cmp_, res, img, sp = (json_arg(a, k) for k in ("compare", "resolve", "images", "space"))
+    flags = rb_flags(a)
+    v, rid, root = res.get("from_version") or "?", res.get("id") or "?", res.get("root") or ""
+    m = rp_manifest(root, rid)
+    since = res.get("created_at") or m.get("created_at") or "?"
+    cur = a.get("current") or "?"
+    disc, car = cmp_.get("discards") or {}, cmp_.get("carries") or {}
+    names = nc_names(cmp_)
+    dry = a.get("dry_run") == "1"
+    say("==> Rollback plan%s" % (" (--dry-run: nothing was changed)" if dry else ""))
+    how = ("before the upgrade to %s" % res.get("to_version")) if res.get("to_version") \
+        else "by --snapshot"
+    size = human_bytes(tree_bytes(os.path.join(root, rid))) if root else "?"
+    say("  restores  %s (%s, schema %s, taken %s %s; %s; manifest MAC and files verified)" % (
+        rid, v, res.get("schema_version"), since, how, size))
+    ims = res.get("images") or m.get("images") or {}
+    state = "present here"
+    vals = set((img or {}).get(s) for s in ("bridge", "gateway"))
+    if vals & {"pullable", "missing"}:
+        state = "would pull by digest (--dry-run)"
+    elif "pulled" in vals:
+        state = "pulled by digest"
+    say("  images    %s bridge %s, gateway %s (%s); started with --pull never" % (
+        v, ((ims.get("bridge") or {}).get("id") or "?").replace("sha256:", "")[:12],
+        ((ims.get("gateway") or {}).get("id") or "?").replace("sha256:", "")[:12], state))
+    say("  verify    every member's sha256 is checked while it is staged, and again once the "
+        "stack is stopped, before anything live changes")
+    rows = disc.get("rows") or {}
+    # "table n": the counts that follow (API keys, users, ...) keep their
+    # own "n what" form, which scripts read.
+    table_part = "new rows: %s" % (", ".join("%s %d" % (t, n_of(rows[t])) for t in sorted(rows)
+                                             if n_of(rows[t]) and t != "audit_log") or "none")
+    upd = disc.get("updated") or {}
+    upd_n = sum(n_of(x) for x in upd.values())
+    kinds = ", ".join(k for k in sorted(upd) if n_of(upd[k])) or "none"
+    ca_old = n_of(disc.get("old_ca_certs"))
+    say("  DISCARDS  everything since %s: %s, %d rows changed in place (%s), %d summary hours, "
+        "state files %s, %d audit entries (saved to .sigrift/logs/rollback-<id>/; the restored "
+        "chain records the rollback), %d API keys, %d client certificates%s, %d users, "
+        "%d webhooks, %d protocol decryption keys%s created since" % (
+            since, table_part, upd_n, kinds, n_of(disc.get("summaries_changed_hours")),
+            ", ".join(disc.get("state_files_changed") or []) or "none",
+            n_of(rows.get("audit_log")), n_of(disc.get("api_keys_created")),
+            n_of(disc.get("client_certs_issued")),
+            (" (and %d of the CA replaced since)" % ca_old) if ca_old else "",
+            n_of(disc.get("users_created")), n_of(disc.get("webhooks_created")),
+            n_of(disc.get("crypto_keys_imported")),
+            (", %d captures" % n_of(disc["captures_added"])) if n_of(disc.get("captures_added"))
+            else ""))
+    revoked = n_of(car.get("api_keys_revoked")) + n_of(car.get("api_keys_removed")) + \
+        n_of(car.get("api_keys_disabled"))
+    kept_env = [k for k in cmp_.get("env_kept") or [] if k not in (
+        "COMPOSE_PROJECT_NAME", "BRIDGE_MASTER_KEY", "SIGRIFT_BIND", "SIGRIFT_BACKEND_SUBNET",
+        "SIGRIFT_BACKEND_IP_RANGE", "SIGRIFT_GATEWAY_BACKEND_IP")]
+    say("  KEEPS     changes that take access away: %d API keys stay revoked (%d rotated keep "
+        "their new secret), %d client certificates stay revoked%s, %d users stay disabled, "
+        "%d backup codes stay used, %d webhooks stay disabled%s%s" % (
+            revoked, n_of(car.get("api_keys_rotated")), n_of(car.get("ca_serials_revoked")),
+            ", the CA replaced since stays" if car.get("ca_replaced") else "",
+            n_of(car.get("users_disabled")), n_of(car.get("backup_codes_invalidated")),
+            n_of(car.get("webhooks_disabled")) + n_of(car.get("webhooks_removed")),
+            ", MFA stays required" if car.get("mfa_required_on") else "",
+            (", stricter settings kept: %s" % ", ".join(kept_env)) if kept_env else ""))
+    say("  ENDS      all sessions (everyone logs in again)")
+    c, s = names["credentials"], names["settings"]
+    cparts = []
+    if c.get("passwords_changed"):
+        cparts.append("passwords of: %s (their old passwords work again)"
+                      % ", ".join(c["passwords_changed"]))
+    totp = sorted(set(c.get("totp_changed", []) + c.get("mfa_changed", [])))
+    if totp:
+        cparts.append("TOTP or MFA of: %s" % ", ".join(totp))
+    wh = sorted(set(c.get("webhook_urls_changed", []) + c.get("webhook_secrets_changed", [])))
+    if wh:
+        cparts.append("webhook URLs or secrets: %s" % ", ".join(wh))
+    if c.get("env_keys") or c.get("keys_rotated_back"):
+        cparts.append("BRIDGE_MASTER_KEY")
+    sparts = []
+    if s.get("roles_raised") or s.get("key_roles_raised"):
+        sparts.append("roles raised: %s" % ", ".join(s.get("roles_raised", []) +
+                                                     s.get("key_roles_raised", [])))
+    if s.get("env_keys_reverted"):
+        sparts.append(".env keys: %s" % ", ".join(s["env_keys_reverted"]))
+    if s.get("compose_files_edited"):
+        sparts.append("compose edits: %s" % ", ".join(s["compose_files_edited"]))
+    say("  NOT CARRIED (back to %s): credentials %s; settings %s" % (
+        since, "; ".join(cparts) or "none", "; ".join(sparts) or "none"))
+    say("  COMES BACK (only with --no-carry-revocations): %d API keys, %d certificates and %d "
+        "users revoked or disabled since" % (revoked, n_of(car.get("ca_serials_revoked")),
+                                             n_of(car.get("users_disabled"))))
+    rf = disc.get("rf")
+    if rf == "same":
+        say("  RF summary rows identical to the restore point: a database restore is safe")
+    elif rf == "absent-rp":
+        say("  RF summary the restore point predates the RF summary tables and this database "
+            "has summary rows: this rollback is never done")
+    else:
+        say("  RF summary CHANGED: refused unless --accept-summary-reset%s" % (
+            " (given: the summary-mode nodes %s need the recovery of "
+            "docs/rf-summary-recovery.md)" % (", ".join(cmp_.get("summary_nodes") or [])
+                                              or "none")
+            if flags["accept_summary_reset"] else ""))
+    files = [f.get("path") for f in m.get("files") or [] if f.get("restore_on_rollback")]
+    extra = ""
+    if "BRIDGE_MASTER_KEY" in (cmp_.get("env_kept") or []):
+        extra += "; BRIDGE_MASTER_KEY rotated since kept"
+    if cmp_.get("env_undone_with_upgrade"):
+        extra += "; keys the upgrade added go back: %s" % ", ".join(
+            cmp_["env_undone_with_upgrade"])
+    say("  files     %s from the restore point (COMPOSE_PROJECT_NAME and this host's network "
+        "settings kept%s); tls/ %s, the installer and the records stay" % (
+            ", ".join(files) or ".env, docker-compose.yml, VERSION", extra,
+            tls_note(d, root, rid)))
+    say("  kept      backups/, exports/ and forensic copies stay; the current state stays in "
+        "each volume as .sigrift-replaced-<id> until --rollback --finish or the next successful "
+        "upgrade")
+    say("  space     staging needs %s in the Docker volume filesystem; %s free" % (
+        human_bytes(int(sp.get("st") or 0)), human_bytes(int(sp.get("docker_free") or 0))))
+    if a.get("stack_running") == "1":
+        say("  downtime  from the stop (after staging, while %s keeps serving) until %s is "
+            "healthy" % (cur, v))
+    else:
+        say("  downtime  the stack is already down")
+    needs = discards_any(disc) or bool(c) or bool(s) or any(
+        flags[k] for k in ("accept_summary_reset", "no_carry", "accept_unverified",
+                           "revert_credentials"))
+    say("  confirm   %s%s" % (
+        ("type %s when asked, or add --confirm %s" % (v, v)) if needs else
+        "not needed: nothing is discarded or brought back",
+        "; credentials come back only with --revert-credentials" if c else ""))
+    env = env_effective(read_text(os.path.join(root, rid, "files", ".env")) or "") if root \
+        else {}
+    decision = {"needs_confirm": bool(needs), "credentials": bool(c),
+                "plan": {"since": since, "discards": discards_counts(disc), "not_carried": names,
+                         "rf": rf},
+                "short_discards": short_discards(disc),
+                "short_not_carried": short_not_carried(names),
+                "keep_current_master": any(env.get(k) for k in AUDIT_KEYS),
+                "from_version": v, "created_at": since}
+    if a.get("out"):
+        write_json(a["out"], decision)
+
+
+# ── import --replace: DISCARDS, KEEPS and the late guard (phase2-notes F-D21) ──
+
+IM_FLAG_SPEC = dict(RB_FLAG_SPEC)
+
+# The kinds the bridge changes without an audit entry (routers/keys.py,
+# ca.py and crypto.py write none), so the audit chains cannot say which
+# copy changed them (phase2-notes F-D22).
+IM_UNRECORDED_KINDS = (("api_keys", "API keys"), ("certs", "client certificates"),
+                       ("crypto_keys", "protocol decryption keys"))
+
+
+def im_witness(cmp_):
+    """What the current data changed in the three unrecorded kinds against
+    the archive (1b compare's carries, split by compare's unrecorded.after):
+    taken: access taken away from what existed at the last common audit entry
+    (revoked or disabled here, or absent here and made at or before it);
+    unsure: absent here and made after that entry or with no creation time
+    (deleted here since, or made in the archive's copy), a key with another
+    secret or binding, another CA. {taken: {kind: [ids]}, unsure: {kind:
+    [ids]}, ca: bool, common_head: id or None}."""
+    car = cmp_.get("carries") or {}
+    un = cmp_.get("unrecorded") if isinstance(cmp_.get("unrecorded"), dict) else {}
+    after = un.get("after") or {}
+
+    def ids(v):
+        return sorted(set(str(x) for x in v or []), key=lambda s: (len(s), s))
+    removed = ids(car.get("api_keys_removed"))
+    k_after = set(ids(after.get("api_keys")) if "after" in un else removed)
+    ca = bool(car.get("ca_replaced"))
+    serials = [] if ca else ids(car.get("ca_serials_revoked"))
+    s_after = set(ids(after.get("certs")) if "after" in un else serials)
+    deleted = ids(car.get("crypto_keys_deleted"))
+    c_after = set(ids(after.get("crypto_keys")) if "after" in un else deleted)
+    taken = {"api_keys": ids([k for k in removed if k not in k_after] +
+                             list(car.get("api_keys_revoked") or []) +
+                             list(car.get("api_keys_disabled") or [])),
+             "certs": [s for s in serials if s not in s_after],
+             "crypto_keys": [k for k in deleted if k not in c_after]}
+    unsure = {"api_keys": [k for k in removed if k in k_after],
+              "certs": [s for s in serials if s in s_after],
+              "crypto_keys": [k for k in deleted if k in c_after],
+              "rotated": ids(car.get("api_keys_rotated")),
+              "bound": ids(car.get("api_keys_bound"))}
+    return {"taken": taken, "unsure": unsure, "ca": ca, "common_head": un.get("common_head")}
+
+
+def im_kinds_text(groups, kinds=IM_UNRECORDED_KINDS):
+    """'1 API keys (k_y), 0 client certificates, ...' of GROUPS."""
+    return ", ".join("%d %s%s" % (len(groups.get(k) or []), what, (" (%s)" % ", ".join(
+        esc(x) for x in groups[k][:20])) if groups.get(k) else "") for k, what in kinds)
+
+
+def im_any(groups, kinds=("api_keys", "certs", "crypto_keys")):
+    return any(groups.get(k) for k in kinds)
+
+
+def im_names(w):
+    """The witness as flat names for the journal's plan (kind:id)."""
+    out = {}
+    for part in ("taken", "unsure"):
+        out[part] = sorted("%s:%s" % (k, x) for k, lst in w[part].items() for x in lst)
+    if w.get("ca"):
+        out["unsure"].append("ca:replaced")
+    return out
+
+
+def im_unsure_any(w, carry):
+    """Whether the unsure part asks for the typed confirmation: absent here
+    and made after the common entry (both ways); with no carry also another
+    secret, binding or CA, which then come in as the archive has them."""
+    if im_any(w["unsure"]):
+        return True
+    return (not carry) and bool(w["unsure"]["rotated"] or w["unsure"]["bound"] or w["ca"])
+
+
+def im_unrecorded_line(w, carry):
+    """The UNRECORDED words of the plan, or "" when there is nothing."""
+    at = ("after audit entry %s (the last common one)" % w["common_head"]
+          if w.get("common_head") is not None else "after the copies parted")
+    if carry:
+        if not im_any(w["unsure"]):
+            return ""
+        return ("absent here and made %s or with no creation time: %s; deleted here since, or "
+                "made in the archive's copy, which no audit entry records: the carry leaves them "
+                "out of the imported data" % (at, im_kinds_text(w["unsure"])))
+    parts = []
+    if im_any(w["taken"]):
+        parts.append("revoked, disabled or deleted here with no audit entry: %s (refused unless "
+                     "--no-carry-revocations)" % im_kinds_text(w["taken"]))
+    if im_unsure_any(w, False):
+        more = []
+        if w["unsure"]["rotated"]:
+            more.append("%d API keys with another secret (%s)" % (
+                len(w["unsure"]["rotated"]), ", ".join(esc(x) for x in w["unsure"]["rotated"][:20])))
+        if w["unsure"]["bound"]:
+            more.append("%d API keys bound to another node (%s)" % (
+                len(w["unsure"]["bound"]), ", ".join(esc(x) for x in w["unsure"]["bound"][:20])))
+        if w["ca"]:
+            more.append("another CA")
+        parts.append("in the archive and not here, made %s or with no creation time: %s%s; made "
+                     "or changed in the archive's copy, or revoked or deleted here, which no audit "
+                     "entry records: imported as the archive has them" % (
+                         at, im_kinds_text(w["unsure"]), ("; " + ", ".join(more)) if more else ""))
+    return "; ".join(parts)
+
+
+def im_discards_line(disc, whole, moved=False):
+    """The DISCARDS words of an import --replace: what the current data has
+    that the archive lacks (1b compare's discards; WHOLE: of another
+    install, everything it holds)."""
+    rows = disc.get("rows") or {}
+    new_t = disc.get("new_tables") or {}
+    if whole:
+        # Users and protocol keys are counted by kind below.
+        tables = ", ".join("%s %d" % (t, n_of(new_t[t])) for t in sorted(new_t)
+                           if n_of(new_t[t]) and t not in ("audit_log", "users", "crypto_keys")
+                           ) or "none"
+        return ("all of the current install's data: rows: %s, %d audit entries, %d API keys, "
+                "%d client certificates, %d users, %d webhooks, %d protocol decryption keys, "
+                "%d captures" % (tables, n_of(new_t.get("audit_log")),
+                                 n_of(disc.get("api_keys_created")),
+                                 n_of(disc.get("client_certs_issued")),
+                                 n_of(disc.get("users_created")),
+                                 n_of(disc.get("webhooks_created")),
+                                 n_of(disc.get("crypto_keys_imported")),
+                                 n_of(disc.get("captures_added"))))
+    # Before staging the rows are counted above the export point's marks,
+    # which misses rows both copies wrote after they parted; they are
+    # matched against the staged copy before the stop (phase2-notes F-D22).
+    # MOVED: the moved folder, frozen since the move, holds nothing the
+    # archive's copy did not hold then.
+    staged = disc.get("rows_basis") == "staged"
+    later = "" if staged or moved else "; rows are matched against the staged copy before the stop"
+    if not discards_any(disc):
+        return ("nothing: the staged copy holds every row the current data has" if staged else
+                "nothing: the archive holds everything the current data has" if moved else
+                "nothing in the archive's export record" + later)
+    table_part = "%s: %s" % ("rows the archive lacks or holds differently" if staged else
+                             "new rows", ", ".join(
+        "%s %d" % (t, n_of(v)) for t, v in sorted(list(rows.items()) + list(new_t.items()))
+        if n_of(v) and t != "audit_log") or "none")
+    upd = disc.get("updated") or {}
+    ca_old = n_of(disc.get("old_ca_certs"))
+    return ("what the current data has that the archive lacks: %s, %d rows changed in place "
+            "(%s), %d summary hours, state files %s, %d audit entries, %d API keys, "
+            "%d client certificates%s, %d users, %d webhooks, %d protocol decryption keys%s%s" % (
+                table_part, sum(n_of(x) for x in upd.values()),
+                ", ".join(k for k in sorted(upd) if n_of(upd[k])) or "none",
+                n_of(disc.get("summaries_changed_hours")),
+                ", ".join(disc.get("state_files_changed") or []) or "none",
+                n_of(rows.get("audit_log")), n_of(disc.get("api_keys_created")),
+                n_of(disc.get("client_certs_issued")),
+                (" (and %d of the CA replaced since)" % ca_old) if ca_old else "",
+                n_of(disc.get("users_created")), n_of(disc.get("webhooks_created")),
+                n_of(disc.get("crypto_keys_imported")),
+                (", %d captures" % n_of(disc["captures_added"])) if n_of(
+                    disc.get("captures_added")) else "", later))
+
+
+def im_relation_line(rel, a):
+    why, aid, lid = rel.get("why") or "", rel.get("archive_head"), rel.get("live_head")
+    r = rel.get("relation")
+    nc = "; --no-carry-revocations: nothing is carried" if rel.get("no_carry") else ""
+    if a.get("other_install"):
+        return "another install than the archive's is replaced; nothing of it is carried"
+    if r == "same":
+        return ("the same data: the current data and the archive end at the same audit entry %s; "
+                "nothing needs to be carried" % aid)
+    if r == "live-newer":
+        return ("the current data is newer: it continues the archive's audit chain (%s -> %s)%s"
+                % (aid, lid, nc or "; what was revoked, disabled or deleted here since the "
+                   "archive was made is carried into the archive's data"))
+    if r in ("archive-newer", "archive-newer?"):
+        return ("the archive is newer: its audit head %s is above the current %s; the staged "
+                "copy must hold the current head entry (checked before anything changes); "
+                "nothing is carried" % (aid, lid))
+    return "%s: %s%s" % (r, why, nc or "; refused unless --no-carry-revocations")
+
+
+def im_guards(cmp_, rel, flags, cmd, project):
+    """1b's guards of 6.3 step 7, for an import --replace that carries from
+    the live data (live-newer): the carry sources, credentials that would
+    come back, the RF summary rows."""
+    since = cmp_.get("since") or "the archive"
+    bad = unreadable_sources(cmp_)
+    if bad and not flags["no_carry"]:
+        refuse("the current %s cannot be read, so the import cannot carry the revocations made "
+               "here since %s into the archive's data; importing without them could re-enable "
+               "revoked credentials." % (" and ".join(bad), since),
+               ["Repair or restore that file first (TROUBLESHOOTING.md, \"A rollback cannot read "
+                "keys.json, the registry or webhooks.json\").",
+                "Only if you accept that every key, certificate and user revoked here since then "
+                "works again: %s --no-carry-revocations (its plan lists them under COMES BACK)."
+                % cmd], next_cmd=lifecycle_cmd("--status"))
+    names = nc_names(cmp_)
+    if names["credentials"] and not flags["revert_credentials"]:
+        refuse("this import would bring back credentials changed here since %s: %s; their old "
+               "values would work again." % (since, credentials_phrase(names, since)),
+               ["Ask the users to change them again afterwards, or export a newer archive.",
+                "To import anyway, add --revert-credentials (and --confirm %s without a "
+                "terminal)." % project], next_cmd="%s --dry-run" % cmd)
+    rf = (cmp_.get("discards") or {}).get("rf")
+    if rf == "absent-rp":
+        refuse("the archive predates the RF summary tables (migration 56), and the current "
+               "database has summary rows; their fences cannot be kept, so this import is never "
+               "done.", next_cmd=lifecycle_cmd("--status"))
+    if rf in ("changed", "cannot", "absent-live") and not flags["accept_summary_reset"]:
+        nodes = ", ".join(cmp_.get("summary_nodes") or []) or "none"
+        refuse("the RF summary rows %s, so replacing the database would make those nodes' "
+               "journals disagree with this server." % (
+                   "changed here since %s (summary-mode nodes: %s)" % (since, nodes)
+                   if rf != "cannot" else "cannot be compared (a database is unreadable)"),
+               ["Repairing forward keeps them consistent (docs/rf-summary-recovery.md). To "
+                "import anyway, accept the reset; those nodes then need that document's "
+                "recovery."], next_cmd="%s --accept-summary-reset" % cmd)
+
+
+def cmd_im_plan(argv):
+    """im-plan --compare F --relate F --project P --cmd CMD --dry-run 0|1
+    [--other-install] [--moved-folder] [flags] --out F: an import
+    --replace's DISCARDS, KEEPS, UNRECORDED (F-D22: API keys, certificates
+    and protocol keys, which change without an audit entry) (and, when it
+    carries, 1b's NOT CARRIED, COMES BACK and RF lines) and the confirm
+    line; before them, unless a dry run, 1b's guards, and with no carry
+    M-IMPORT-UNRECORDED. Writes the decision: whether the typed confirmation
+    is needed (1b's rules) and the plan the journal keeps for the late
+    guard."""
+    a = parse_flags(argv, dict(IM_FLAG_SPEC, compare=True, relate=True, project=True,
+                               cmd=True, out=True, **{"dry-run": True, "other-install": False,
+                                                      "moved-folder": False}))
+    cmp_, rel = json_arg(a, "compare"), json_arg(a, "relate")
+    flags = rb_flags(a)
+    project, cmd = a.get("project") or "?", a.get("cmd") or "bash install-release.sh --import"
+    carry = bool(rel.get("carry")) and not a.get("other_install")
+    # F-D22: the three kinds the bridge changes without an audit entry are
+    # dated against the last common entry. The moved folder is frozen since
+    # the move (held), so what differs there is the archive's copy's.
+    witness = not a.get("other_install") and not a.get("moved_folder")
+    w = im_witness(cmp_)
+    if not witness:
+        w = {"taken": {}, "unsure": {"rotated": [], "bound": []}, "ca": False,
+             "common_head": None}
+    if a.get("dry_run") != "1" and carry:
+        im_guards(cmp_, rel, flags, cmd, project)
+    if a.get("dry_run") != "1" and witness and not carry and not flags["no_carry"]:
+        bad = unreadable_sources(cmp_)
+        if bad:
+            refuse("the current %s cannot be read, so the import cannot check what was revoked "
+                   "or deleted here without an audit entry; importing the archive as it is could "
+                   "re-enable revoked credentials." % " and ".join(bad),
+                   ["Repair or restore that file first (TROUBLESHOOTING.md, \"A rollback cannot "
+                    "read keys.json, the registry or webhooks.json\").",
+                    "Only if you accept that what was revoked here works again: %s "
+                    "--no-carry-revocations." % cmd], next_cmd=lifecycle_cmd("--status"))
+        if im_any(w["taken"]):
+            im_unrecorded_refuse(w, cmd)
+    disc, car = cmp_.get("discards") or {}, cmp_.get("carries") or {}
+    names = nc_names(cmp_) if carry else {"credentials": {}, "settings": {}}
+    say("  relation  %s" % im_relation_line(rel, a))
+    if cmp_.get("checkable") is False and not cmp_.get("whole"):
+        say("  DISCARDS  cannot be listed (%s)" % (cmp_.get("why_not_checkable") or "?"))
+    else:
+        say("  DISCARDS  %s" % im_discards_line(disc, bool(a.get("other_install")),
+                                                 bool(a.get("moved_folder"))))
+    # Absent here and made after the common entry is not counted as revoked
+    # here (it may be the archive's copy's): UNRECORDED names it.
+    revoked = len(w["taken"].get("api_keys") or []) if witness else (
+        n_of(car.get("api_keys_revoked")) + n_of(car.get("api_keys_removed")) +
+        n_of(car.get("api_keys_disabled")))
+    certs = n_of(car.get("ca_serials_revoked")) - (len(w["unsure"].get("certs") or [])
+                                                  if witness else 0)
+    ckeys = n_of(car.get("crypto_keys_deleted")) - (len(w["unsure"].get("crypto_keys") or [])
+                                                   if witness else 0)
+    if carry:
+        say("  KEEPS     changes that take access away: %d API keys stay revoked or deleted (%d "
+            "rotated keep their new secret), %d client certificates stay revoked%s, %d users stay "
+            "disabled, %d backup codes stay used, %d webhooks stay disabled%s, %d protocol "
+            "decryption keys stay deleted" % (
+                revoked, n_of(car.get("api_keys_rotated")), certs,
+                ", the CA replaced since stays" if car.get("ca_replaced") else "",
+                n_of(car.get("users_disabled")), n_of(car.get("backup_codes_invalidated")),
+                n_of(car.get("webhooks_disabled")) + n_of(car.get("webhooks_removed")),
+                ", MFA stays required" if car.get("mfa_required_on") else "", ckeys))
+    else:
+        say("  KEEPS     nothing of the current data is carried into the archive's")
+    unrec = im_unrecorded_line(w, carry) if witness else ""
+    if unrec:
+        say("  UNRECORDED %s" % unrec)
+    say("  ENDS      all sessions (everyone logs in again)")
+    c, st = names["credentials"], names["settings"]
+    if carry:
+        cparts = []
+        if c.get("passwords_changed"):
+            cparts.append("passwords of: %s (their old passwords work again)"
+                          % ", ".join(c["passwords_changed"]))
+        totp = sorted(set(c.get("totp_changed", []) + c.get("mfa_changed", [])))
+        if totp:
+            cparts.append("TOTP or MFA of: %s" % ", ".join(totp))
+        wh = sorted(set(c.get("webhook_urls_changed", []) + c.get("webhook_secrets_changed", [])))
+        if wh:
+            cparts.append("webhook URLs or secrets: %s" % ", ".join(wh))
+        if c.get("keys_rotated_back"):
+            cparts.append("BRIDGE_MASTER_KEY")
+        sparts = []
+        if st.get("roles_raised") or st.get("key_roles_raised"):
+            sparts.append("roles raised: %s" % ", ".join(st.get("roles_raised", []) +
+                                                         st.get("key_roles_raised", [])))
+        say("  NOT CARRIED (back to the archive's %s): credentials %s; settings %s" % (
+            cmp_.get("since") or "?", "; ".join(cparts) or "none", "; ".join(sparts) or "none"))
+    if rel.get("relation") == "live-newer":
+        say("  COMES BACK (only with --no-carry-revocations): %d API keys, %d certificates and %d "
+            "users revoked or disabled here since the archive" % (
+                revoked, certs, n_of(car.get("users_disabled"))))
+    elif witness and im_any(w["taken"]):
+        say("  COMES BACK (%s): %s revoked, disabled or deleted here with no audit entry" % (
+            "--no-carry-revocations given" if flags["no_carry"] else
+            "only with --no-carry-revocations", im_kinds_text(w["taken"])))
+    rf = disc.get("rf")
+    if carry:
+        if rf == "same":
+            say("  RF summary rows identical to the archive's: a database replace is safe")
+        else:
+            say("  RF summary CHANGED: refused unless --accept-summary-reset%s" % (
+                " (given)" if flags["accept_summary_reset"] else ""))
+    say("  kept      the current data stays as the pre-import restore point and, in each "
+        "volume, as .sigrift-replaced-<id> until --rollback --finish or the next successful "
+        "upgrade")
+    needs = bool(a.get("other_install")) or discards_any(disc) or (
+        cmp_.get("checkable") is False) or bool(c) or bool(st) or any(
+        flags[k] for k in ("accept_summary_reset", "no_carry", "accept_unverified",
+                           "revert_credentials")) or (witness and im_unsure_any(w, carry))
+    refused = witness and not carry and not flags["no_carry"] and im_any(w["taken"])
+    say("  confirm   %s%s" % (
+        ("refused: what UNRECORDED lists as revoked here comes back only with "
+         "--no-carry-revocations, which needs the typed confirmation") if refused else
+        ("type %s when asked, or add --confirm %s" % (project, project)) if needs else
+        "not needed: nothing is discarded or brought back",
+        "; credentials come back only with --revert-credentials" if c else ""))
+    if a.get("out"):
+        write_json(a["out"], {"needs_confirm": bool(needs), "credentials": bool(c),
+                              "relation": rel.get("relation"), "carry": carry,
+                              "plan": {"since": cmp_.get("since"),
+                                       "discards": discards_counts(disc),
+                                       "not_carried": names, "rf": rf,
+                                       "relation": rel.get("relation"),
+                                       "unrecorded": im_names(w) if witness else
+                                       {"taken": [], "unsure": []}},
+                              "short_discards": short_discards(disc)})
+
+
+def im_unrecorded_refuse(w, cmd):
+    """M-IMPORT-UNRECORDED (phase2-notes F-D22): a replace that carries
+    nothing would make work again what the current data revoked, disabled or
+    deleted without an audit entry."""
+    refuse("the current data revoked, disabled or deleted %s that the archive still has, and "
+           "no audit entry records it (the bridge changes API keys, client certificates and "
+           "protocol keys without one), so the audit chains cannot tell which copy is newer for "
+           "them; importing the archive as it is would make them work again." % (
+               im_kinds_text(w["taken"])),
+           ["Only if they may work again (revoke them again afterwards): add "
+            "--no-carry-revocations; its plan lists them under COMES BACK and needs the typed "
+            "confirmation."], next_cmd="%s --no-carry-revocations" % cmd)
+
+
+def cmd_im_guard_check(argv):
+    """im-guard-check DIR --compare F --relation R --cmd CMD: the late guard
+    of an import --replace (in im-relate on the staged copy while the
+    current stack serves, and in im-guard after the stop), against the plan
+    in its journal (1b rb-guard's rules, phase2-notes F-D21): also what the
+    bridge changes without an audit entry (F-D22: revoked or deleted here
+    with no carry is M-IMPORT-UNRECORDED; an UNRECORDED name the plan did
+    not show, or any unconfirmed, is M-CONFIRM-NEEDED-LATE) and the rows
+    the staged copy lacks. Prints ok, or one JSON line {code, error, next}."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"compare": True, "relation": True, "cmd": True})
+    cmp_ = json_arg(a, "compare")
+    j = journal_load(d) or {}
+    flags = j.get("flags") or {}
+    plan = j.get("replace_plan") or {}
+    project = (j.get("target") or {}).get("project") or j.get("project") or "?"
+    cmd = a.get("cmd") or "bash install-release.sh --import FILE --replace"
+    carry = a.get("relation") == "live-newer" and not flags.get("no_carry") and \
+        not j.get("other_install")
+    disc = cmp_.get("discards") or {}
+    names = nc_names(cmp_) if carry else {"credentials": {}, "settings": {}}
+    # F-D22: the unrecorded kinds (not for another install, nor in the moved
+    # folder, frozen since the move).
+    witness = not j.get("other_install") and not j.get("moved_folder")
+    w = im_witness(cmp_)
+    out = None
+    if carry and disc.get("rf") != "same" and not flags.get("accept_summary_reset"):
+        out = {"code": "M-RB-RF-LATE",
+               "error": "RF summary rows changed after the import was planned, so it did not go "
+                        "on.", "next": "%s --dry-run" % cmd}
+    if out is None and witness and not carry and not flags.get("no_carry") and \
+            im_any(w["taken"]):
+        out = {"code": "M-IMPORT-UNRECORDED",
+               "error": "the current data revoked, disabled or deleted %s that the archive still "
+                        "has, with no audit entry (after the import was planned, or found once "
+                        "the staged copy was read); importing the archive as it is would make "
+                        "them work again, so the import did not go on." % im_kinds_text(
+                            w["taken"]),
+               "next": "%s --no-carry-revocations" % cmd}
+    shown = plan.get("not_carried") or {"credentials": {}, "settings": {}}
+    new = []
+    for part in ("credentials", "settings"):
+        for k, lst in names[part].items():
+            seen = set((shown.get(part) or {}).get(k) or [])
+            new += [x for x in lst if x not in seen]
+    if witness:
+        unsure = im_names(w)["unsure"]
+        if carry:
+            unsure = [x for x in unsure if x.split(":", 1)[0] in ("api_keys", "certs",
+                                                                  "crypto_keys")]
+        seen = set((plan.get("unrecorded") or {}).get("unsure") or [])
+        new += [x for x in unsure if x not in seen]
+    if out is None and new:
+        out = {"code": "M-CONFIRM-NEEDED-LATE",
+               "error": "something the plan did not show would come back (%s): the confirmation "
+                        "covered only what the plan listed, so the import did not go on."
+                        % ", ".join(sorted(set(new))), "next": "%s --dry-run" % cmd}
+    if out is None and not j.get("confirmed") and (
+            discards_any(disc) or names["credentials"] or names["settings"] or
+            (witness and im_unsure_any(w, carry)) or cmp_.get("checkable") is False):
+        what = short_discards(disc) if discards_any(disc) else (
+            "the data could not be compared: %s" % (cmp_.get("why_not_checkable") or "?")
+            if cmp_.get("checkable") is False else "changes no audit entry records")
+        out = {"code": "M-CONFIRM-NEEDED-LATE",
+               "error": "the plan did not show all of it (%s): data arrived after the import was "
+                        "planned, or the staged copy showed what the archive lacks, and it was "
+                        "started without a confirmation, so it did not go on." % what,
+               "next": "%s --confirm %s" % (cmd, project)}
+    bad = unreadable_sources(cmp_)
+    if out is None and (carry or (witness and not flags.get("no_carry"))) and bad:
+        out = {"code": "M-RB-CARRY-UNREADABLE",
+               "error": "the current %s cannot be read, so the import cannot carry the "
+                        "revocations made here since the archive into its data; importing "
+                        "without them could re-enable revoked credentials." % " and ".join(bad),
+               "next": lifecycle_cmd("--status", d)}
+    say("ok" if out is None else json.dumps(out))
+
+
+def cmd_rb_guard_check(argv):
+    """rb-guard-check DIR --compare F: the late guard of rb-guard (6.3)
+    against the confirmed plan in the journal. Prints ok, or one JSON line
+    {code, error, next}: RF rows changed and not accepted (M-RB-RF-LATE);
+    data arrived and no confirmation was given, or a NOT CARRIED name the
+    plan did not show (M-CONFIRM-NEEDED-LATE, also with a confirmation);
+    carry sources now unreadable (M-RB-CARRY-UNREADABLE)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"compare": True})
+    cmp_ = json_arg(a, "compare")
+    j = journal_load(d) or {}
+    flags = j.get("flags") or {}
+    plan = j.get("plan") or {}
+    cmd = j.get("rb_cmd") or "bash install-release.sh --rollback"
+    v = j.get("to_version") or "?"
+    disc = cmp_.get("discards") or {}
+    rf = disc.get("rf")
+    out = None
+    if rf != "same" and not flags.get("accept_summary_reset"):
+        out = {"code": "M-RB-RF-LATE",
+               "error": "RF summary rows arrived after the rollback was planned, so it did not "
+                        "go on.", "next": lifecycle_cmd("--rollback --dry-run", d)}
+    names = nc_names(cmp_)
+    shown = plan.get("not_carried") or {"credentials": {}, "settings": {}}
+    new = []
+    for part in ("credentials", "settings"):
+        for k, lst in names[part].items():
+            seen = set((shown.get(part) or {}).get(k) or [])
+            new += [x for x in lst if x not in seen]
+    if out is None and new:
+        out = {"code": "M-CONFIRM-NEEDED-LATE",
+               "error": "something the plan did not show would come back (%s): the confirmation "
+                        "covered only what the plan listed, so it did not go on."
+                        % ", ".join(sorted(set(new))),
+               "next": "%s --dry-run" % cmd}
+    if out is None and not j.get("confirmed") and (discards_any(disc) or names["credentials"]
+                                                   or names["settings"]):
+        out = {"code": "M-CONFIRM-NEEDED-LATE",
+               "error": "data arrived after the rollback was planned (%s), and it was started "
+                        "without a confirmation, so it did not go on." % short_discards(disc),
+               "next": "%s --confirm %s" % (cmd, v)}
+    bad = unreadable_sources(cmp_)
+    if out is None and bad and not flags.get("no_carry"):
+        since = plan.get("since") or "?"
+        out = {"code": "M-RB-CARRY-UNREADABLE",
+               "error": "the current %s cannot be read, so the rollback cannot keep the "
+                        "revocations made since %s; restoring without them could re-enable "
+                        "revoked credentials." % (" and ".join(bad), since),
+               "next": lifecycle_cmd("--status", d)}
+    say("ok" if out is None else json.dumps(out))
+
+
+def cmd_rb_verify(argv):
+    """rb-verify DIR --state F: the restored data (the state engine's reply,
+    read in the restore point's image with the restored .env) against the
+    restore point: its schema, the audit head (plus this rollback's own
+    entry), MFA and the audit chain when they verified before, no marker
+    and no staging left. Prints what it checked; exit 1 with the reason."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"state": True})
+    st = json_arg(a, "state")
+    j = journal_load(d) or {}
+    m = journal_manifest(d, j)
+    problems, done, notes = [], [], []
+    if st.get("schema") != m.get("schema_version"):
+        problems.append("the database is at migration %s, not %s as in the restore point" % (
+            st.get("schema"), m.get("schema_version")))
+    else:
+        done.append("schema %s" % st.get("schema"))
+    entry = j.get("audit_entry") or {}
+    want = entry.get("id") if entry.get("written") else (m.get("audit") or {}).get("head_id")
+    audit = st.get("audit") or {}
+    if audit.get("head_id") != want:
+        problems.append("the audit head is %s, not %s" % (audit.get("head_id"), want))
+    if (m.get("audit") or {}).get("result") == "ok":
+        if audit.get("result") == "ok":
+            done.append("audit chain valid (head %s)" % audit.get("head_id"))
+        elif audit.get("result") in ("unchecked", None):
+            notes.append("the audit chain was not checked (%s)" % (audit.get("result")))
+        else:
+            problems.append("the audit chain no longer verifies (%s)" % audit.get("result"))
+    else:
+        done.append("audit head %s" % audit.get("head_id"))
+    if ((st.get("counts") or {}).get("totp_fernet") or 0) > 0:
+        if st.get("mfa") == "ok":
+            done.append("MFA ok")
+        elif st.get("mfa") in ("unchecked", None):
+            notes.append("MFA was not checked")
+        else:
+            problems.append("BRIDGE_MFA_KEY does not verify the TOTP secrets")
+    markers = st.get("markers") or {}
+    if any(markers.get(v) for v in ("bridge_data", "bridge_secrets")):
+        problems.append("a restore marker is still there")
+    rb = j.get("rb_id") or j.get("id")
+    lc = st.get("lifecycle") or {}
+    if any(x.get("id") == rb for x in lc.get("staging") or []):
+        problems.append("the staging of this rollback is still there")
+    if problems:
+        say("; ".join(problems))
+        sys.exit(1)
+    say("; ".join(done + notes))
+
+
+def cmd_rb_compose_check(argv):
+    """rb-compose-check DIR: the restored compose file and override in
+    .sigrift/held/, read by Compose with the restored .env, name this
+    install's project (the pin) and the restore point's bridge and gateway
+    images; otherwise refuse (in the critical section: exit 4)."""
+    d = os.path.realpath(argv[0])
+    j = journal_load(d) or {}
+    m = journal_manifest(d, j)
+    held = os.path.join(d, HELD)
+    cmd = ["docker", "compose", "--project-directory", d, "-f",
+           os.path.join(held, "docker-compose.yml")]
+    for ov in OVERRIDES:
+        if os.path.isfile(os.path.join(held, ov)):
+            cmd += ["-f", os.path.join(held, ov)]
+            break
+    cmd += ["--env-file", os.path.join(d, ".env"), "config", "--format", "json"]
+    env = dict(os.environ)
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    env.pop("COMPOSE_FILE", None)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=120, env=env)
+        cfg = json.loads(r.stdout.decode("utf-8", "replace") or "{}") if r.returncode == 0 \
+            else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        cfg = None
+    project = j.get("project") or ""
+    if not isinstance(cfg, dict) or cfg.get("name") != project:
+        refuse("docker compose read the restored files with project %s, not %s (the "
+               "COMPOSE_PROJECT_NAME pinned in .env), so this rollback does not start them." % (
+                   (cfg or {}).get("name") or "none", project),
+               next_cmd="docker compose version")
+    want = dict((s, (m.get("images") or {}).get(s, {}).get("ref")) for s in ("bridge", "gateway"))
+    if m.get("install_type") == "source":
+        # A checkout builds its images (no image: lines); the HEAD gate proved
+        # its compose files are the point's commit's (phase2-spec 8.3).
+        want = {}
+    got = dict((s, ((cfg.get("services") or {}).get(s) or {}).get("image")) for s in want)
+    bad = [s for s in want if want[s] and got.get(s) != want[s]]
+    if bad:
+        refuse("the restored compose files start %s for the %s, not %s of restore point %s, so "
+               "this rollback does not start them." % (got.get(bad[0]), bad[0], want[bad[0]],
+                                                       j.get("restore_point")),
+               next_cmd=lifecycle_cmd("--status", d))
+    say("ok")
+
+
+def start_why(sf, svc=None):
+    """Why the start failed: `it exited` (or, with SVC, `the bridge exited`)."""
+    sf = sf or {}
+    who = ("the %s " % svc) if svc else ("it " if sf.get("why") == "exited" else "")
+    if sf.get("why") == "exited":
+        return "%sexited" % who
+    if sf.get("waited"):
+        return "%snot healthy within %s s" % (("the %s was " % svc) if svc else "", sf["waited"])
+    return "%sdid not become healthy in time" % (who or "it ")
+
+
+def replaced_bytes(d, rb):
+    for x in (host_record(d) or {}).get("finish_pending") or []:
+        if isinstance(x, dict) and x.get("id") == rb and x.get("bytes"):
+            return x["bytes"]
+    facts = newest_cached_facts(d) or load_facts() or {}
+    return sum(x.get("bytes") or 0 for x in (facts.get("lifecycle") or {}).get("replaced") or []
+               if x.get("id") == rb)
+
+
+def summary_of(path):
+    """(discards, not-carried names) of a compare result file, or (None, None)."""
+    cmp_ = read_json_file(path) if path else None
+    if not isinstance(cmp_, dict) or not cmp_.get("discards"):
+        return None, None
+    return cmp_.get("discards"), nc_names(cmp_)
+
+
+def cmd_msg(argv):
+    """msg KIND DIR [--compare F] [--step S] [--reason R]: the result and
+    failure messages of the 1b operations (phase1b-spec 8.3), from the
+    journal, the restore point's manifest and the state tool's results."""
+    kind, d = argv[0], os.path.realpath(argv[1])
+    a = parse_flags(argv[2:], {"compare": True, "step": True, "reason": True, "size": True})
+    j = journal_load(d) or {}
+    up = j.get("upgrade") if isinstance(j.get("upgrade"), dict) else j
+    m = journal_manifest(d, j)
+    rb = j.get("rb_id") or j.get("id") or "?"
+    status = here("bash install-release.sh --status")
+    finish = here("bash install-release.sh --rollback --finish")
+    sf = up.get("start_failed") or {}
+    jid = up.get("id") or "?"
+    failed_dir = os.path.join(d, LOGS, "failed-%s" % jid) + "/"
+    frm = up.get("from_version") or "?"
+    to = up.get("to_version") or "?"
+    if kind == "auto-rb-start":
+        say("==> The %s of %s did not become healthy (%s). It never served as healthy and nothing "
+            "arrived after the restore point, so this run rolls back to %s by itself (restore "
+            "point %s). Logs of the failed start: %s" % (
+                sf.get("service") or "bridge", to, start_why(sf), frm, j.get("restore_point")
+                or up.get("restore_point"), failed_dir))
+        return
+    if kind == "rolled-back" and j.get("cause") == "auto":
+        size = human_bytes(replaced_bytes(d, rb))
+        say("")
+        say("The upgrade to %s failed and was rolled back: SigRift %s is up again in %s, with its "
+            "data as it was at %s (nothing had arrived since)." % (to, frm, d,
+                                                                   m.get("created_at") or "?"))
+        say("    Why it failed: %s. Logs: %s" % (start_why(sf, sf.get("service") or "bridge"),
+                                                  failed_dir))
+        say("    The failed version's data stays in each volume as .sigrift-replaced-%s (%s) "
+            "until: %s" % (rb, size, finish))
+        say("    Those logs hold client addresses, usernames and node ids: check them before "
+            "attaching them to an issue, or send them privately (SECURITY.md).")
+        say("Next: %s" % status)
+        return
+    if kind == "rolled-back":
+        plan = read_json(os.path.join(d, LOGS, "rollback-%s" % rb, "final.json")) or \
+            read_json(os.path.join(d, LOGS, "rollback-%s" % rb, "plan.json")) or {}
+        disc, car = plan.get("discards") or {}, plan.get("carries") or {}
+        names = nc_names(plan)
+        how = ("before the upgrade to %s" % m.get("to_version")) if m.get("to_version") \
+            else "by --snapshot"
+        say("")
+        say("SigRift %s is up again in %s (restore point %s, taken %s %s)." % (
+            j.get("to_version"), d, j.get("restore_point"), m.get("created_at") or "?", how))
+        kept = []
+        for key, one, many in (
+                ("api_keys_revoked", "API key stays revoked", "API keys stay revoked"),
+                ("api_keys_removed", "API key stays deleted", "API keys stay deleted"),
+                ("api_keys_rotated", "rotated API key keeps its new secret",
+                 "rotated API keys keep their new secret"),
+                ("ca_serials_revoked", "client certificate stays revoked",
+                 "client certificates stay revoked"),
+                ("users_disabled", "user stays disabled", "users stay disabled"),
+                ("webhooks_removed", "webhook stays deleted", "webhooks stay deleted"),
+                ("webhooks_disabled", "webhook stays disabled", "webhooks stay disabled")):
+            n = n_of(car.get(key))
+            if n:
+                kept.append("%d %s" % (n, one if n == 1 else many))
+        say("    Discarded: %s. Kept: %s; every session ended." % (
+            short_discards(disc), ", ".join(kept) or "nothing to keep"))
+        say("    Not carried: %s." % (short_not_carried(names) or "nothing"))
+        entry = j.get("audit_entry") or {}
+        export = os.path.join(d, LOGS, "rollback-%s" % rb, "discarded-audit.jsonl")
+        k = 0
+        try:
+            with open(export, "rb") as f:
+                k = sum(1 for line in f if line.strip())
+        except OSError:
+            pass
+        if entry.get("written"):
+            say("    Audit: the restored chain records this rollback as entry %s; the %d "
+                "discarded entries are in %s" % (entry.get("id"), k, export))
+        else:
+            say("    Audit: not recorded in the chain (%s); the host record keeps the rollback"
+                % (entry.get("why") or "the restored version could not write it"))
+        again = []
+        if n_of(disc.get("crypto_keys_imported")):
+            again.append("re-import %d protocol decryption keys (Admin -> Crypto Keys)"
+                         % n_of(disc["crypto_keys_imported"]))
+        if disc.get("api_keys_created"):
+            again.append("re-enrol edge nodes %s" % ", ".join(disc["api_keys_created"]))
+        if n_of(disc.get("client_certs_issued")):
+            again.append("client certificates issued since stop working: %d"
+                         % n_of(disc["client_certs_issued"]))
+        c = names.get("credentials") or {}
+        if c.get("passwords_changed"):
+            again.append("change these passwords again: %s" % ", ".join(c["passwords_changed"]))
+        totp = sorted(set(c.get("totp_changed", []) + c.get("mfa_changed", [])))
+        if totp:
+            again.append("re-enrol TOTP: %s" % ", ".join(totp))
+        if car.get("backup_codes_invalidated"):
+            again.append("regenerate backup codes: %s" % ", ".join(
+                sorted(car["backup_codes_invalidated"])))
+        if again:
+            say("    Do again by hand: %s" % "; ".join(again))
+        say("    The state before the rollback stays in each volume as .sigrift-replaced-%s (%s) "
+            "until: %s (the disk-usage warning may count it until then)" % (
+                rb, human_bytes(replaced_bytes(d, rb)), finish))
+        say("    Upgrade again: unpack the release and run bash install-release.sh there (a new "
+            "restore point is taken first)")
+        return
+    if kind == "not-rolled-back":
+        ar = up.get("auto_rollback") or {}
+        disc, names = summary_of(a.get("compare"))
+        sys.stderr.write("\n")
+        lines = ["The %s of %s did not become healthy (%s). It was not rolled back automatically, "
+                 "because %s. %s is left as it was found." % (
+                     sf.get("service") or "bridge", to, start_why(sf),
+                     ar.get("reason") or "it could not be checked", to),
+                 "  Check logs: docker compose logs --tail=50 bridge; docker compose logs "
+                 "--tail=50 gateway; %s" % failed_dir]
+        rp = up.get("restore_point")
+        if disc is not None:
+            lines.append("  A rollback to %s would discard: %s; revocations made since are kept%s."
+                         % (frm, short_discards(disc) if discards_any(disc) else "nothing",
+                            ("; it would bring back: %s" % short_not_carried(names))
+                            if short_not_carried(names) else ""))
+        if not rp:
+            nxt = here("bash install-release.sh --resume")
+        elif disc is None or short_not_carried(names) or ar.get("decision") == "cannot-check":
+            nxt = here("bash install-release.sh --rollback --dry-run")
+        else:
+            nxt = here("bash install-release.sh --rollback" + (
+                " --confirm %s" % frm if discards_any(disc) else ""))
+        lines.append("Next: %s" % nxt)
+        sys.stderr.write("\n".join(lines) + "\n")
+        return
+    if kind == "auto-rb-failed":
+        has_copy = bool(replaced_bytes(d, rb)) or "rb-swap" in (j.get("done") or [])
+        sys.stderr.write("\nThe automatic rollback to %s stopped at step %s (%s). The restore point "
+                         "is unchanged%s.\nNext: %s\n" % (
+                             j.get("to_version") or frm, a.get("step") or j.get("next") or "?",
+                             a.get("reason") or j.get("error") or "see the log",
+                             ("; the failed upgrade's data is in .sigrift-replaced-%s in each "
+                              "volume" % rb) if has_copy else "", status))
+        return
+    if kind == "aborted-rollback":
+        cur = j.get("from_version") if j.get("op") == "rollback" else j.get("to_version")
+        v = j.get("to_version") if j.get("op") == "rollback" else j.get("from_version")
+        fsnap = j.get("files_snapshot") or "?"
+        tail = ""
+        if j.get("op") == "upgrade":
+            fsnap = (j.get("aborted_rollback") or {}).get("files_snapshot") or fsnap
+            tail = "; the failed upgrade to %s is left as it was found and no longer rolls back " \
+                   "by itself" % j.get("to_version") if (j.get("auto_rollback") or {}).get(
+                       "decision") == "aborted" else ""
+        say("==> The rollback to %s was undone: %s is back with its data and files as they were "
+            "before it (restore point %s for the files)%s." % (v, cur, fsnap, tail))
+        say("Next: %s" % status)
+        return
+    if kind == "snapshot-done":
+        rid = j.get("restore_point") or "?"
+        size = human_bytes(tree_bytes(os.path.join(j.get("restore_point_root") or
+                                                   os.path.join(d, SNAPSHOTS), rid)))
+        say("==> Restore point %s (%s) taken; SigRift %s is up again. Restore it with: %s" % (
+            rid, size, j.get("from_version"), here("bash install-release.sh --rollback " + rid)))
+        return
+    if kind == "finished":
+        say("==> Freed %s: removed .sigrift-replaced-%s from both data volumes." % (
+            human_bytes(int(a.get("size") or 0)), ", .sigrift-replaced-".join(j.get("ids") or [])))
+        return
+    sys.exit("lc_tool msg: unknown message %r" % kind)
+
+
+# ── Phase 2 (PART B): moves, imports and quickstart's state dir ─────────
+
+
+def esc(text):
+    """TEXT with C0, C1 and DEL escaped as \\xNN (phase2-spec 11, Appendix C, P)."""
+    return "".join("\\x%02x" % ord(ch) if ord(ch) < 0x20 or 0x7f <= ord(ch) <= 0x9f else ch
+                   for ch in str(text))
+
+
+MOVED_FILE = "moved.json"
+
+
+def moved_info(d):
+    m = read_json(os.path.join(d, STATE_DIR, MOVED_FILE))
+    return m if isinstance(m, dict) and m.get("archive_id") else None
+
+
+def moved_here_refusal(d, m, installer):
+    inst = installer_prog(installer)
+    refuse("%s in %s was moved to another host on %s (archive %s, %s); it stays stopped so "
+           "that only one gateway serves its keys." % (
+               esc(m.get("project") or "?"), esc(d), m.get("at") or "?",
+               str(m.get("archive_id") or "?")[:8], esc(m.get("file") or "?")),
+           ["To start it here again: %s --reactivate" % inst],
+           next_cmd="%s --status" % inst)
+
+
+def read_volume_marker(volume, helper):
+    """bridge_data/.sigrift-restore-incomplete of a volume, as the record."""
+    if not helper:
+        return None
+    r = docker(*(helper_run_args("record", "1500:1500") + [
+        "-v", volume + ":/v:ro", helper, "head", "-c", str(RECORD_MAX + 1),
+        "/v/" + RESTORE_MARKER]))
+    if r.returncode or len(r.stdout) > RECORD_MAX:
+        return None
+    try:
+        m = json.loads(r.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return m if isinstance(m, dict) else None
+
+
+def status_phase2(d, j, hr):
+    m = moved_info(d)
+    moved = {"archive_id": m.get("archive_id"), "at": m.get("at"), "file": m.get("file")} \
+        if m else None
+    imp = hr.get("imported_from") if isinstance(hr.get("imported_from"), dict) else None
+    imported = None
+    if imp and hr.get("imported_edges") is not None:
+        imported = {"archive_id": imp.get("archive_id"), "at": imp.get("at"),
+                    "edges": hr.get("imported_edges")}
+    state_dir = os.path.join(d, STATE_DIR) if os.path.isabs(STATE_DIR) else None
+    keeps = []
+    if journal_active(j) and j.get("op") in ("export", "import"):
+        ops = os.path.join(d, STATE_DIR, "ops", j.get("id") or "-")
+        if os.path.lexists(os.path.join(ops, "archive.key")):
+            keeps.append("an archive key for op %s is on disk until --resume or --abort"
+                         % j.get("id"))
+        if j.get("op") == "import" and os.path.isdir(os.path.join(ops, "payload")) and \
+                "im-unmark" not in (j.get("done") or []):
+            keeps.append("decrypted archive files (.env, TLS key) for op %s are in %s until "
+                         "--resume or --abort" % (j.get("id"), esc(ops)))
+        elif j.get("op") == "import" and os.path.lexists(
+                os.path.join(ops, "payload", "volumes", "opt-sigrift-pki.tar.gz")):
+            keeps.append("the archive's decrypted PKI part (the scanners' client key) for op %s "
+                         "is in %s until --resume or --abort" % (j.get("id"), esc(ops)))
+    return moved, imported, state_dir, keeps
+
+
+def cmd_journal_new_id(argv):
+    """journal-new-id DIR --op OP: a fresh journal id (journal-new --jid)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"op": True})
+    say(new_journal_id(d, a.get("op") or "op"))
+
+
+def cmd_mv_kind(argv):
+    """mv-kind DIR --installer I: the acting folder of --export, --import and
+    --reactivate as KEY=VALUE lines (no secrets): its kind (new, existing,
+    held or moved), project, whether its project has data, and moved.json."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"installer": True, "project": True})
+    kind = folder_kind(d, a.get("installer") or "release")
+    if kind in ("partial",) and a.get("installer") == "release":
+        kind = "existing"
+    m = moved_info(d) or {}
+    j = journal_load(d) or {}
+    project = a.get("project") or m.get("project") or env_pin(d) or \
+        (j.get("project") if journal_active(j) else "") or derive_project(d)
+    try:
+        vols = project_volumes(project)
+    except DockerError:
+        vols = {}
+    say("MV_KIND=%s" % kind)
+    say("MV_PROJECT=%s" % project)
+    say("MV_HAS_DATA=%s" % ("1" if "bridge_data" in vols else "0"))
+    say("MV_ACTIVE=%s" % ("1" if journal_active(j) else "0"))
+    for k in ("archive_id", "at", "file", "install_id", "archive_sha256"):
+        say("MV_MOVED_%s=%s" % (k.upper(), str(m.get(k) or "").replace("\n", " ")))
+
+
+def cmd_moved_write(argv):
+    """moved-write DIR --archive-id A --file F --sha256 S --project P
+    --install-id I: .sigrift/moved.json (0600, atomic; G8). An existing one
+    gains archives[] (an export from a moved folder)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"archive-id": True, "file": True, "sha256": True,
+                               "project": True, "install-id": True, "add": False})
+    old = moved_info(d)
+    if old and a.get("add"):
+        old.setdefault("archives", []).append({"archive_id": a.get("archive_id"),
+                                               "file": a.get("file"), "at": now_utc()})
+        write_json(os.path.join(d, STATE_DIR, MOVED_FILE), old)
+        return
+    if old and old.get("archive_id") == a.get("archive_id"):
+        return
+    ensure_state_dir(d)
+    write_json(os.path.join(d, STATE_DIR, MOVED_FILE), {
+        "format": 1, "archive_id": a.get("archive_id"), "file": a.get("file"),
+        "archive_sha256": a.get("sha256"), "at": now_utc(), "project": a.get("project"),
+        "install_id": a.get("install_id")})
+
+
+def cmd_moved_archive(argv):
+    """moved-archive DIR: moved.json -> logs/moved-<archive_id>.json
+    (--reactivate, an import into the moved folder). Idempotent."""
+    d = os.path.realpath(argv[0])
+    m = moved_info(d)
+    if not m:
+        return
+    dst = os.path.join(logs_dir(d), "moved-%s.json" % re.sub(r"[^0-9a-f-]", "",
+                                                              m["archive_id"]))
+    os.replace(os.path.join(d, STATE_DIR, MOVED_FILE), dst)
+    fsync_dir(os.path.join(d, STATE_DIR))
+
+
+def cmd_moved_restore(argv):
+    """moved-restore DIR --archive-id A: logs/moved-<A>.json back as
+    moved.json (the undo of a reactivate or of a moved-folder import)."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"archive-id": True})
+    src = os.path.join(d, LOGS, "moved-%s.json" % re.sub(r"[^0-9a-f-]", "",
+                                                         a.get("archive_id") or ""))
+    if os.path.isfile(src) and not moved_info(d):
+        os.replace(src, os.path.join(d, STATE_DIR, MOVED_FILE))
+
+
+def path_open_to_others(path):
+    """The first of PATH and its ancestors that group or others can write
+    without the sticky bit, or ''."""
+    p = os.path.realpath(path)
+    while True:
+        try:
+            st = os.stat(p)
+        except OSError:
+            return p
+        if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
+            return p
+        if p == os.path.dirname(p):
+            return ""
+        p = os.path.dirname(p)
+
+
+def cmd_ar_file_check(argv):
+    """ar-file-check --file F --dir D [--inst I] [--cmd C]: 6.1 step 3 for
+    an export's FILE (M-AR-FILE-EXISTS, M-AR-FILE-PLACE; NOTEs only for a
+    directory others can read). Prints FILE as an absolute path."""
+    a = parse_flags(argv, {"file": True, "dir": True, "inst": True, "cmd": True,
+                           "project": True})
+    inst = a.get("inst") or "bash install-release.sh"
+    cmd = a.get("cmd") or "%s --export FILE" % inst
+    f = os.path.abspath(os.path.expanduser(a["file"]))
+    d = os.path.realpath(a.get("dir") or ".")
+    base = os.path.basename(f)
+    if a["file"] == "-" or not base or base in (".", ".."):
+        refuse("%s is not a file name an export can write." % esc(a["file"]),
+               next_cmd=cmd.replace("FILE", "~/sigrift.sigrift-archive"))
+    if os.path.lexists(f):
+        refuse("%s exists; an export never overwrites a file." % esc(f),
+               next_cmd=cmd.replace(" FILE", " <another file>") if " FILE" in cmd else cmd)
+    parent = os.path.dirname(f)
+    home_cmd = cmd.replace("FILE", "~/%s" % (base if base.endswith(".sigrift-archive")
+                                               else "sigrift.sigrift-archive"))
+    if not os.path.isdir(parent) or not os.access(parent, os.W_OK | os.X_OK):
+        refuse("%s cannot be written there: %s does not exist or is not writable." % (
+            esc(f), esc(parent)), next_cmd=home_cmd)
+    rp = os.path.realpath(parent)
+    inside = [os.path.join(d, "tls"), os.path.join(d, STATE_DIR), os.path.join(d, HELD)]
+    sdir = os.environ.get("SIGRIFT_SNAPSHOT_DIR") or ""
+    if sdir:
+        inside.append(sdir)
+    try:
+        root = docker_root()
+    except Exception:
+        root = ""
+    if root:
+        inside.append(root)
+    if a.get("project"):
+        try:
+            for name in project_volumes(a["project"]).values():
+                r = docker("volume", "inspect", "--format", "{{.Mountpoint}}", name)
+                mp = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+                if mp:
+                    inside.append(mp)
+        except DockerError:
+            pass
+    for x in inside:
+        x = os.path.realpath(x)
+        if rp == x or rp.startswith(x.rstrip("/") + "/"):
+            refuse("%s cannot be written there: %s is inside tls/, a Docker volume, the "
+                   "install's state directory or a restore-point directory." % (esc(f), esc(rp)),
+                   next_cmd=home_cmd)
+    bad = path_open_to_others(parent)
+    if bad:
+        refuse("%s cannot be written there: %s or its ancestor %s is writable by others "
+               "without the sticky bit." % (esc(f), esc(rp), esc(bad)), next_cmd=home_cmd)
+    st = os.stat(parent)
+    if st.st_mode & 0o004:
+        note("%s can be read by other users; the archive is encrypted, but keep it where "
+             "only you can read it if you can." % esc(rp))
+    say(f)
+
+
+def cmd_export_target(argv):
+    """export-target --self-dir D: the install --export acts on when the
+    installer's own folder holds none and no --from DIR is given: the one
+    release install on this host with a known folder (not moved away);
+    else M-EXPORT-WHICH."""
+    a = parse_flags(argv, {"self-dir": True, "inst": True})
+    try:
+        projects, _ = classify_host(helper_image())
+    except DockerError as e:
+        refuse("could not ask Docker which SigRift installs this host has (%s exited %d)."
+               % (e.what, e.rc), next_cmd=e.what)
+    rel = [p for p in projects.values() if p.has_data and p.kind == "release" and
+           p.folder_exists and not p.moved_away and p.valid]
+    if len(rel) == 1:
+        say(rel[0].folder)
+        return
+    inst = a.get("inst") or "bash install-release.sh"
+    refuse("this folder holds no install, and the host has %s release installs." % (
+        "no" if not rel else "several"), install_list(rel),
+        next_cmd="%s --export FILE --from <folder>" % inst)
+
+
+def cmd_qs_state(argv):
+    """qs-state --checkout D --project P [--create]: quickstart's state dir
+    (8.1): the pointer .sigrift-state first (its target a real directory of
+    the checkout's owner, mode 0700, whose install.json names this
+    checkout); else ${XDG_STATE_HOME:-$HOME/.local/state}/sigrift/<P>/.
+    M-QS-STATE-POINTER (exit 3) otherwise."""
+    a = parse_flags(argv, {"checkout": True, "project": True})
+    d = os.path.realpath(a["checkout"])
+    ptr = os.path.join(d, ".sigrift-state")
+    if os.path.lexists(ptr):
+        text = (read_text(ptr) or "").strip()
+        why = ""
+        try:
+            st = os.lstat(text) if text else None
+        except OSError:
+            st = None
+        own = os.stat(d).st_uid
+        if not text or not os.path.isabs(text) or st is None:
+            why = "is missing"
+        elif stat.S_ISLNK(st.st_mode):
+            why = "is a symlink"
+        elif not stat.S_ISDIR(st.st_mode):
+            why = "is missing"
+        elif st.st_uid != own:
+            why = "is not yours"
+        elif stat.S_IMODE(st.st_mode) != 0o700:
+            why = "is not mode 0700"
+        else:
+            rec = read_json(os.path.join(text, "install.json")) or {}
+            if rec.get("working_dir") and not same_path(rec["working_dir"], d):
+                why = "belongs to %s" % esc(rec["working_dir"])
+        if why:
+            refuse(".sigrift-state points to %s, which %s." % (esc(text or "nothing"), why),
+                   next_cmd="cat .sigrift-state")
+        say(os.path.realpath(text))
+        return
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state")
+    project = a.get("project") or derive_project(d)
+    if not valid_project(project):
+        sys.exit("lc_tool qs-state: invalid project name")
+    say(os.path.join(os.path.abspath(base), "sigrift", project))
+
+
+def cmd_qs_pointer(argv):
+    """qs-pointer --checkout D --state S: .sigrift-state (0644, atomic),
+    written at the first journal (8.1)."""
+    a = parse_flags(argv, {"checkout": True, "state": True})
+    d = os.path.realpath(a["checkout"])
+    ptr = os.path.join(d, ".sigrift-state")
+    if (read_text(ptr) or "").strip() == a["state"]:
+        return
+    atomic_write(ptr, (a["state"] + "\n").encode(), 0o644)
+
+
+def cmd_moved_refuse(argv):
+    """moved-refuse DIR --installer I: M-MOVED-HERE for a moved folder."""
+    d = os.path.realpath(argv[0])
+    a = parse_flags(argv[1:], {"installer": True})
+    moved_here_refusal(d, moved_info(d) or {}, a.get("installer") or "release")
+
+
+def cmd_esc(argv):
+    """esc TEXT: TEXT with C0, C1 and DEL escaped (for bash messages)."""
+    say(esc(argv[0] if argv else ""))
 
 
 COMMANDS = {
@@ -5011,6 +7795,43 @@ COMMANDS = {
     "follow": cmd_follow,
     "verify-upgrade": cmd_verify_upgrade,
     "status": cmd_status,
+    "journal-handoff": cmd_journal_handoff,
+    "journal-abort-begin": cmd_journal_abort_begin,
+    "journal-abort-end": cmd_journal_abort_end,
+    "journal-busy": cmd_journal_busy,
+    "rb-journal-check": cmd_rb_journal_check,
+    "cache-facts": cmd_cache_facts,
+    "project-of": cmd_project_of,
+    "volumes-check": cmd_volumes_check,
+    "rp-images": cmd_rp_images,
+    "switch-record": cmd_switch_record,
+    "rb-guards": cmd_rb_guards,
+    "rb-plan": cmd_rb_plan,
+    "rb-guard-check": cmd_rb_guard_check,
+    "im-plan": cmd_im_plan,
+    "im-guard-check": cmd_im_guard_check,
+    "rb-verify": cmd_rb_verify,
+    "rb-compose-check": cmd_rb_compose_check,
+    "msg": cmd_msg,
+    "op-running": cmd_op_running,
+    "msg-summary": cmd_msg_summary,
+    "rp-env-has-audit-key": cmd_rp_env_has_audit_key,
+    "started-since": cmd_started_since,
+    "cached-facts": cmd_cached_facts,
+    "snapshot-dir-check": cmd_snapshot_dir_check,
+    "pre-keep-known": cmd_pre_keep_known,
+    # Phase 2 (PART B).
+    "journal-new-id": cmd_journal_new_id,
+    "mv-kind": cmd_mv_kind,
+    "moved-write": cmd_moved_write,
+    "moved-archive": cmd_moved_archive,
+    "moved-restore": cmd_moved_restore,
+    "ar-file-check": cmd_ar_file_check,
+    "export-target": cmd_export_target,
+    "qs-state": cmd_qs_state,
+    "qs-pointer": cmd_qs_pointer,
+    "esc": cmd_esc,
+    "moved-refuse": cmd_moved_refuse,
 }
 
 
@@ -5029,13 +7850,15 @@ lc_tool() {
         LC_ENGINE_BOOTSTRAP=${LC_ENGINE_BOOTSTRAP:-} LC_ENGINE_DATA_DIR=${LC_ENGINE_DATA_DIR:-} \
             LC_HELPER_IMAGE=${HELPER_IMAGE:-} LC_FACTS_JSON=${LC_FACTS_JSON:-} \
             LC_CALLER_DIR=${LC_CALLER_DIR:-} LC_SELF_DIR=${LC_SELF_DIR:-} \
-            LC_UPGRADE_DIR=${LC_UPGRADE_DIR:-} \
+            LC_UPGRADE_DIR=${LC_UPGRADE_DIR:-} LC_STATE_DIR=${LC_STATE_DIR:-} \
+            LC_INSTALLER=${LC_INSTALLER:-} \
             python3 -I "$LC_TOOL_PYC" "$@" 3<&0 </dev/null
     else
         LC_ENGINE_BOOTSTRAP=${LC_ENGINE_BOOTSTRAP:-} LC_ENGINE_DATA_DIR=${LC_ENGINE_DATA_DIR:-} \
             LC_HELPER_IMAGE=${HELPER_IMAGE:-} LC_FACTS_JSON=${LC_FACTS_JSON:-} \
             LC_CALLER_DIR=${LC_CALLER_DIR:-} LC_SELF_DIR=${LC_SELF_DIR:-} \
-            LC_UPGRADE_DIR=${LC_UPGRADE_DIR:-} \
+            LC_UPGRADE_DIR=${LC_UPGRADE_DIR:-} LC_STATE_DIR=${LC_STATE_DIR:-} \
+            LC_INSTALLER=${LC_INSTALLER:-} \
             python3 -I - "$@" 3<&0 <<<"$LC_TOOL_SRC"
     fi
 }
@@ -5101,6 +7924,12 @@ src = rec(); req = json.loads(rec())
 exec(compile(src, "<sigrift-engine>", "exec"), {"__name__": "sigrift_engine", "REQUEST": req})'
 
 lc_engine_source() {
+    # Phase 1b's state engine first, then Phase 2's archive engine: one
+    # module, and this engine's OPS takes their framed ops
+    # (lc_state_engine_source, state-engine block; lc_archive_engine_source,
+    # archive-engine block).
+    lc_state_engine_source
+    lc_archive_engine_source
     cat <<'PY'
 """SigRift lifecycle engine: read-only facts about an install's data.
 
@@ -5362,6 +8191,12 @@ def op_facts(req):
                       "crypto_keys": 0, "detections_max_id": None},
            "restore_marker": bool(markers), "restore_markers": markers,
            "record": read_record(data_dir), "candidates": {}}
+    # Phase 1b (the state engine, sent in front of this source): what each
+    # marker says, the staging and replaced copies with their phases, and
+    # Phase 3's kept pre-migration copy.
+    extra = globals().get("st_facts_extra")
+    if extra is not None:
+        out.update(extra(data_dir, req.get("secrets_dir") or SECRETS_DIR))
     conn = None
     if os.path.isfile(db):
         info = out["db"]
@@ -5398,6 +8233,18 @@ def op_facts(req):
                 if conn is not None:
                     conn.close()
                 conn = None
+    # Phase 2 (phase2-notes F-D21): the audit chain's head and the entries
+    # the request names, as tags of their chain values (the state engine's
+    # st_audit_chain, sent in front of this source), for an import's test of
+    # which side is newer.
+    chain = globals().get("st_audit_chain")
+    if chain is not None:
+        if conn is not None:
+            out["audit_chain"] = chain(conn, [i for i in req.get("audit_at") or ()
+                                              if type(i) is int])
+        else:
+            out["audit_chain"] = {"chain": "unreadable" if out["db"]["present"] else "no-db",
+                                  "head_id": None, "head_tag": None, "at": {}}
     try:
         cands = req.get("candidates") or {}
         for source in ("env", "container", "shell"):
@@ -5473,6 +8320,10 @@ def op_write_record(req):
 
 
 OPS = {"facts": op_facts, "image-info": op_image_info, "write-record": op_write_record}
+# Phase 1b's framed ops (the state engine), when its source came first.
+OPS.update(globals().get("STATE_OPS") or {})
+# Phase 2's archive ops (the archive engine), printed between the two.
+OPS.update(globals().get("ARCHIVE_OPS") or {})
 
 
 def run(req):
@@ -5483,6 +8334,10 @@ def run(req):
                                      "error": "%s: %s" % (type(e).__name__, str(e)[:200])}))
         sys.stdout.flush()
         return 1
+    if reply is None:
+        # A framed op wrote its own frames (and an error exits by SystemExit,
+        # which `except Exception` above does not catch).
+        return 0
     sys.stdout.write(json.dumps(reply, sort_keys=True))
     sys.stdout.flush()
     return 0
@@ -5520,6 +8375,10 @@ lc_engine_image_info() {
 # when the run could act on the wrong data; every refusal ends with
 # "Nothing was changed." and one next command, and exits 3.
 LC_STATE_DIRNAME=.sigrift
+# The install type the records name; quickstart sets source (Phase 2).
+LC_INSTALL_TYPE=${LC_INSTALL_TYPE:-release}
+# Extra `docker compose up` options of a start (quickstart: --no-build).
+LC_UP_EXTRA=()
 # Reserved for the restore of Phase 1b, which writes it at the root of the
 # bridge_data volume before it moves restored data into place and removes
 # it last: while it exists the data is half restored, so the installers
@@ -5530,11 +8389,14 @@ LC_RESTORE_MARKER=.sigrift-restore-incomplete
 # shellcheck disable=SC2034
 LC_HOLD_HEADER="# SigRift hold stub"
 # 1 failed after a change; 2 usage; 3 refused, nothing changed; 4 stopped
-# in the middle of an operation (the journal holds its state).
+# in the middle of an operation (the journal holds its state); 5 the
+# upgrade failed and was rolled back by itself (the previous version is
+# up and passed its checks). lc_tool lock's own codes 5 and 6 never reach
+# the installer's exit.
 # shellcheck disable=SC2034
-LC_EXIT_FAILED=1 LC_EXIT_USAGE=2 LC_EXIT_REFUSED=3 LC_EXIT_STOPPED=4
-# Until rollback exists (Phase 1b) the way back is the documented one.
-LC_DOWNGRADE_NEXT='see "Going back" in INSTALL.md, "Upgrading a release install"'
+LC_EXIT_FAILED=1 LC_EXIT_USAGE=2 LC_EXIT_REFUSED=3 LC_EXIT_STOPPED=4 LC_EXIT_ROLLED_BACK=5
+# The way back from an upgrade: its restore point (restore block).
+LC_DOWNGRADE_NEXT='bash install-release.sh --rollback'
 SIGRIFT_UPGRADE_PROMPT_SECONDS=${SIGRIFT_UPGRADE_PROMPT_SECONDS:-20}
 LC_SNAPSHOTS=${LC_SNAPSHOTS:-0}
 LC_DECISION_KEYS="LC_KIND LC_TARGET_DIR LC_PROJECT LC_PROJECT_HOW LC_PIN LC_AUTO LC_HAS_DATA"
@@ -5542,10 +8404,11 @@ LC_DECISION_KEYS+=" LC_FROM_VERSION LC_MOVED_FROM LC_INSTALL_ID LC_BRIDGE_CONTAI
 LC_DECISION_KEYS+=" LC_GATEWAY_CONTAINER LC_WAS_RUNNING LC_OTHERS LC_PORT LC_ADOPTED_FROM LC_PROOF"
 
 # lc_refuse NEXT MESSAGE [DETAIL...] — the refusal format; exits 3.
-# Inside an upgrade's detached part (LC_CRITICAL=1: the stack is already
-# stopped) it says where the upgrade stopped instead, and exits 4.
+# Inside the detached part of an operation (LC_CRITICAL=1: the stack may
+# be stopped already) it says where the operation stopped instead
+# (LC_OP_WHAT: the upgrade, the rollback, ...), and exits 4.
 lc_refuse() {
-    local next="$1" line
+    local next="$1" line what
     shift
     printf 'Error: %s\n' "$1" >&2
     shift
@@ -5553,8 +8416,10 @@ lc_refuse() {
         printf '  %s\n' "$line" >&2
     done
     if [ "${LC_CRITICAL:-0}" = 1 ]; then
-        printf '  The upgrade stopped at step %s and changed nothing more; fix this, then resume it (%s) or undo it (%s).\n' \
-            "${LC_STEP:-?}" "$(lc_here_cmd --resume)" "$(lc_here_cmd --abort)" >&2
+        what=${LC_OP_WHAT:-the upgrade}
+        what="T${what#t}"
+        printf '  %s stopped at step %s and changed nothing more; fix this, then resume it (%s) or undo it (%s).\n' \
+            "$what" "${LC_STEP:-?}" "$(lc_here_cmd --resume)" "$(lc_here_cmd --abort)" >&2
         printf 'Next: %s\n' "$next" >&2
         exit "$LC_EXIT_STOPPED"
     fi
@@ -5564,6 +8429,24 @@ lc_refuse() {
 
 lc_note() {
     printf 'NOTE: %s\n' "$*" >&2
+}
+
+# lc_state_path — the state directory as an absolute path (.sigrift of the
+# folder, or quickstart's, which LC_STATE_DIRNAME names absolutely).
+lc_state_path() {
+    case "$LC_STATE_DIRNAME" in
+        /*) printf '%s' "$LC_STATE_DIRNAME" ;;
+        *) printf '%s/%s' "$(pwd -P)" "$LC_STATE_DIRNAME" ;;
+    esac
+}
+
+# lc_inst — this installer as the operator types it in messages.
+lc_inst() {
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        printf 'scripts/quickstart.sh'
+    else
+        printf 'bash install-release.sh'
+    fi
 }
 
 # lc_identity INSTALLER (release | quickstart) — decide, or refuse.
@@ -5583,7 +8466,9 @@ lc_identity() {
     [ -z "${LC_UPGRADE_DIR:-}" ] || args+=(--target "$LC_UPGRADE_DIR")
     [ "${LC_NEW_INSTANCE:-0}" = 0 ] || args+=(--new-instance)
     [ -z "${LC_ADOPT_PROJECT:-}" ] || args+=(--adopt-project "$LC_ADOPT_PROJECT")
-    decision=$(lc_engine_source | lc_tool "${args[@]}") || exit "$?"
+    # Phase 2 (1.2): a moved folder is refused (M-MOVED-HERE) except by the
+    # commands that set LC_MOVED_OK=1 (--export, --reactivate, --import --replace).
+    decision=$(lc_engine_source | LC_MOVED_OK=${LC_MOVED_OK:-0} lc_tool "${args[@]}") || exit "$?"
     lc_load_decision "$decision"
 }
 
@@ -5698,6 +8583,9 @@ lc_facts() {
     fi
     LC_FACTS_JSON=$(lc_engine "$image" "$LC_PROJECT" facts .env "${LC_BRIDGE_CONTAINER:-}") || true
     [ -n "$LC_FACTS_JSON" ] || LC_FACTS_JSON='{"format": 1, "ok": false, "error": "the engine gave no answer"}'
+    # The detached part of an operation keeps the facts it read for
+    # --status and --list-snapshots, which start no container meanwhile.
+    [ "${LC_CRITICAL:-0}" != 1 ] || lc_tool cache-facts . </dev/null || true
     LC_DB_BYTES=$(lc_tool facts-get db.bytes </dev/null)
     LC_DB_BYTES=${LC_DB_BYTES:-0}
 }
@@ -5706,14 +8594,20 @@ lc_facts() {
 # leaves the marker at the root of each volume it restores (bridge_data,
 # bridge_secrets) until it is complete.
 lc_check_restore_marker() {
-    local next where
+    local next where op mid own
     [ "$(lc_tool facts-get restore_marker </dev/null)" = 1 ] || return 0
-    where=$(lc_tool facts-get restore_markers </dev/null | tr -d '[]"' | sed 's/, */ and /g')
-    if [ "$LC_INSTALLER" = release ]; then
-        next=$(lc_here_cmd --status)
-    else
-        next="grep -n -A8 'restore-incomplete' TROUBLESHOOTING.md"
+    # Phase 2 (1.2): a move marker of this folder's own move is M-MOVED-HERE
+    # (or, for the commands a moved folder allows, no refusal); any other
+    # marker stays M-RESTORE-MARKER.
+    op=$(lc_tool facts-get markers.bridge_data.op </dev/null)
+    mid=$(lc_tool facts-get markers.bridge_data.id </dev/null)
+    own=$(lc_tool mv-kind . --installer "${LC_INSTALLER:-release}" </dev/null | sed -n 's/^MV_MOVED_ARCHIVE_ID=//p')
+    if [ "$op" = move ] && [ -n "$mid" ] && [ "$mid" = "$own" ]; then
+        [ "${LC_MOVED_OK:-0}" = 1 ] && return 0
+        lc_tool moved-refuse . --installer "${LC_INSTALLER:-release}" </dev/null
     fi
+    where=$(lc_tool facts-get restore_markers </dev/null | tr -d '[]"' | sed 's/, */ and /g')
+    next=$(lc_here_cmd --status)
     lc_refuse "$next" \
         "the ${where:-bridge_data} volume of ${LC_PROJECT} holds ${LC_RESTORE_MARKER}, left by an interrupted restore, so the stack must not start."
 }
@@ -5779,8 +8673,7 @@ lc_check_versions() {
     local live newest image
     [ "$LC_INSTALLER" = release ] || return 0
     if [ "$(lc_tool version-cmp "${VERSION:-}" "${LC_FROM_VERSION:-unknown}" </dev/null)" = -1 ]; then
-        lc_refuse "$LC_DOWNGRADE_NEXT" \
-            "${VERSION} is older than the installed ${LC_FROM_VERSION}; newer releases can change the data one way, so the installer never installs an older release over it."
+        lc_downgrade_refusal
     fi
     [ "${LC_HAS_DATA:-0}" = 1 ] || return 0
     live=$(lc_tool facts-get db.schema </dev/null)
@@ -5828,11 +8721,13 @@ lc_preflight() {
 # after a healthy run. Quickstart uses the lock only (Phase 2 adds the
 # rest for source installs).
 
-# The steps of the detached part of an upgrade, in order. The restore point
-# ("snapshot") is taken before the journal exists, so a failure there
-# changes nothing; "installer" runs only for --upgrade DIR and the
-# automatic path.
-LC_UPGRADE_STEPS="snapshot installer stop hold switch start-bridge start-rest verify record"
+# The steps of the detached part of an upgrade, in order. The files-only
+# restore point ("snapshot") is taken before the journal exists, so a
+# failure there changes nothing; "installer" runs only for --upgrade DIR
+# and the automatic path; "prechecks" and "restore-point" (the full
+# restore point of both data volumes, restore block) run once the stack is
+# stopped and held, "restore-point" not with --no-snapshot.
+LC_UPGRADE_STEPS="snapshot installer stop hold prechecks restore-point switch start-bridge start-rest verify record"
 # What the detached run takes over from the run that started it (no
 # secrets: versions, the identity decision, flags).
 LC_JOURNAL_VARS="VERSION VERSION_REQUESTED OWNER PORT $LC_DECISION_KEYS LC_KEEP_RUNNING_SECRETS"
@@ -5862,8 +8757,10 @@ lc_lock_acquire() {
     exec 9<"$dir"
     lc_tool lock 9 "$dir" "$op" --installer "${LC_INSTALLER:-release}" </dev/null || rc=$?
     if [ "$rc" -eq 6 ]; then
-        mkdir -m 0700 "$dir/$LC_STATE_DIRNAME" 2>/dev/null || true
-        exec 9>>"$dir/$LC_STATE_DIRNAME/lock"
+        local sd="$dir/$LC_STATE_DIRNAME"
+        case "$LC_STATE_DIRNAME" in /*) sd=$LC_STATE_DIRNAME ;; esac
+        { mkdir -p "$sd" && chmod 0700 "$sd"; } 2>/dev/null || true
+        exec 9>>"$sd/lock"
         rc=0
         lc_tool lock 9 "$dir" "$op" --installer "${LC_INSTALLER:-release}" </dev/null || rc=$?
     fi
@@ -5882,12 +8779,21 @@ lc_pull_images() {
     LC_IMAGE_REFS=""
     for svc in bridge gateway; do
         ref="ghcr.io/${OWNER}/sigrift-${svc}:${VERSION}"
-        echo "==> Pulling ${ref} (the running stack is not touched)"
-        rc=0
-        docker pull --quiet "$ref" >/dev/null || rc=$?
-        if [ "$rc" -ne 0 ]; then
-            lc_refuse "docker pull ${ref}" \
-                "could not pull ${ref} (docker pull exited ${rc}). The running stack and every file are as they were."
+        if [ "${SIGRIFT_PULL:-}" = never ]; then
+            # E28: air-gapped hosts and local release candidates: both images
+            # must be on this host already (docker load).
+            if [ -z "$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" ]; then
+                lc_refuse "docker load -i <the image archive>" "SIGRIFT_PULL=never, but ${ref} is not on this host."
+            fi
+            echo "==> Using ${ref} as it is on this host (SIGRIFT_PULL=never)"
+        else
+            echo "==> Pulling ${ref} (the running stack is not touched)"
+            rc=0
+            docker pull --quiet "$ref" >/dev/null || rc=$?
+            if [ "$rc" -ne 0 ]; then
+                lc_refuse "docker pull ${ref}" \
+                    "could not pull ${ref} (docker pull exited ${rc}). The running stack and every file are as they were."
+            fi
         fi
         digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null) || digest=""
         id=$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null) || id=""
@@ -5954,7 +8860,7 @@ lc_snapshot_files() {
     if [ "${out#* }" = reused ]; then
         echo "==> Restore point ${LC_SNAPSHOT_ID} (files only) already holds these files"
     else
-        echo "==> Restore point ${LC_SNAPSHOT_ID} (files only): ${PWD}/${LC_STATE_DIRNAME}/snapshots/${LC_SNAPSHOT_ID}"
+        echo "==> Restore point ${LC_SNAPSHOT_ID} (files only): $(lc_state_path)/snapshots/${LC_SNAPSHOT_ID}"
     fi
 }
 
@@ -6010,13 +8916,25 @@ lc_load_journal_vars() {
 
 # lc_journal_begin OP — after the pull and the restore point: the journal
 # (and lock-owner.json, for a second run's M-LOCKED) of the detached part.
+# The install id is the host record's, else .sigrift/install-id, else a new
+# one written there first (journal-new, E32).
 lc_journal_begin() {
-    local steps="" step done="snapshot"
+    local steps="" step done="snapshot" extra
     for step in $LC_UPGRADE_STEPS; do
         [ "$step" != installer ] || [ "$LC_SELF_DIR" != "$(pwd -P)" ] || continue
+        [ "$step" != restore-point ] || [ "${LC_NO_SNAPSHOT:-0}" = 0 ] || continue
         steps+="${steps:+,}${step}"
     done
-    lc_journal_vars | lc_tool journal-new --dir . --op "$1" --steps "$steps" \
+    extra=$(python3 -I -c 'import json, sys
+try:
+    plan = json.loads(sys.argv[1] or "null")
+except ValueError:
+    plan = None
+print(json.dumps({"rp_plan": plan, "snapshot_dir": (plan or {}).get("root") if sys.argv[5] else None,
+                  "flags": {"no_auto_rollback": sys.argv[2] == "1", "exclude": sys.argv[3],
+                            "no_snapshot": sys.argv[4] == "1"}}))' "${LC_SPACE_JSON:-}" \
+        "${LC_NO_AUTO_ROLLBACK:-0}" "${LC_EXCLUDE:-}" "${LC_NO_SNAPSHOT:-0}" "${SIGRIFT_SNAPSHOT_DIR:-}")
+    lc_journal_vars | lc_tool journal-new --dir . --op "$1" --steps "$steps" --extra "$extra" \
         --done "$done" --from "${LC_FROM_VERSION:-unknown}" --to "$VERSION" --owner "$OWNER" \
         --project "$LC_PROJECT" --source-dir "$([ "$LC_SELF_DIR" = "$(pwd -P)" ] || echo "$LC_SELF_DIR")" \
         --snapshot "$LC_SNAPSHOT_ID" --was-running "${LC_WAS_RUNNING:-0}" \
@@ -6041,7 +8959,9 @@ lc_journal_state() {
 lc_here_cmd() {
     local here
     here=$(pwd -P)
-    if [ -z "${LC_CALLER_DIR:-}" ] || [ "$LC_CALLER_DIR" = "$here" ]; then
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        printf 'scripts/quickstart.sh %s' "$*"
+    elif [ -z "${LC_CALLER_DIR:-}" ] || [ "$LC_CALLER_DIR" = "$here" ]; then
         printf 'bash install-release.sh %s' "$*"
     elif [ -z "${LC_SELF_DIR:-}" ] || [ "$LC_SELF_DIR" = "$LC_CALLER_DIR" ]; then
         printf 'bash install-release.sh %s %q' "$*" "$here"
@@ -6062,7 +8982,9 @@ lc_in_here() {
 
 # lc_rerun_cmd — this run again, as the operator types it.
 lc_rerun_cmd() {
-    if [ -z "${LC_CALLER_DIR:-}" ] || [ "$LC_CALLER_DIR" = "$(pwd -P)" ]; then
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        printf 'scripts/quickstart.sh'
+    elif [ -z "${LC_CALLER_DIR:-}" ] || [ "$LC_CALLER_DIR" = "$(pwd -P)" ]; then
         printf 'bash install-release.sh'
     elif [ "${LC_SELF_DIR:-}" = "$LC_CALLER_DIR" ]; then
         printf 'bash install-release.sh --upgrade %q' "$(pwd -P)"
@@ -6107,31 +9029,49 @@ lc_goto_install() {
     fi
 }
 
+# lc_op_what OP [STATE] — the operation's name in messages.
+lc_op_what() {
+    case "$1/${2:-}" in
+        rollback/aborting) printf 'the undo of the rollback' ;;
+        rollback/*) printf 'the rollback' ;;
+        snapshot/*) printf 'the restore point' ;;
+        finish/*) printf 'the --rollback --finish' ;;
+        export/*) printf 'the export' ;;
+        import/*) printf 'the import' ;;
+        reactivate/*) printf 'the --reactivate' ;;
+        *) printf 'the upgrade' ;;
+    esac
+}
+
 # lc_run_detached — the rest of the journal's steps in a new session
 # (lc_continue in `install-release.sh --lc-continue ID`), its output in
 # .sigrift/logs/; this run only follows the log and exits with its code.
 lc_run_detached() {
-    local id log rcfile child rc=0
+    local id log rcfile child rc=0 what
     id=$(lc_tool journal-get . id </dev/null)
     log=$(lc_tool journal-get . log </dev/null)
+    what=$(lc_op_what "$(lc_tool journal-get . op </dev/null)" "$(lc_tool journal-get . state </dev/null)")
     rcfile=${log%.log}.rc
     rm -f -- "$rcfile"
-    child=$(lc_tool setsid-exec "$log" "$BASH" "$LC_RUN_SCRIPT" --lc-continue "$id" </dev/null)
-    echo "    log: $(pwd -P)/${log}; the upgrade goes on if this terminal closes (check it with $(lc_here_cmd --status))"
+    # fd 4 (the operator's stdin during --export and --import, 2.4) never
+    # reaches the detached part.
+    child=$(lc_tool setsid-exec "$log" "$BASH" "$LC_RUN_SCRIPT" --lc-continue "$id" </dev/null 4<&-)
+    case "$log" in /*) ;; *) log="$(pwd -P)/${log}" ;; esac
+    echo "    log: ${log}; ${what} goes on if this terminal closes (check it with $(lc_here_cmd --status))"
     lc_tool follow "$log" "$child" "$rcfile" "$(lc_here_cmd --status)" </dev/null || rc=$?
     return "$rc"
 }
 
 # lc_progress N TEXT — a numbered step line of the upgrade.
 lc_progress() {
-    echo "==> [$1/${LC_STEPS_TOTAL:-8}] $2"
+    echo "==> [$1/${LC_STEPS_TOTAL:-9}] $2"
 }
 
 # lc_continue ID — the detached part, run from the journal of this
 # folder: each pending step, then records it done. Every step is
 # idempotent, so --resume simply runs the pending ones again.
 lc_continue() {
-    local id="$1" step fn
+    local id="$1"
     if [ "${LC_LOCK_INHERITED:-0}" != 1 ] || [ "$(lc_tool journal-get . id </dev/null)" != "$id" ]; then
         echo "usage: --lc-continue is for the installer's own detached run" >&2
         exit 2
@@ -6140,45 +9080,156 @@ lc_continue() {
     lc_load_journal_vars
     LC_LOG=$(lc_tool journal-get . log </dev/null)
     LC_RC_FILE=${LC_LOG%.log}.rc
-    LC_SOURCE_DIR=$(lc_tool journal-get . source_dir </dev/null)
-    LC_STEPS_TOTAL=7
-    [ -z "$LC_SOURCE_DIR" ] || LC_STEPS_TOTAL=8
     export LC_CRITICAL=1
     LC_NO_PROMPT=1
     trap lc_child_exit EXIT
     lc_use_journal_project
-    lc_tool journal-set . "pid=$$" state=running error=null </dev/null
-    lc_tool lock-owner . --op "$(lc_tool journal-get . op </dev/null)" --log "$LC_LOG" --pid "$$" </dev/null
+    lc_tool journal-set . "pid=$$" child_started_at=@now error=null </dev/null
+    lc_run_journal
+}
+
+# lc_op_setup — this journal's op: its name in messages, its numbered
+# lines (an upgrade: 9, or 10 with an installer step; other ops: their
+# steps).
+lc_op_setup() {
+    local op state steps
+    op=$(lc_tool journal-get . op </dev/null)
+    state=$(lc_tool journal-get . state </dev/null)
+    LC_JOURNAL_OP=$op
+    LC_OP_WHAT=$(lc_op_what "$op" "$state")
+    export LC_OP_WHAT
+    LC_SOURCE_DIR=$(lc_tool journal-get . source_dir </dev/null)
+    steps=$(lc_tool journal-get . steps </dev/null | tr -d '[]",')
+    LC_STEPS_LIST=$steps
+    LC_STEP_OFFSET=0
+    if [ "$op" = upgrade ]; then
+        LC_STEPS_TOTAL=9
+        case " $steps " in *" installer "*) LC_STEPS_TOTAL=10 LC_STEP_OFFSET=1 ;; esac
+    else
+        # shellcheck disable=SC2086
+        set -- $steps
+        LC_STEPS_TOTAL=$#
+    fi
+}
+
+# lc_run_journal — the pending steps of the journal in this process. An
+# undo (state aborting) stays aborting until its last step writes the
+# final state; every other run ends with the journal done.
+lc_run_journal() {
+    local step fn state
+    lc_op_setup
+    state=$(lc_tool journal-get . state </dev/null)
+    LC_ABORT_RUN=0
+    if [ "$state" = aborting ]; then
+        LC_ABORT_RUN=1
+    else
+        lc_tool journal-set . state=running </dev/null
+    fi
+    lc_tool lock-owner . --op "$LC_JOURNAL_OP" --log "$(lc_tool journal-get . log </dev/null)" --pid "$$" </dev/null
+    # An upgrade stopped inside its automatic-rollback decision goes on
+    # there (6.2), never with a new start of the failed version.
+    if [ "$LC_JOURNAL_OP" = upgrade ] && [ -n "$(lc_tool journal-get . start_failed.service </dev/null)" ]; then
+        case "$(lc_tool journal-get . auto_rollback.decision </dev/null)" in
+            ""|rollback) lc_after_start_failure "$(lc_tool journal-get . start_failed.service </dev/null)" --resume ;;
+        esac
+    fi
     for step in $(lc_tool journal-pending . </dev/null); do
         export LC_STEP=$step
         fn="lc_step_${step//-/_}"
         "$fn"
-        lc_journal_step "$step"
+        # The undo's last step replaces the journal itself.
+        [ "$step" = ab-record ] || lc_journal_step "$step"
     done
-    lc_journal_state "done"
+    [ "$LC_ABORT_RUN" = 1 ] || lc_journal_state "done"
     lc_tool lock-owner . --release </dev/null
+}
+
+# lc_run_journal_here — a journal's steps in the foreground (the finish),
+# under this run's own lock.
+lc_run_journal_here() {
+    LC_LOG=$(lc_tool journal-get . log </dev/null)
+    LC_RC_FILE=${LC_LOG%.log}.rc
+    lc_use_journal_project
+    lc_tool journal-set . "pid=$$" child_started_at=@now error=null </dev/null
+    lc_run_journal
+    lc_op_result
+}
+
+# lc_op_result — after the steps: the result message of the op that ran,
+# and its exit code (an upgrade's summary is the installer's own).
+lc_op_result() {
+    local op state
+    op=$(lc_tool journal-get . op </dev/null)
+    state=$(lc_tool journal-get . state </dev/null)
+    if [ "${LC_ABORT_RUN:-0}" = 1 ]; then
+        lc_tool msg aborted-rollback . </dev/null
+        return 0
+    fi
+    case "$op/$state" in
+        rollback/done)
+            lc_tool msg rolled-back . </dev/null
+            [ "$(lc_tool journal-get . cause </dev/null)" != auto ] || return "$LC_EXIT_ROLLED_BACK"
+            ;;
+        snapshot/done) lc_tool msg snapshot-done . </dev/null ;;
+        export/done|import/done|reactivate/done) lc_mv_result ;;
+        finish/done) lc_tool msg finished . --size "$(lc_tool journal-get . bytes </dev/null)" </dev/null ;;
+    esac
+    return 0
 }
 
 # lc_child_exit — the detached run's EXIT trap: the journal says where it
 # stopped, the follower gets the exit code.
 lc_child_exit() {
-    local rc=$? state
+    local rc=$? state what op orig
     trap - EXIT
     set +e
-    if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne "$LC_EXIT_ROLLED_BACK" ]; then
         state=$(lc_tool journal-get . state </dev/null 2>/dev/null)
-        # A failure after the journal says done (the summary) or after a
-        # failed check keeps what the journal says.
-        if [ "$state" != verify_failed ] && [ "$state" != "done" ]; then
-            lc_journal_state failed "${LC_STEP:-?}: exit ${rc}" >/dev/null 2>&1
+        op=$(lc_tool journal-get . op </dev/null 2>/dev/null)
+        # A failure after the journal says done (the summary), after a
+        # failed check, during an undo, or after a late refusal that put
+        # everything back keeps what the journal says (so does a step
+        # that wrote its own reason: LC_JOURNAL_KEEP).
+        case "$state" in
+            verify_failed|done|aborting|aborted) ;;
+            *) [ "${LC_JOURNAL_KEEP:-0}" = 1 ] || lc_journal_state failed "${LC_STEP:-?}: exit ${rc}" >/dev/null 2>&1 ;;
+        esac
+        # A rollback, an undo, a restore point or a finish that stopped
+        # inside a step left the journal active (the stack may be down,
+        # half swapped): exit 4. Exit 1 stays for what was put back (the
+        # journal aborted: M-RP-FAILED, M-QUICK-CHECK) and for 1a's
+        # upgrade steps, which say what changed.
+        case "$state" in
+            done|aborted) ;;
+            *) orig=$rc
+               # Phase 2: a failed write or verify of an export is exit 1
+               # (M-AR-WRITE-FAILED, M-AR-VERIFY-FAILED: the stack runs).
+               if [ "$op" != upgrade ] && [ "$rc" -ne "$LC_EXIT_REFUSED" ] \
+                       && ! { [ "$op" = export ] && [ "$rc" -eq "$LC_EXIT_FAILED" ] \
+                              && { [ "${LC_STEP:-}" = ar-write ] || [ "${LC_STEP:-}" = ar-verify ]; }; }; then
+                   rc=$LC_EXIT_STOPPED
+               fi ;;
+        esac
+        what=$(lc_op_what "$op" "$state")
+        if [ "$rc" -ne "$LC_EXIT_REFUSED" ] && [ "$state" != "done" ] && [ "$state" != "aborted" ] \
+                && [ "${LC_MSG_DONE:-0}" != 1 ]; then
+            if [ "$(lc_tool journal-get . op </dev/null 2>/dev/null)" = rollback ] \
+                    && [ "$(lc_tool journal-get . cause </dev/null 2>/dev/null)" = auto ] && [ "$state" != aborting ]; then
+                lc_tool msg auto-rb-failed . --step "${LC_STEP:-?}" \
+                    --reason "${LC_AUTO_FAIL_REASON:-exit ${rc}}" </dev/null
+                rc=$LC_EXIT_STOPPED
+            else
+                echo "" >&2
+                echo "T${what#t} stopped at step ${LC_STEP:-?} (exit ${rc}); the journal keeps where it stands." >&2
+                # Exit 4 paths already named what to run next.
+                [ "${orig:-$rc}" -eq "$LC_EXIT_STOPPED" ] || echo "Next: $(lc_here_cmd --status)" >&2
+            fi
         fi
-        echo "" >&2
-        echo "The upgrade stopped at step ${LC_STEP:-?} (exit ${rc}); the journal keeps where it stands." >&2
-        # Exit 4 paths already named what to run next.
-        [ "$rc" -eq "$LC_EXIT_STOPPED" ] || echo "Next: $(lc_here_cmd --status)" >&2
     fi
     lc_tool lock-owner . --release </dev/null >/dev/null 2>&1
-    printf '%s\n' "$rc" >"${LC_RC_FILE}.tmp" && mv -f "${LC_RC_FILE}.tmp" "$LC_RC_FILE"
+    if [ -n "${LC_RC_FILE:-}" ]; then
+        printf '%s\n' "$rc" >"${LC_RC_FILE}.tmp" && mv -f "${LC_RC_FILE}.tmp" "$LC_RC_FILE"
+    fi
     exit "$rc"
 }
 
@@ -6220,29 +9271,51 @@ lc_step_installer() {
 
 lc_step_stop() {
     lc_stop_stack
+    lc_tool journal-set . stopped_at=@now </dev/null
 }
 
 lc_step_hold() {
     lc_hold
-    lc_progress "$((LC_STEPS_TOTAL - 3))" "stack stopped and held  (log: ${LC_LOG}; safe to lose this terminal)"
+    if [ "${LC_JOURNAL_OP:-upgrade}" = upgrade ]; then
+        lc_progress "$((4 + ${LC_STEP_OFFSET:-0}))" "stack stopped and held  (log: ${LC_LOG}; safe to lose this terminal)"
+    else
+        lc_op_progress "stack stopped and held  (log: ${LC_LOG}; safe to lose this terminal)"
+    fi
 }
 
 lc_step_switch() {
+    local how="image tags updated"
+    LC_COMPOSE_TEMPLATE_SHA256=""
     "${LC_INSTALLER}_switch"
+    [ -z "${LC_COMPOSE_TEMPLATE_SHA256:-}" ] || how="regenerated from the ${VERSION} template"
     # What the .env edit did (key names and migration ids), for the record
-    # step, also when a resume runs that step in another process.
-    lc_tool journal-set . "env_result=${LC_ENV_RESULT:-}" </dev/null
-    lc_progress "$((LC_STEPS_TOTAL - 2))" "compose, VERSION and .env switched"
+    # step, also when a resume runs that step in another process; the tags
+    # of the keys it wrote and the compose files as they are now (E12).
+    lc_tool journal-set . "env_result=${LC_ENV_RESULT:-}" \
+        "compose_template_sha256=${LC_COMPOSE_TEMPLATE_SHA256:-}" </dev/null
+    lc_tool switch-record . --env-result "${LC_ENV_RESULT:-}" </dev/null
+    lc_progress "$((7 + ${LC_STEP_OFFSET:-0}))" "compose ${how}, VERSION and .env switched"
 }
 
 lc_step_start_bridge() {
+    # An import's and a quickstart upgrade's compose files stay held until
+    # the bridge starts (1b E10; a release upgrade's switch puts them back).
+    if { [ "${LC_JOURNAL_OP:-}" = import ] || [ "${LC_INSTALLER:-release}" = quickstart ]; } \
+            && lc_is_held; then
+        lc_unhold
+    fi
     lc_tool journal-set . bridge_started_at=@now </dev/null
     lc_start_bridge
 }
 
 lc_step_start_rest() {
     lc_start_rest
-    lc_progress "$((LC_STEPS_TOTAL - 1))" "bridge healthy${LC_BRIDGE_WAITED:+ after ${LC_BRIDGE_WAITED} s}${LC_MIGRATIONS_SEEN:+ (${LC_MIGRATIONS_SEEN} migrations)}; gateway healthy${LC_GATEWAY_WAITED:+ after ${LC_GATEWAY_WAITED} s}"
+    lc_tool journal-set . started_again_at=@now </dev/null
+    if [ "${LC_JOURNAL_OP:-upgrade}" = upgrade ]; then
+        lc_progress "$((8 + ${LC_STEP_OFFSET:-0}))" "bridge healthy${LC_BRIDGE_WAITED:+ after ${LC_BRIDGE_WAITED} s}${LC_MIGRATIONS_SEEN:+ (${LC_MIGRATIONS_SEEN} migrations)}; gateway healthy${LC_GATEWAY_WAITED:+ after ${LC_GATEWAY_WAITED} s}"
+    else
+        lc_op_progress "bridge and gateway healthy"
+    fi
 }
 
 lc_step_verify() {
@@ -6251,6 +9324,9 @@ lc_step_verify() {
 
 lc_step_record() {
     local accepted
+    case "${LC_JOURNAL_OP:-upgrade}" in
+        export|import|reactivate) lc_mv_record; return 0 ;;
+    esac
     [ -n "${LC_ENV_RESULT:-}" ] || LC_ENV_RESULT=$(lc_tool journal-get . env_result </dev/null)
     accepted=$(lc_tool journal-get . accepted_error </dev/null)
     if [ -n "$accepted" ]; then
@@ -6259,6 +9335,7 @@ lc_step_record() {
         LC_VERIFIED="checks failed and were accepted (${accepted})"
     fi
     lc_record_success "${LC_OP:-upgrade}"
+    [ "${LC_INSTALLER:-release}" != quickstart ] || lc_qs_prune_prev
     lc_progress "$LC_STEPS_TOTAL" "${LC_VERIFIED:-checks passed}; records written"
 }
 
@@ -6289,8 +9366,16 @@ lc_is_held() {
 
 # lc_hold / lc_unhold — see the hold stub in lc_tool (hold, unhold).
 lc_hold() {
-    local held
-    held=$(lc_tool hold --dir . --project "$LC_PROJECT" </dev/null)
+    local held from=()
+    # Phase 2: a fresh release import holds the compose file it renders.
+    if [ "${LC_JOURNAL_OP:-}" = import ] && [ "${LC_INSTALLER:-release}" = release ] \
+            && [ ! -e docker-compose.yml ] && ! lc_is_held; then
+        from=(--from-file "$(lc_state_path)/logs/.import-compose.yml")
+        release_render_compose --port "$(lc_jget target.port)" --owner "${OWNER}" \
+            --version "${VERSION}" "${from[1]}"
+    fi
+    held=$(lc_tool hold --dir . --project "$LC_PROJECT" "${from[@]}" </dev/null)
+    [ "${#from[@]}" -eq 0 ] || rm -f -- "${from[1]}"
     lc_tool journal-set . "held=${held}" </dev/null
 }
 
@@ -6320,6 +9405,11 @@ lc_wait_service_healthy() {
         case "$state/$health" in
             running/healthy)
                 LC_WAITED=$((now - start))
+                # Seen healthy once: an upgrade that fails later never
+                # rolls back by itself (6.2 (a)).
+                if [ "${LC_CRITICAL:-0}" = 1 ]; then
+                    lc_tool journal-set . "${svc}_healthy_seen=true" "${svc}_healthy_at=@now" </dev/null || true
+                fi
                 return 0
                 ;;
             exited/*|dead/*)
@@ -6362,6 +9452,19 @@ lc_start_failed() {
     echo "Check logs:" >&2
     echo "    $(lc_in_here docker compose logs --tail=50 bridge)" >&2
     echo "    $(lc_in_here docker compose logs --tail=50 gateway)" >&2
+    if [ -n "${LC_START_FAIL_NEXT:-}" ]; then
+        echo "Then: ${LC_START_FAIL_NEXT}" >&2
+        exit "$LC_EXIT_STOPPED"
+    fi
+    # Phase 2: an import (M-IMPORT-START-FAILED) and quickstart's upgrade
+    # (M-QS-NOT-ROLLED-BACK) never roll back by themselves.
+    if [ "${LC_CRITICAL:-0}" = 1 ] && lc_mv_start_failed "$svc"; then
+        exit "$LC_EXIT_STOPPED"
+    fi
+    # An upgrade decides whether it rolls back by itself (restore block).
+    if [ "${LC_CRITICAL:-0}" = 1 ] && [ "${LC_JOURNAL_OP:-}" = upgrade ]; then
+        lc_after_start_failure "$svc"
+    fi
     if [ "${LC_CRITICAL:-0}" = 1 ]; then
         next="$(lc_here_cmd --resume)"
     else
@@ -6380,7 +9483,10 @@ lc_start_failed() {
 lc_start_bridge() {
     local secs
     echo "==> Starting the bridge (it applies any database migrations first)"
-    docker compose up -d --pull never --remove-orphans bridge
+    if ! docker compose up -d --pull never --remove-orphans bridge; then
+        LC_WAIT_FAIL=exited LC_WAITED=0
+        lc_start_failed bridge
+    fi
     secs=$(lc_tool bridge-deadline "${LC_DB_BYTES:-0}" </dev/null)
     LC_MIGRATIONS_SEEN=""
     if ! lc_wait_service_healthy bridge "$secs" --migrations; then
@@ -6391,12 +9497,17 @@ lc_start_bridge() {
 
 lc_start_rest() {
     echo "==> Starting the gateway"
+    local rc=0
     if tls_recreate_pending tls/cert.pem; then
         # The certificate is new: recreate the gateway (only it mounts
         # tls/; the bridge just became healthy).
         docker compose up -d --pull never --remove-orphans --force-recreate gateway
     else
         docker compose up -d --pull never --remove-orphans
+    fi || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        LC_WAIT_FAIL=exited LC_WAITED=0
+        lc_start_failed gateway
     fi
     fix_volume_ownership
     if ! lc_wait_service_healthy gateway 180; then
@@ -6404,6 +9515,10 @@ lc_start_rest() {
     fi
     LC_GATEWAY_WAITED=$LC_WAITED
     tls_recreate_done tls/cert.pem
+    # Quickstart starts its scanners once the gateway is healthy (Phase 2).
+    if [ -n "${LC_START_REST_HOOK:-}" ]; then
+        "$LC_START_REST_HOOK"
+    fi
 }
 
 lc_start_two_stage() {
@@ -6417,17 +9532,36 @@ lc_start_two_stage() {
 # A regression keeps the upgrade up (it was healthy) and records
 # verify_failed; exit 4.
 lc_verify_upgrade() {
-    local out rc=0
+    local out rc=0 rp img sf="" rf="" args=()
     # The project's own running bridge, by its Compose labels.
     LC_BRIDGE_CONTAINER=$(lc_tool project-bridge "$LC_PROJECT" </dev/null) || LC_BRIDGE_CONTAINER=""
     LC_HAS_DATA=1
     lc_facts
+    rp=$(lc_tool journal-get . restore_point </dev/null)
+    if [ -n "$rp" ] && [ -n "$LC_BRIDGE_CONTAINER" ]; then
+        # 1b: the counted tables and the RF fences, read with the new image.
+        img=$(docker inspect --format '{{.Image}}' "$LC_BRIDGE_CONTAINER" 2>/dev/null) || img=""
+        sf=$(mktemp "${LC_STATE_DIRNAME}/logs/.verify-state.XXXXXX")
+        rf=$(mktemp "${LC_STATE_DIRNAME}/logs/.verify-rf.XXXXXX")
+        if LC_ST_QUIET=1 lc_st state --project "$LC_PROJECT" --image "$img" --dir .; then
+            lc_save_json "$sf" "$LC_ST_JSON"
+            args+=(--state-file "$sf")
+        fi
+        if LC_ST_QUIET=1 lc_st rf-check --dir . --project "$LC_PROJECT" --image "$img" --rp "$rp"; then
+            lc_save_json "$rf" "$LC_ST_JSON"
+            args+=(--rf-file "$rf")
+        fi
+    fi
     out=$(lc_tool verify-upgrade . --target-schema "${LC_TARGET_SCHEMA:-}" \
-        --project "$LC_PROJECT" --bridge "$LC_BRIDGE_CONTAINER" </dev/null) || rc=$?
+        --project "$LC_PROJECT" --bridge "$LC_BRIDGE_CONTAINER" "${args[@]}" </dev/null) || rc=$?
+    rm -f -- ${sf:+"$sf"} ${rf:+"$rf"}
     if [ "$rc" -ne 0 ]; then
         lc_journal_state verify_failed "$out"
         echo "" >&2
         echo "The upgrade to ${VERSION} is up, but a check failed: ${out}. The journal records it; nothing was rolled back." >&2
+        if [ -n "$rp" ]; then
+            echo "  Undo it (discards what arrived since $(lc_tool journal-get . prechecks_at </dev/null)): $(lc_in_here bash install-release.sh --rollback)" >&2
+        fi
         echo "Next: $(lc_here_cmd --status)" >&2
         exit "$LC_EXIT_STOPPED"
     fi
@@ -6485,67 +9619,116 @@ lc_tls_plan() {
 # Then old files-only restore points are pruned (the newest 10 stay).
 # A failure only warns. Source installs keep no records yet.
 lc_record_success() {
-    local op="$1" volrec image
-    [ "${LC_INSTALLER:-}" = release ] || return 0
+    local op="$1" volrec image extra=() journaled=0 tmpl sha
+    # Source installs keep records since Phase 2 (their state dir, 8.1).
+    [ "${LC_INSTALLER:-}" = release ] || [ "${LC_SNAPSHOTS:-0}" = 1 ] || return 0
+    [ "${LC_INSTALLER:-}" = release ] || extra=(--record-extra "{\"git_commit\": $(lc_json_str "${LC_QS_HEAD:-}")}")
     volrec=$(mktemp "${TMPDIR:-/tmp}/sigrift-record.XXXXXX")
+    if [ "${LC_CRITICAL:-0}" = 1 ] && [ "$(lc_tool journal-get . op </dev/null)" = upgrade ]; then
+        # 1b: the restore point, the keys the switch wrote, the compose
+        # template now in place (E12, 3.6).
+        journaled=1
+        read -r tmpl sha <<<"$(lc_compose_canon docker-compose.yml)"
+        [ "$sha" != - ] || sha=""
+        extra+=(--with-journal --compose-files-now ${tmpl:+--compose-template "$tmpl"}
+            ${sha:+--compose-template-sha256 "$sha"})
+    fi
     if ! lc_tool write-host-record --dir . --op "$op" --project "$LC_PROJECT" \
-        --install-type release --from "${LC_FROM_VERSION:-unknown}" --to "$VERSION" \
-        --installer "${LC_SELF_DIR}/$(basename -- "$0")" --installer-version "$VERSION" \
+        --install-type "$LC_INSTALL_TYPE" --from "${LC_FROM_VERSION:-unknown}" --to "${VERSION:-${LC_QS_HEAD:-unknown}}" \
+        --installer "${LC_RUN_SCRIPT:-${LC_SELF_DIR}/$(basename -- "$0")}" --installer-version "${INSTALLER_RELEASE:-dev}" \
         --env-result "${LC_ENV_RESULT:-}" --moved-from "${LC_MOVED_FROM:-}" \
         --schema "${LC_TARGET_SCHEMA:-}" --snapshot "${LC_SNAPSHOT_ID#-}" \
-        --result "${LC_RECORD_RESULT:-ok}" --volume-record "$volrec" </dev/null; then
+        --result "${LC_RECORD_RESULT:-ok}" --last-op "$op" "${extra[@]}" \
+        --volume-record "$volrec" </dev/null; then
         rm -f -- "$volrec"
-        echo "WARNING: could not write ${LC_STATE_DIRNAME}/install.json; the next run checks this install again from its labels and data." >&2
+        echo "WARNING: could not write $(lc_state_path)/install.json; the next run checks this install again from its labels and data." >&2
         return 0
     fi
-    image=$(lc_tool engine-image --installer release --project "$LC_PROJECT" --dir . \
+    image=$(lc_tool engine-image --installer "${LC_INSTALLER:-release}" --project "$LC_PROJECT" --dir . \
         --bridge "$(lc_tool project-bridge "$LC_PROJECT" </dev/null)" \
-        --owner "${OWNER:-}" --version "$VERSION" </dev/null)
+        --owner "${OWNER:-}" --version "${VERSION:-main}" </dev/null)
     if ! lc_engine_source | lc_tool engine-run --image "$image" --project "$LC_PROJECT" \
         --op write-record --env-file .env --record-file "$volrec" >/dev/null; then
         echo "WARNING: could not write the volume record (${LC_PROJECT}'s bridge_data/.sigrift-install.json); the next run checks this install again from its labels and data." >&2
     fi
     rm -f -- "$volrec"
+    [ "$journaled" = 0 ] || lc_upgrade_record_1b
     lc_tool prune-snapshots . --keep 10 --protect "${LC_SNAPSHOT_ID#-}" </dev/null >/dev/null || true
 }
 
-# lc_status — where the install in this folder stands; read-only, no lock.
+# lc_status — where the install in this folder stands; read-only, no
+# lock, and no container while an operation runs (E37). --json: 3.8.
 lc_status() {
-    lc_engine_source | lc_tool status . --installer "${LC_INSTALLER:-release}"
+    local f args=(status . --installer "${LC_INSTALLER:-release}") rc=0
+    [ "${LC_JSON:-0}" = 0 ] || args+=(--json)
+    f=$(mktemp "${TMPDIR:-/tmp}/sigrift-rplist.XXXXXX")
+    if [ -e .env ] || [ -e docker-compose.yml ]; then
+        lc_rp_list_into "$f"
+        [ ! -s "$f" ] || args+=(--rp-list "$f")
+    fi
+    lc_engine_source | lc_tool "${args[@]}" || rc=$?
+    rm -f -- "$f"
+    return "$rc"
 }
 
-# lc_resume — go on with an interrupted upgrade from its journal (after a
-# failed check, run the checks again).
+# lc_resume — go on with an interrupted operation from its journal (after
+# a failed check, run the checks again; an interrupted undo of a rollback
+# only ever goes on as the undo).
 # With LC_ACCEPT=1 (--resume --accept) an upgrade that is up but failed its
 # checks is closed as it is: the checks' result goes into the journal and
 # the host record's history ("accepted"), and the records are written.
 lc_resume() {
-    local state
+    local state op what
     lc_lock_acquire . resume
     state=$(lc_tool journal-get . state </dev/null)
+    op=$(lc_tool journal-get . op </dev/null)
     case "$state" in
         running|failed)
             if [ "${LC_ACCEPT:-0}" = 1 ]; then
                 lc_refuse "$(lc_here_cmd --resume)" \
-                    "--accept closes an upgrade that is up but failed its checks; the one in $(pwd -P) stopped at step $(lc_tool journal-get . next </dev/null) instead."
+                    "--accept closes an upgrade that is up but failed its checks; the $(lc_op_what "$op") in $(pwd -P) stopped at step $(lc_tool journal-get . next </dev/null) instead."
             fi
             ;;
-        verify_failed) ;;
+        verify_failed|aborting) ;;
         *)
-            echo "==> Nothing to resume (no upgrade is in progress in $(pwd -P))."
+            echo "==> Nothing to resume (no upgrade, rollback or restore point is in progress in $(pwd -P))."
             return 0
             ;;
     esac
     lc_use_journal_project
+    # Phase 2: a pending step that still needs the archive key checks it
+    # first (M-AR-KEY-DAMAGED, before anything stops).
+    case "$op" in export|import) lc_mv_resume_check ;; esac
+    if [ "$state" = aborting ]; then
+        echo "==> Resuming the undo of the rollback to $(lc_tool journal-get . to_version </dev/null) (step $(lc_tool journal-get . next </dev/null))."
+        lc_run_detached
+        return
+    fi
     if [ "$state" = verify_failed ] && [ "${LC_ACCEPT:-0}" = 1 ]; then
+        if [ "$op" != upgrade ]; then
+            lc_refuse "$(lc_here_cmd --status)" "--accept closes an upgrade that failed its checks, not a ${op}."
+        fi
         lc_tool journal-set . "accepted_error=$(lc_tool journal-get . error </dev/null)" \
             accepted_at=@now </dev/null
         lc_journal_step verify
     elif [ "$state" = verify_failed ]; then
-        lc_tool journal-set . next=verify </dev/null
+        if [ "$op" = rollback ]; then
+            lc_tool journal-set . next=rb-verify </dev/null
+        else
+            lc_tool journal-set . next=verify </dev/null
+        fi
     fi
     lc_tool journal-set . state=running </dev/null
-    echo "==> Resuming the interrupted upgrade $(lc_tool journal-get . from_version </dev/null) -> $(lc_tool journal-get . to_version </dev/null) (step $(lc_tool journal-get . next </dev/null))."
+    what=$(lc_op_what "$op")
+    case "$op" in
+        export|import|reactivate)
+            echo "==> Resuming the interrupted ${what#the } (step $(lc_tool journal-get . next </dev/null))." ;;
+        *) echo "==> Resuming the interrupted ${what#the } $(lc_tool journal-get . from_version </dev/null) -> $(lc_tool journal-get . to_version </dev/null) (step $(lc_tool journal-get . next </dev/null))." ;;
+    esac
+    if [ "$op" = finish ]; then
+        lc_run_journal_here
+        return
+    fi
     lc_run_detached
 }
 
@@ -6556,20 +9739,34 @@ lc_resume() {
 # changes until the restore point has checked whole and the database is
 # still at the schema it had before the upgrade.
 lc_abort() {
-    local state started snap out from pre image live restored
+    local state started snap out from pre image live restored op rp partial
     [ "${LC_ABORT_DRY_RUN:-0}" = 1 ] || lc_lock_acquire . abort
     state=$(lc_tool journal-get . state </dev/null)
     case "$state" in
-        running|failed|verify_failed) ;;
+        running|failed|verify_failed|aborting) ;;
         *)
-            echo "==> Nothing to abort (no upgrade is in progress in $(pwd -P))."
+            echo "==> Nothing to abort (no upgrade, rollback or restore point is in progress in $(pwd -P))."
             return 0
             ;;
+    esac
+    op=$(lc_tool journal-get . op </dev/null)
+    case "$op" in
+        rollback) lc_use_journal_project; lc_abort_rollback; return ;;
+        snapshot) lc_abort_snapshot; return ;;
+        finish) lc_abort_finish; return ;;
+        export) lc_use_journal_project; lc_abort_export; return ;;
+        import) lc_use_journal_project; lc_abort_import; return ;;
+        reactivate) lc_use_journal_project; lc_abort_reactivate; return ;;
     esac
     lc_use_journal_project
     from=$(lc_tool journal-get . from_version </dev/null)
     started=$(lc_tool journal-get . bridge_started_at </dev/null)
+    rp=$(lc_tool journal-get . restore_point </dev/null)
     if [ -n "$started" ]; then
+        if [ -n "$rp" ]; then
+            lc_refuse "$(lc_in_here bash install-release.sh --rollback)" \
+                "the new bridge started at ${started} and may have migrated the database, which ${from} cannot read; --abort only undoes an upgrade that stopped before that. Its restore point ${rp} can."
+        fi
         lc_refuse "$(lc_here_cmd --resume)" \
             "the new bridge started at ${started} and may have migrated the database, which ${from} cannot read; --abort only undoes an upgrade that stopped before that."
     fi
@@ -6598,6 +9795,12 @@ lc_abort() {
         fi
         return 0
     fi
+    # A full restore point this upgrade was writing is deleted (a COMPLETE
+    # one stays: retention handles it).
+    partial=$(lc_tool journal-get . rp_partial.id </dev/null)
+    if [ -n "$partial" ] && [ "$partial" != "$rp" ]; then
+        lc_st rp-delete-partial --dir . --id "$partial" >/dev/null || true
+    fi
     lc_unhold
     out=$(lc_tool snapshot-restore . "$snap" </dev/null)
     restored=$(sed -n 's/^restored=//p' <<<"$out")
@@ -6625,7 +9828,7 @@ lc_abort() {
     # History only in a host record that exists: a new one would get a new
     # install id that the volume record does not know.
     if [ -e "${LC_STATE_DIRNAME}/install.json" ]; then
-        lc_tool write-host-record --dir . --op abort --project "$LC_PROJECT" --install-type release \
+        lc_tool write-host-record --dir . --op abort --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
             --from "$(lc_tool journal-get . to_version </dev/null)" \
             --to "$from" --result aborted \
             --snapshot "$snap" </dev/null >/dev/null 2>&1 || true
@@ -6635,7 +9838,7 @@ lc_abort() {
         # were, with the values they ran with (after --keep-running-secrets
         # the restored .env may hold others); only missing ones are made.
         echo "==> Starting the stack as it was"
-        if ! docker compose up -d --pull never --no-recreate --remove-orphans; then
+        if ! docker compose up -d --pull never ${LC_UP_EXTRA[@]+"${LC_UP_EXTRA[@]}"} --no-recreate --remove-orphans; then
             echo "Error: the files are back as they were before the upgrade, but the old stack did not start." >&2
             echo "Next: $(lc_in_here docker compose up -d --no-recreate)" >&2
             exit 1
@@ -6644,6 +9847,14035 @@ lc_abort() {
     echo "==> Aborted the upgrade to $(lc_tool journal-get . to_version </dev/null); this install is back at ${from}."
 }
 # <<< shared: lifecycle
+
+# >>> shared: state-tool (keep byte-identical in scripts/quickstart.sh and
+#     scripts/install-release.sh; scripts/tests/test_install_scripts.py checks)
+#
+# lc_state_tool SUBCOMMAND ARGS... --result FILE is Phase 1b's host tool
+# (python3 -I on the host): full restore points (rp-create, rp-list,
+# rp-verify, rp-prune, rp-resolve), the space plan, and the steps of a
+# rollback (stage, carry, mark, swap, restore-files, images-ensure, ...),
+# each running the state engine (the next block) in a bridge image by id.
+# The result goes to FILE (one JSON object; the caller makes it with
+# mktemp under .sigrift/logs/); stdout carries progress lines only.
+# Exit 0 ok, 1 error, 3 refused (also inside a critical section, which
+# the caller maps), 7 the free-space reserve was reached while a restore
+# point was written. As with lc_tool, no secret is in argv or printed;
+# fd 3 is the caller's stdin (the engine source, lc_engine_source).
+lc_state_tool() {
+    LC_ENGINE_BOOTSTRAP=${LC_ENGINE_BOOTSTRAP:-} LC_ENGINE_DATA_DIR=${LC_ENGINE_DATA_DIR:-} \
+            LC_HELPER_IMAGE=${HELPER_IMAGE:-} LC_FACTS_JSON=${LC_FACTS_JSON:-} \
+            LC_CALLER_DIR=${LC_CALLER_DIR:-} LC_SELF_DIR=${LC_SELF_DIR:-} \
+            LC_UPGRADE_DIR=${LC_UPGRADE_DIR:-} LC_STATE_DIR=${LC_STATE_DIR:-} \
+            LC_INSTALLER=${LC_INSTALLER:-} \
+            LC_COMPOSE_TEMPLATES=${LC_COMPOSE_TEMPLATES:-} INSTALLER_RELEASE=${INSTALLER_RELEASE:-} \
+            LC_ENGINE_STALL_SECONDS=${LC_ENGINE_STALL_SECONDS:-} \
+            python3 -I - "$@" 3<&0 <<'PY'
+"""The installers' state tool (Phase 1b): restore points and rollbacks.
+
+Run as `lc_state_tool SUBCOMMAND ... --result FILE` from the installers'
+bash (the restore block); the tests import this text as a module. It
+starts the state engine (the state-engine block, framed) in a bridge
+image by id, streams volume archives through it, and keeps the restore
+points under .sigrift/snapshots/ (or SIGRIFT_SNAPSHOT_DIR). stdout holds
+progress lines only; every result goes to --result FILE as one JSON
+object. No secret reaches argv, stdout or a result: .env values travel
+to the engine on its stdin only. Exit 0 ok, 1 error (stderr), 3 refused
+(the installers' format; also inside the critical section, where the
+bash caller says where the operation stopped), 7 the free-space reserve
+was reached while a restore point was written.
+"""
+
+import errno
+import fnmatch
+import hashlib
+import hmac
+import json
+import os
+import re
+import stat
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+EXIT_REFUSED = 3
+EXIT_RESERVE = 7
+DOCKER_TIMEOUT = 60
+PROJECT_LABEL = "com.docker.compose.project"
+VOLUME_LABEL = "com.docker.compose.volume"
+# 1a's helper and engine containers carry this label (lc_tool
+# helper_run_args); the state engine's add their project, so lc-clean
+# finds a leftover of this install's.
+LIFECYCLE_LABEL = "com.sigrift.lifecycle"
+PROJECT_OF_LIFECYCLE = "com.sigrift.lifecycle.project"
+# Phase 2 (8.1): quickstart's state directory (absolute) plays .sigrift/.
+STATE_DIR = os.environ.get("LC_STATE_DIR") or ".sigrift"
+JOURNAL = os.path.join(STATE_DIR, "journal.json")
+HOST_RECORD = os.path.join(STATE_DIR, "install.json")
+SNAPSHOTS = os.path.join(STATE_DIR, "snapshots")
+LOGS = os.path.join(STATE_DIR, "logs")
+HELD = os.path.join(STATE_DIR, "held")
+RP_KEY = os.path.join(STATE_DIR, "rp.key")
+INSTALL_ID_FILE = os.path.join(STATE_DIR, "install-id")
+RELEASE_HEADER = "# Generated by install-release.sh @ "
+HOLD_HEADER = "# SigRift hold stub"
+DATA_DIR = "/app/src/sigrift/bridge/data"
+SECRETS_DIR = "/app/secrets"
+TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?")
+ID_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\Z")
+FULL_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,40}-full(-[0-9]+)?\Z")
+FRAME_MAX = 1 << 20
+FRAME_LIMIT = 2 << 20
+MONITOR_STEP = 64 << 20
+OVERHEAD = 64 << 20
+GiB = 1 << 30
+OVERRIDES = ("docker-compose.override.yml", "docker-compose.override.yaml")
+# 1a's SNAPSHOT_FILES (lc_tool): the fixed name set a restore may touch.
+SNAPSHOT_FILES = (".env", "docker-compose.yml") + OVERRIDES + (
+    "VERSION", "install-release.sh", "LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.txt",
+    "README-INSTALL.txt", "tls/cert.pem", "tls/key.pem", ".sigrift-scanners.yml",
+    ".sigrift/install.json")
+# What a rollback puts back (E12); the rest of the set stays as it is.
+RESTORE_ON_ROLLBACK = (".env", "docker-compose.yml") + OVERRIDES + (
+    "VERSION", ".sigrift-scanners.yml")
+if os.path.isabs(STATE_DIR):
+    # A source install (phase2-spec 8.1): the checkout's files (the state
+    # directory is outside it); its tracked docker-compose.yml is recorded
+    # but never written back (the HEAD gate proves it is the point's).
+    SNAPSHOT_FILES = (".env", "docker-compose.yml") + OVERRIDES + (
+        "tls/cert.pem", "tls/key.pem", ".sigrift-scanners.yml",
+        ".sigrift-scanners-pending.json")
+    RESTORE_ON_ROLLBACK = (".env",) + OVERRIDES + (
+        ".sigrift-scanners.yml", ".sigrift-scanners-pending.json")
+DATA_EXCLUDES = ("backups", "exports", "detections.db.pre-migration",
+                 "detections.db.pre-migration.*", "detections.db.failed-migration-*",
+                 "detections.db-wal.failed-migration-*", "detections.db-shm.failed-migration-*",
+                 "*.corrupt-*", "detections.db-shm")
+CAPTURE_DIRS = ("iq_captures", "pcap_captures")
+DATA_KEEP_BACK = ("backups", "exports", "*.failed-migration-*", "*.corrupt-*")
+HOST_KEYS = ("SIGRIFT_BIND", "SIGRIFT_BACKEND_SUBNET", "SIGRIFT_BACKEND_IP_RANGE",
+             "SIGRIFT_GATEWAY_BACKEND_IP")
+COMPOSE_KEYS = ("COMPOSE_FILE", "COMPOSE_PROFILES")
+AUDIT_KEYS = ("BRIDGE_AUDIT_KEY", "BRIDGE_AUDIT_SECRET")
+CANDIDATE_KEYS = ("BRIDGE_AUDIT_KEY", "BRIDGE_AUDIT_SECRET", "BRIDGE_MASTER_KEY",
+                  "BRIDGE_MFA_KEY", "BRIDGE_KEYSTORE_KEY", "BRIDGE_ENV")
+BOOTSTRAP_KEYS = ("BRIDGE_ADMIN_USER", "BRIDGE_ADMIN_PASSWORD")
+# The mounts of each engine op (phase1b-spec 4.2): bridge_data, bridge_secrets;
+# "V" mounts the op's target volume read-write and not the other.
+MOUNTS = {"state": ("rw", "ro"), "quiesce": ("rw", "ro"), "compare": ("rw", "ro"),
+          "snapshot-volume": ("ro", "ro"), "stage": ("V", "V"), "verify-staged": ("V", "V"),
+          "carry": ("rw", "rw"), "audit-append": ("rw", None), "mark": ("rw", "rw"),
+          "unmark": ("rw", "rw"), "swap": ("V", "V"), "unswap": ("V", "V"),
+          "discard-staging": ("V", "V"), "finish": ("V", "V"), "reclaim": ("rw", None),
+          "export-audit": ("rw", None), "verify-carry": ("rw", "ro"), "rf-check": ("rw", None),
+          "facts": ("rw", "ro"),
+          # Phase 2 (phase2-spec 5.1): the archive ops mount nothing but
+          # ar-stage's staged parts ("P", the parts named by the call).
+          "ar-wrap": (None, None), "ar-write": (None, None), "ar-verify": (None, None),
+          "ar-probe": (None, None), "ar-stage": ("P", "P"), "import-rules": ("rw", "rw")}
+# The two Phase 2 parts beside the 1b volumes: where an op mounts them.
+PART_TARGETS = {"bridge_data": DATA_DIR, "bridge_secrets": SECRETS_DIR,
+                "edge_data": "/app/edge_data", "opt-sigrift-pki": "/v/pki"}
+PART_KEYS = {"bridge_data": "data_dir", "bridge_secrets": "secrets_dir",
+             "edge_data": "edge_dir", "opt-sigrift-pki": "pki_dir"}
+# Ops that write a target volume (V) or the pki part (root engine, CHOWN).
+WRITE_OPS = ("stage", "swap", "unswap", "discard-staging", "finish", "mark", "unmark")
+# Phases without a progress counter of their own (os.sync, directory fsyncs, a
+# WAL checkpoint, which SQLite runs as one VM step): the stall allowance grows
+# with the database (phase1b-spec 4.1).
+SYNC_PHASES = ("sync", "checkpoint")
+# Security settings of .env and their order, strictest first (4.6 rule 12).
+STRICTER = {"UC_CSP_MODE": ("strict", "report-only", "disabled"),
+            "BRIDGE_SESSION_BINDING": ("strict", "ip", "warn", "none")}
+STATVFS = os.statvfs
+CLOCK = time.time
+
+
+class Refused(SystemExit):
+    pass
+
+
+class Failed(Exception):
+    """An error that exits 1 (EXIT_RESERVE for kind space)."""
+
+    def __init__(self, kind, message, code=None):
+        Exception.__init__(self, message)
+        self.kind, self.code = kind, code
+
+
+# ── copied from lc_tool (scripts/tests/test_lifecycle_state_tool.py pins
+# that they behave the same) ─────────────────────────────────────────────
+
+
+def refuse(message, details=(), next_cmd=""):
+    """The refusal format; always exit 3 (the bash caller maps it inside a
+    critical section)."""
+    lines = ["Error: " + message] + ["  " + d for d in details]
+    lines += ["Next: " + next_cmd, "Nothing was changed."]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
+    raise Refused(EXIT_REFUSED)
+
+
+def note(text):
+    sys.stderr.write("NOTE: " + text + "\n")
+
+
+def say(text):
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+
+
+def q(text):
+    """TEXT as one shell word, for a path or a name in a printed command:
+    a folder like `/srv/x; curl ... #` must not run more when pasted. A
+    text with C0, C1 or DEL is written in bash's $'...' form, each such
+    character as the \\xNN of its UTF-8 bytes, so it pastes back to the
+    same name and never reaches the terminal raw (phase2-spec 11, Appendix
+    C, P)."""
+    import shlex
+    s = str(text)
+    if not any(ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in s):
+        return shlex.quote(s)
+    out = []
+    for c in s:
+        if ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f:
+            out.append("".join("\\x%02x" % b for b in c.encode("utf-8")))
+        elif c in "\\'":
+            out.append("\\" + c)
+        else:
+            out.append(c)
+    return "$'" + "".join(out) + "'"
+
+
+def same_path(a, b):
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def lifecycle_cmd(args, d=None):
+    """`bash install-release.sh ARGS` for the install in D, as typed."""
+    d = os.path.realpath(d or os.getcwd())
+    caller = os.environ.get("LC_CALLER_DIR") or ""
+    if not caller or same_path(caller, d):
+        return "bash install-release.sh " + args
+    self_dir = os.environ.get("LC_SELF_DIR") or ""
+    prog = "bash install-release.sh" if not self_dir or same_path(caller, self_dir) else \
+        "bash %s/install-release.sh" % q(self_dir)
+    return "%s %s %s" % (prog, args, q(d))
+
+
+ASSIGN = re.compile(r"[ \t]*(export[ \t]+)?([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*[=:][ \t]*")
+
+
+class Assign(object):
+    __slots__ = ("name", "value", "start", "end", "name_start", "name_end",
+                 "line_start", "line_end", "quote", "export", "odd")
+
+    def __init__(self, **kw):
+        for k in self.__slots__:
+            setattr(self, k, kw.get(k))
+
+
+def parse_dotenv(text):
+    out = []
+    pos, n = 0, len(text)
+    while pos < n:
+        line_start = pos
+        eol = text.find("\n", pos)
+        eol = n if eol < 0 else eol
+        m = ASSIGN.match(text, pos, eol)
+        if not m:
+            pos = eol + 1
+            continue
+        v = m.end()
+        common = dict(name=m.group(2), name_start=m.start(2), name_end=m.end(2),
+                      line_start=line_start, export=bool(m.group(1)))
+        if v < eol and text[v] in "'\"":
+            quote, k = text[v], v + 1
+            while k < n and text[k] != quote:
+                k += 2 if text[k] == "\\" else 1
+            if k >= n:
+                out.append(Assign(value=None, start=v, end=n, line_end=n, quote=quote,
+                                  odd=True, **common))
+                break
+            start, end = v + 1, k
+            nxt = text.find("\n", k)
+            line_end = n if nxt < 0 else nxt
+            pos = n if nxt < 0 else nxt + 1
+            body = text[start:end]
+            odd = "\n" in body or (quote == '"' and ("\\" in body or "$" in body)) or (
+                quote == "'" and "\\" in body)
+        else:
+            value = text[v:eol].rstrip("\r")
+            cut = value.find(" #")
+            value = value[:cut] if cut >= 0 else value
+            start, end = v, v + len(value.rstrip(" \t"))
+            line_end = eol
+            pos = eol + 1
+            quote = ""
+            odd = "$" in text[start:end]
+        out.append(Assign(value=None if odd else text[start:end], start=start, end=end,
+                          line_end=line_end, quote=quote, odd=odd, **common))
+    return out
+
+
+def env_effective(text):
+    eff = {}
+    for a in parse_dotenv(text or ""):
+        eff[a.name] = a.value
+    return eff
+
+
+def dotenv_value(value):
+    if re.fullmatch(r"[A-Za-z0-9_+/=.:,@%-]*", value):
+        return value
+    if "'" not in value and "\n" not in value:
+        return "'" + value + "'"
+    return json.dumps(value.replace("$", "$$"), ensure_ascii=False)
+
+
+def read_text(path):
+    try:
+        with open(path, newline="") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def first_line(path):
+    text = read_text(path)
+    return text.split("\n", 1)[0] if text else ""
+
+
+def version_key(v):
+    m = TAG.fullmatch(v or "")
+    if not m:
+        return None
+    rc = int(m.group(4)) if m.group(4) is not None else float("inf")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), rc)
+
+
+def version_cmp(a, b):
+    ka, kb = version_key(a), version_key(b)
+    if ka is None or kb is None:
+        return None
+    return (ka > kb) - (ka < kb)
+
+
+class DockerError(Exception):
+    def __init__(self, what, rc):
+        Exception.__init__(self, what)
+        self.what, self.rc = what, rc
+
+
+def docker(*args, **kw):
+    timeout = kw.pop("timeout", DOCKER_TIMEOUT)
+    try:
+        return subprocess.run(["docker"] + list(args), capture_output=True,
+                              timeout=timeout, **kw)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(["docker"] + list(args), 125, b"",
+                                           str(e).encode())
+
+
+def docker_lines(what, *args):
+    r = docker(*args)
+    if r.returncode:
+        raise DockerError(what, r.returncode)
+    return r.stdout.decode("utf-8", "replace").splitlines()
+
+
+def list_volumes():
+    fmt = '{{.Name}}\t{{.Label "%s"}}\t{{.Label "%s"}}' % (PROJECT_LABEL, VOLUME_LABEL)
+    rows = []
+    for line in docker_lines("docker volume ls", "volume", "ls", "--filter",
+                             "label=" + VOLUME_LABEL, "--format", fmt):
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0]:
+            rows.append((parts[0], parts[1], parts[2]))
+    return rows
+
+
+def project_volumes(project, volumes=None):
+    rows = volumes if volumes is not None else list_volumes()
+    return {vol: name for name, proj, vol in rows if proj == project}
+
+
+def owner_for(path):
+    if os.geteuid() != 0:
+        return None
+    for ref in (path, os.path.dirname(os.path.abspath(path))):
+        try:
+            st = os.lstat(ref)
+        except OSError:
+            continue
+        if not stat.S_ISLNK(st.st_mode):
+            return st.st_uid, st.st_gid
+    return None
+
+
+def give_owner(target, ids):
+    if not ids:
+        return
+    try:
+        if isinstance(target, int):
+            os.fchown(target, ids[0], ids[1])
+        else:
+            os.lchown(target, ids[0], ids[1])
+    except OSError:
+        pass
+
+
+def fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def atomic_write(path, data, mode):
+    d = os.path.dirname(os.path.abspath(path))
+    ids = owner_for(path)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=d)
+    try:
+        give_owner(fd, ids)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    fsync_dir(d)
+
+
+def ensure_state_dir(dir_path):
+    path = os.path.join(dir_path, STATE_DIR)
+    if os.path.isabs(STATE_DIR) and not os.path.isdir(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path), 0o700)
+    if not os.path.isdir(path):
+        os.mkdir(path, 0o700)
+        give_owner(path, owner_for(dir_path))
+    os.chmod(path, 0o700)
+    return path
+
+
+def now_utc():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def read_json(path):
+    text = read_text(path)
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def write_json(path, obj, mode=0o600):
+    atomic_write(path, (json.dumps(obj, indent=2, sort_keys=True) + "\n").encode(), mode)
+
+
+def journal_load(d):
+    return read_json(os.path.join(d, JOURNAL))
+
+
+def journal_save(d, j):
+    j["updated_at"] = now_utc()
+    ensure_state_dir(d)
+    write_json(os.path.join(d, JOURNAL), j)
+
+
+def make_dirs(path):
+    if os.path.isdir(path):
+        return
+    make_dirs(os.path.dirname(path))
+    os.mkdir(path, 0o700)
+    give_owner(path, owner_for(os.path.dirname(path)))
+
+
+def helper_image():
+    return os.environ.get("LC_HELPER_IMAGE", "")
+
+
+def helper_run_args(kind, user=None):
+    args = ["run", "--rm", "--log-driver", "none", "--network", "none",
+            "--label", "%s=%s" % (LIFECYCLE_LABEL, kind),
+            "--security-opt", "no-new-privileges"]
+    if user:
+        args += ["--user", user, "--cap-drop", "ALL"]
+    return args
+
+
+def tls_key_read(path):
+    d, base = os.path.dirname(os.path.abspath(path)), os.path.basename(path)
+    if not helper_image():
+        raise OSError("no helper image to read %s with" % path)
+    r = docker(*(helper_run_args("tls") + [
+        "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE",
+        "-v", os.path.realpath(d) + ":/tls:ro", helper_image(), "cat", "/tls/" + base]))
+    if r.returncode:
+        raise OSError("could not read %s through the helper image (docker run exited %d)"
+                      % (path, r.returncode))
+    return r.stdout
+
+
+def tls_key_write(path, data):
+    d, base = os.path.dirname(os.path.abspath(path)), os.path.basename(path)
+    if not helper_image():
+        raise OSError("no helper image to write %s with" % path)
+    r = docker(*(helper_run_args("tls") + [
+        "-i", "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE",
+        "-v", os.path.realpath(d) + ":/tls", helper_image(), "sh", "-c",
+        'umask 077 && cat > "/tls/$1.sigrift-new" && mv -f "/tls/$1.sigrift-new" "/tls/$1"',
+        "sh", base]), input=data)
+    if r.returncode:
+        raise OSError("could not write %s through the helper image (docker run exited %d)"
+                      % (path, r.returncode))
+
+
+# ── small helpers of its own ────────────────────────────────────────────
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(FRAME_MAX), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tag(value):
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16] if value is not None \
+        else None
+
+
+def human(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1000 or unit == "TB":
+            return ("%d %s" % (n, unit)) if unit == "B" else "%.1f %s" % (n, unit)
+        n /= 1000.0
+
+
+def tree_bytes(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def rmtree(path):
+    import shutil
+
+    def onerror(func, p, exc):
+        try:
+            os.chmod(os.path.dirname(p), 0o700)
+            func(p)
+        except OSError:
+            pass
+    if os.path.isdir(path) and not os.path.islink(path):
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=onerror)
+        else:
+            shutil.rmtree(path, onerror=onerror)
+    elif os.path.lexists(path):
+        os.unlink(path)
+
+
+def host_record(d):
+    return read_json(os.path.join(d, HOST_RECORD))
+
+
+def set_dotted(obj, key, value):
+    parts = key.split(".")
+    for p in parts[:-1]:
+        if not isinstance(obj.get(p), dict):
+            obj[p] = {}
+        obj = obj[p]
+    obj[parts[-1]] = value
+
+
+def get_dotted(obj, key):
+    for p in key.split("."):
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(p)
+    return obj
+
+
+def journal_put(d, key, value):
+    """Store VALUE under the dotted KEY of the journal (under the caller's lock)."""
+    j = journal_load(d)
+    if not j:
+        raise Failed("journal", "there is no journal in %s" % d)
+    set_dotted(j, key, value)
+    journal_save(d, j)
+    return j
+
+
+def parse_flags(argv, spec):
+    """--name VALUE / --name=VALUE / --flag; spec maps name -> takes value;
+    a value of "?" takes the next word only when it does not start with --."""
+    out, pos, i = {}, [], 0
+    while i < len(argv):
+        arg = argv[i]
+        if not arg.startswith("--"):
+            pos.append(arg)
+            i += 1
+            continue
+        name, sep, value = arg[2:].partition("=")
+        if name not in spec:
+            sys.stderr.write("lc_state_tool: unknown option --%s\n" % name)
+            sys.exit(2)
+        key = name.replace("-", "_")
+        if spec[name] is True:
+            if not sep:
+                i += 1
+                if i >= len(argv):
+                    sys.stderr.write("lc_state_tool: --%s needs a value\n" % name)
+                    sys.exit(2)
+                value = argv[i]
+            out[key] = value
+        elif spec[name] == "?":
+            if not sep and i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                i += 1
+                value = argv[i]
+            out[key] = value if (sep or value) else True
+        else:
+            out[key] = True
+        i += 1
+    out["_pos"] = pos
+    return out
+
+
+def parse_size(text):
+    m = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)i?B?\s*", str(text or ""), re.I)
+    if not m:
+        return None
+    mult = {"": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}[m.group(2).upper()]
+    return int(float(m.group(1)) * mult)
+
+
+def free_bytes(path):
+    s = STATVFS(path)
+    return s.f_bavail * s.f_frsize
+
+
+def existing_parent(path):
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        path = os.path.dirname(path)
+    return path
+
+
+# ── results ─────────────────────────────────────────────────────────────
+
+RESULT = {"path": None}
+
+
+def put_result(obj):
+    path = RESULT["path"]
+    if path:
+        write_json(path, obj)
+
+
+# ── the engine, framed (phase1b-spec 4.1) ───────────────────────────────
+
+ENGINE = {"source": None}
+
+
+def engine_source():
+    if ENGINE["source"] is None:
+        try:
+            with os.fdopen(3, "rb") as f:
+                ENGINE["source"] = f.read()
+        except OSError:
+            ENGINE["source"] = b""
+    return ENGINE["source"]
+
+
+def record(data):
+    return str(len(data)).encode("ascii") + b"\n" + data
+
+
+class EngineFailed(Failed):
+    def __init__(self, kind, code, message, where=None, launch=False, obj=None):
+        Failed.__init__(self, kind, message, code)
+        self.where, self.launch, self.obj = where, launch, obj or {}
+
+
+def stall_seconds():
+    try:
+        return max(0.05, float(os.environ.get("LC_ENGINE_STALL_SECONDS") or 600))
+    except ValueError:
+        return 600.0
+
+
+def engine_name(project, op):
+    import secrets
+    return "sigrift-lc-%s-%s-%s" % (project, op, secrets.token_hex(3))
+
+
+def mount_args(op, project, volume, volumes=None, parts=()):
+    """-v options of engine OP: 1b's two volumes by MOUNTS, the op's own
+    target VOLUME (edge_data, or the pki part's host directory), and
+    PARTS (ar-stage's staged parts, mark's edge_data) read-write."""
+    dm, sm = MOUNTS[op]
+    args = []
+    if dm is None and sm is None and not parts:
+        return args
+    vols = project_volumes(project, volumes)
+    plan = []
+    for vname, mode in (("bridge_data", dm), ("bridge_secrets", sm)):
+        if mode == "V":
+            mode = "rw" if volume == vname else None
+        elif mode == "P":
+            mode = "rw" if vname in parts else None
+        plan.append((vname, mode, PART_TARGETS[vname]))
+    if volume == "edge_data" or "edge_data" in parts:
+        plan.append(("edge_data", "rw" if (op in WRITE_OPS or op in ("ar-stage", "carry"))
+                     else "ro", PART_TARGETS["edge_data"]))
+    if volume == "opt-sigrift-pki":
+        mode = "rw" if op in WRITE_OPS else "ro"
+        args += ["-v", PKI_HOST_DIR + ":" + PART_TARGETS["opt-sigrift-pki"] +
+                 (":ro" if mode == "ro" else "")]
+    for vname, mode, target in plan:
+        if mode is None:
+            continue
+        if vname not in vols:
+            refuse("the data volume %s_%s of project %s does not exist (removed with docker "
+                   "compose down -v?), so there is nothing to restore into; restoring into new "
+                   "volumes comes with --import." % (project, vname, project),
+                   next_cmd="docker volume ls --filter label=com.docker.compose.project=" +
+                   q(project))
+        args += ["-v", vols[vname] + ":" + target + (":ro" if mode == "ro" else "")]
+    return args
+
+
+PKI_HOST_DIR = "/opt/sigrift/pki"
+
+
+def mounted_keys(args):
+    """{request key: container path} of the parts mount_args mounted."""
+    out = {}
+    for i, x in enumerate(args):
+        if x == "-v" and i + 1 < len(args):
+            target = args[i + 1].split(":")[1]
+            for vname, t in PART_TARGETS.items():
+                if t == target:
+                    out[PART_KEYS[vname]] = t
+    return out
+
+
+def engine_stream(op, image, project, req, volume=None, sections=(), out_path=None,
+                  lines_path=None, monitor=None, db_bytes=0, label=None, fallback=None,
+                  out_fd=None, parts=()):
+    """Run engine OP; -> its R reply. D frames go to OUT_PATH and M frames to
+    LINES_PATH (each created O_EXCL, 0600; their sha256 kept). SECTIONS
+    (bytes, or a path) are streamed on stdin as data sections. A stall of
+    the progress counter, a frame over 2 MiB, a missing or second terminal
+    frame or a non-zero exit fails it; MONITOR(bytes_written) returning
+    False stops it (the reserve)."""
+    try:
+        return engine_stream_once(op, image, project, req, volume, sections, out_path,
+                                  lines_path, monitor, db_bytes, label, out_fd, parts)
+    except EngineFailed as e:
+        if not (e.launch and fallback and fallback != image) or out_fd is not None:
+            raise
+        for p in (out_path, lines_path):
+            if p and os.path.exists(p):
+                os.unlink(p)
+        return engine_stream_once(op, fallback, project, req, volume, sections, out_path,
+                                  lines_path, monitor, db_bytes, label, None, parts)
+
+
+def engine_stream_once(op, image, project, req, volume, sections, out_path, lines_path,
+                       monitor, db_bytes, label, out_fd=None, parts=()):
+    source = engine_source()
+    bootstrap = os.environ.get("LC_ENGINE_BOOTSTRAP") or ""
+    if not image or not source or not bootstrap:
+        raise EngineFailed("engine", "missing", "no bridge image or engine source to run")
+    mounts = mount_args(op, project, volume, parts=parts)
+    name = engine_name(project, op)
+    user = ["--user", "1500:1500", "--cap-drop", "ALL"]
+    if volume == "opt-sigrift-pki":
+        # The pki part is a host directory of root's (phase2-spec 1.2).
+        user = ["--user", "0:0", "--cap-drop", "ALL"] + (
+            ["--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER"]
+            if op in WRITE_OPS else ["--cap-add", "DAC_READ_SEARCH"])
+    args = ["run", "--rm", "-i", "--log-driver", "none", "--network", "none"] + user + [
+            "--security-opt", "no-new-privileges",
+            "--name", name, "--label", "%s=state-engine" % LIFECYCLE_LABEL,
+            "--label", "%s=%s" % (PROJECT_OF_LIFECYCLE, project)]
+    if op in AR_ENGINE_OPS or volume == "opt-sigrift-pki":
+        # A passphrase or a data key may be in this process (5.1).
+        args += ["--ulimit", "core=0"]
+    args += ["--entrypoint", "python3"]
+    args += mounts
+    args += [image, "-c", bootstrap]
+    full = dict(req)
+    full.update({"format": 1, "op": op, "framed": True, "data_dir": DATA_DIR,
+                 "secrets_dir": SECRETS_DIR})
+    full.update(mounted_keys(mounts))
+    if volume:
+        full["volume"] = volume
+    outf = os.fdopen(os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") \
+        if out_path else (os.fdopen(os.dup(out_fd), "wb") if out_fd is not None else None)
+    linef = os.fdopen(os.open(lines_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") \
+        if lines_path else None
+    try:
+        p = subprocess.Popen(["docker"] + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    except OSError as e:
+        raise EngineFailed("engine", "launch", "docker could not start (%s)" % e, launch=True)
+    st = {"progress": None, "changed": CLOCK(), "phase": "", "terminal": None, "error": None,
+          "frames": 0, "dbytes": 0, "next": MONITOR_STEP, "stop": None, "done": 0,
+          "d_sha": hashlib.sha256(), "m_sha": hashlib.sha256(), "m_lines": 0}
+
+    def writer():
+        try:
+            p.stdin.write(record(source))
+            p.stdin.write(record(json.dumps(full).encode()))
+            for sec in sections:
+                f = open(sec, "rb") if isinstance(sec, str) else (
+                    sec if hasattr(sec, "read") else None)
+                try:
+                    data = sec if f is None else None
+                    pos = 0
+                    while True:
+                        chunk = f.read(FRAME_MAX) if f is not None else data[pos:pos + FRAME_MAX]
+                        pos += len(chunk)
+                        if not chunk:
+                            break
+                        p.stdin.write(b"%d\n" % len(chunk) + chunk)
+                    p.stdin.write(b"0\n")
+                finally:
+                    if f is not None and isinstance(sec, str):
+                        f.close()
+            p.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    def read_exact(n):
+        parts, left = [], n
+        while left:
+            b = p.stdout.read(left)
+            if not b:
+                break
+            parts.append(b)
+            left -= len(b)
+        return b"".join(parts)
+
+    def reader():
+        try:
+            while True:
+                hdr = read_exact(9)
+                if not hdr:
+                    return
+                if len(hdr) < 9:
+                    st["error"] = "a truncated frame"
+                    return
+                kind, n = hdr[:1], struct.unpack(">Q", hdr[1:])[0]
+                if n > FRAME_LIMIT:
+                    st["error"] = "a frame over 2 MiB"
+                    return
+                payload = read_exact(n)
+                if len(payload) != n:
+                    st["error"] = "a truncated frame"
+                    return
+                if st["terminal"] is not None:
+                    st["error"] = "bytes after the terminal frame"
+                    return
+                st["frames"] += 1
+                if kind == b"D":
+                    if outf is None:
+                        st["error"] = "data frames from an op that sends none"
+                        return
+                    outf.write(payload)
+                    st["d_sha"].update(payload)
+                    st["dbytes"] += n
+                    if monitor is not None and st["dbytes"] >= st["next"]:
+                        st["next"] += MONITOR_STEP
+                        if not monitor(st["dbytes"]):
+                            st["stop"] = "reserve"
+                            return
+                elif kind == b"M":
+                    if linef is None:
+                        st["error"] = "line frames from an op that sends none"
+                        return
+                    linef.write(payload)
+                    st["m_sha"].update(payload)
+                    st["m_lines"] += payload.count(b"\n")
+                elif kind == b"P":
+                    try:
+                        info = json.loads(payload.decode("utf-8"))
+                    except ValueError:
+                        info = {}
+                    if info.get("progress") != st["progress"]:
+                        st["progress"], st["changed"] = info.get("progress"), CLOCK()
+                    st["phase"] = info.get("phase") or ""
+                    st["done"] = info.get("bytes") or 0
+                elif kind in (b"R", b"E"):
+                    try:
+                        st["terminal"] = (kind, json.loads(payload.decode("utf-8")))
+                    except ValueError:
+                        st["error"] = "a terminal frame that is not JSON"
+                        return
+                else:
+                    st["error"] = "an unknown frame kind %r" % kind
+                    return
+        except (OSError, ValueError) as e:
+            st["error"] = "the stream broke (%s)" % e
+
+    wt = threading.Thread(target=writer, daemon=True)
+    rt = threading.Thread(target=reader, daemon=True)
+    wt.start()
+    rt.start()
+    stall = stall_seconds()
+    started, last_line = CLOCK(), CLOCK()
+    try:
+        while rt.is_alive():
+            rt.join(min(0.2, stall / 4))
+            now = CLOCK()
+            allowed = stall + (60 * (db_bytes or 0) / float(GiB) if st["phase"] in SYNC_PHASES
+                               else 0)
+            if rt.is_alive() and now - st["changed"] > allowed:
+                kill_engine(name, p)
+                raise EngineFailed("stream", "stall", "the engine sent nothing for %d s"
+                                   % int(now - st["changed"]))
+            if label and now - last_line >= 30:
+                last_line = now
+                rate = st["done"] / max(1.0, now - started) / 1e6
+                say("    %s: %s so far, %.1f MB/s" % (label, human(st["done"]), rate))
+        if st["stop"] == "reserve":
+            kill_engine(name, p)
+            raise EngineFailed("space", "reserve", "free space fell below the reserve")
+        rc = p.wait()
+        wt.join(5)
+    except BaseException:
+        if p.poll() is None:
+            kill_engine(name, p)
+        raise
+    finally:
+        for f in (outf, linef):
+            if f is not None:
+                f.flush()
+                os.fsync(f.fileno())
+                f.close()
+    if st["error"]:
+        raise EngineFailed("stream", "stream", "the engine stream is invalid: %s" % st["error"])
+    if st["terminal"] is None:
+        launch = rc in (125, 126, 127) or st["frames"] == 0
+        raise EngineFailed("engine", "launch" if launch else "stream",
+                           "the engine ended without a reply (docker run exited %d)" % rc,
+                           launch=launch)
+    kind, obj = st["terminal"]
+    if kind == b"E":
+        raise EngineFailed("engine", obj.get("code") or "io", obj.get("error") or "failed",
+                           obj.get("where"), obj=obj)
+    if rc != 0:
+        raise EngineFailed("engine", "exit", "docker run exited %d after the reply" % rc)
+    obj["_d_sha256"], obj["_d_bytes"] = st["d_sha"].hexdigest(), st["dbytes"]
+    obj["_m_sha256"], obj["_m_lines"] = st["m_sha"].hexdigest(), st["m_lines"]
+    return obj
+
+
+def kill_engine(name, p):
+    docker("rm", "-f", name)
+    try:
+        p.kill()
+    except OSError:
+        pass
+    try:
+        p.wait(10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def env_candidates(path):
+    eff = env_effective(read_text(path) or "") if path else {}
+    return dict((k, eff[k]) for k in CANDIDATE_KEYS if eff.get(k))
+
+
+def clean_reply(obj):
+    return dict((k, v) for k, v in obj.items() if not k.startswith("_"))
+
+
+# ── restore-point roots, the key, the MAC ───────────────────────────────
+
+
+def install_id(d):
+    rec = host_record(d) or {}
+    if rec.get("install_id"):
+        return rec["install_id"]
+    text = (read_text(os.path.join(d, INSTALL_ID_FILE)) or "").strip()
+    if text:
+        return text
+    j = journal_load(d) or {}
+    return j.get("install_id") or ""
+
+
+def owner_ok(uid, d=None):
+    """A restore-point root or rp.key is yours; under sudo (euid 0) the
+    install folder's owner counts too (1a's owner_for keeps that owner on
+    what a root run writes, so the user's later runs read it)."""
+    if uid == os.geteuid():
+        return True
+    if os.geteuid() != 0 or not d:
+        return False
+    try:
+        return uid == os.stat(d).st_uid
+    except OSError:
+        return False
+
+
+def dir_problem(path, d=None):
+    """Why a restore-point root is unsafe (M-SNAPSHOT-DIR-UNSAFE), or None.
+    A root that does not exist yet is judged by its nearest existing
+    ancestor's chain; the 0700 rule applies once it exists."""
+    real = os.path.realpath(path)
+    if os.path.lexists(path):
+        s = os.lstat(path)
+        if stat.S_ISLNK(s.st_mode) or not stat.S_ISDIR(s.st_mode):
+            return "is not a directory"
+        if not owner_ok(s.st_uid, d):
+            return "is not owned by you"
+        if stat.S_IMODE(s.st_mode) & 0o022:
+            return "is writable by group or others"
+        if stat.S_IMODE(s.st_mode) & 0o077:
+            return "does not keep mode 0700"
+    anc = os.path.dirname(real)
+    while True:
+        try:
+            a = os.stat(anc)
+        except OSError:
+            a = None
+        if a is not None and a.st_mode & 0o022 and not a.st_mode & stat.S_ISVTX:
+            return "lies under %s, which others can write without the sticky bit" % anc
+        if anc == os.path.dirname(anc):
+            break
+        anc = os.path.dirname(anc)
+    inside = [os.path.realpath(os.path.join(d, "tls")), os.path.realpath(os.path.join(d, HELD))] \
+        if d else []
+    root = docker_root()
+    if root:
+        inside.append(os.path.realpath(root))
+    for r in inside:
+        if real == r or real.startswith(r.rstrip("/") + "/"):
+            return "is inside tls/, .sigrift/held/ or Docker's data directory"
+    return None
+
+
+DOCKER_ROOT = {}
+
+
+def docker_root():
+    if "v" not in DOCKER_ROOT:
+        r = docker("info", "--format", "{{.DockerRootDir}}")
+        DOCKER_ROOT["v"] = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 \
+            else ""
+    return DOCKER_ROOT["v"]
+
+
+def rp_roots(d):
+    """[(root, configured)]: .sigrift/snapshots first, then the host record's
+    snapshot_dirs and SIGRIFT_SNAPSHOT_DIR's root for this install."""
+    roots = [os.path.join(d, SNAPSHOTS)]
+    rec = host_record(d) or {}
+    for x in rec.get("snapshot_dirs") or []:
+        if isinstance(x, str) and x not in roots:
+            roots.append(x)
+    j = journal_load(d) or {}
+    if j.get("snapshot_dir") and j["snapshot_dir"] not in roots:
+        roots.append(j["snapshot_dir"])
+    return roots
+
+
+def new_root(d, project):
+    """Where a new full restore point goes (SIGRIFT_SNAPSHOT_DIR honoured)."""
+    base = os.environ.get("SIGRIFT_SNAPSHOT_DIR") or ""
+    if not base:
+        return os.path.join(d, SNAPSHOTS)
+    return os.path.join(os.path.abspath(base), "%s-%s" % (project, (install_id(d) or "x")[:8]))
+
+
+def check_root(root, d, cmd=None):
+    why = dir_problem(root, d)
+    if why:
+        shown = os.environ.get("SIGRIFT_SNAPSHOT_DIR") or root
+        refuse("SIGRIFT_SNAPSHOT_DIR=%s %s; restore points hold every secret of this install, "
+               "and a rollback starts what they hold." % (shown, why),
+               next_cmd="mkdir -m 0700 -p /path/of/your/own && SIGRIFT_SNAPSHOT_DIR="
+                        "/path/of/your/own %s" % (cmd or lifecycle_cmd("", d).strip()))
+
+
+def rp_key(d, create=False):
+    path = os.path.join(d, RP_KEY)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        if not create:
+            return None
+        ensure_state_dir(d)
+        key = os.urandom(32)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        give_owner(fd, owner_for(os.path.join(d, STATE_DIR)))
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        fsync_dir(os.path.join(d, STATE_DIR))
+        return key
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        s = os.fstat(f.fileno())
+        if stat.S_IMODE(s.st_mode) & 0o077 or not owner_ok(s.st_uid, d):
+            return None
+        key = f.read(64)
+    return key if len(key) == 32 else None
+
+
+def read_nofollow(path, limit=64 << 20):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as f:
+        return f.read(limit)
+
+
+def mac_of(key, manifest_bytes):
+    return "hmac-sha256:" + hmac.new(key, manifest_bytes, hashlib.sha256).hexdigest()
+
+
+class Point(object):
+    """A restore point directory: files-only (1a) or full (1b)."""
+
+    def __init__(self, root, name, d):
+        self.root, self.id, self.path = root, name, os.path.join(root, name)
+        self.manifest, self.raw = {}, None
+        self.status = "incomplete"
+        try:
+            self.raw = read_nofollow(os.path.join(self.path, "manifest.json"))
+            self.manifest = json.loads(self.raw.decode("utf-8"))
+            if not isinstance(self.manifest, dict):
+                self.manifest = {}
+        except (OSError, ValueError):
+            self.manifest = {}
+        self.kind = self.manifest.get("kind") or ("full" if FULL_RE.match(name) else "files")
+        try:
+            complete = read_nofollow(os.path.join(self.path, "COMPLETE"), 4096).decode(
+                "ascii", "replace").strip()
+        except OSError:
+            complete = None
+        if complete is None or self.raw is None:
+            self.status = "incomplete"
+        elif self.kind == "files":
+            self.status = "COMPLETE" if complete == sha256_bytes(self.raw) else "damaged"
+        else:
+            key = rp_key(d)
+            self.status = "COMPLETE" if key and hmac.compare_digest(
+                complete, mac_of(key, self.raw)) else "damaged"
+
+    @property
+    def complete(self):
+        return self.status == "COMPLETE"
+
+    @property
+    def created(self):
+        return self.manifest.get("created_at") or ""
+
+    def bytes(self):
+        return tree_bytes(self.path)
+
+
+def list_points(d):
+    """Every restore point in every root, newest first (.pruning-* never)."""
+    out = []
+    for root in rp_roots(d):
+        try:
+            names = os.listdir(root)
+        except OSError:
+            continue
+        for n in names:
+            if n.startswith(".") or not os.path.isdir(os.path.join(root, n)):
+                continue
+            out.append(Point(root, n, d))
+    return sorted(out, key=lambda p: (p.created, p.id), reverse=True)
+
+
+def find_point(d, rid):
+    for p in list_points(d):
+        if p.id == rid:
+            return p
+    return None
+
+
+def points_root_missing(d):
+    return [r for r in rp_roots(d)[1:] if not os.path.isdir(r)]
+
+
+def default_target(d):
+    """E23: the full restore point of the upgrade that installed the current
+    version (the newest ok upgrade or adopt entry with a restore point,
+    newer than the newest rollback entry), or None."""
+    hist = (host_record(d) or {}).get("history") or []
+    for e in reversed(hist):
+        if not isinstance(e, dict):
+            continue
+        if e.get("op") == "rollback" and e.get("result") in (None, "ok"):
+            return None
+        # An upgrade closed with --resume --accept (1a's fix round)
+        # installed the current version too: its point is the way back,
+        # never an older upgrade's.
+        if e.get("op") in ("upgrade", "adopt") and e.get("result") in ("ok", "accepted"):
+            return e.get("restore_point") or None
+    return None
+
+
+def journal_points(d):
+    """Restore points a journal names (never pruned)."""
+    out = set()
+    j = journal_load(d) or {}
+    for key in ("restore_point", "rp_partial.id", "upgrade.restore_point"):
+        v = get_dotted(j, key)
+        if isinstance(v, str) and v:
+            out.add(v)
+    return out
+
+
+# ── compose canonicalisation, versions (phase1b-spec 4.9.1, 4.7) ─────────
+
+
+def compose_canon(text, templates=""):
+    lines = text.split("\n")
+    out = {"template": "not-installer", "sha256": None, "owner": None, "port": None,
+           "version": None}
+    m = re.fullmatch(r"# Generated by install-release\.sh @ (\S+)\.", lines[0] if lines else "")
+    if not m:
+        return out
+    out["version"] = m.group(1)
+    lines[0] = "# Generated by install-release.sh @ {VERSION}."
+    owners, tags = set(), set()
+    for i, line in enumerate(lines):
+        im = re.fullmatch(r"    image: ghcr\.io/([a-z0-9-]+)/sigrift-(bridge|gateway):(\S+)", line)
+        if im:
+            owners.add(im.group(1))
+            tags.add(im.group(3))
+            lines[i] = "    image: ghcr.io/{OWNER}/sigrift-%s:{VERSION}" % im.group(2)
+            continue
+        if re.fullmatch(r"    pull_policy: (always|missing)", line):
+            lines[i] = "    pull_policy: {PULL}"
+            continue
+        pm = re.fullmatch(r'      - "\$\{SIGRIFT_BIND:-127\.0\.0\.1\}:(\d+):8444"', line)
+        if pm:
+            out["port"] = pm.group(1)
+            lines[i] = '      - "${SIGRIFT_BIND:-127.0.0.1}:{PORT}:8444"'
+    out["sha256"] = sha256_bytes("\n".join(lines).encode("utf-8"))
+    out["owner"] = sorted(owners)[0] if len(owners) == 1 else None
+    if len(owners) != 1 or len(tags) != 1:
+        out["template"] = "custom"
+        return out
+    out["template"] = "custom"
+    for item in (templates or "").split():
+        tid, _, digest = item.partition(":")
+        if digest == out["sha256"]:
+            out["template"] = tid
+    return out
+
+
+def version_meets(v, floor):
+    if v == "dev" or (v or "").startswith("main"):
+        return True
+    a, b = version_key(v), version_key(floor)
+    if a is None or b is None:
+        return False
+    return a[:3] >= b[:3]
+
+
+def minor_newer(v, ir):
+    a, b = version_key(v), version_key(ir)
+    if a is None or b is None:
+        return False
+    return a[:2] > b[:2]
+
+
+# ── subcommands ─────────────────────────────────────────────────────────
+
+
+def cmd_compose_canon(a):
+    text = read_text(a["_pos"][0]) if a["_pos"] else None
+    if text is None:
+        raise Failed("files", "cannot read %s" % (a["_pos"][0] if a["_pos"] else "(no file)"))
+    res = compose_canon(text, a.get("templates") or os.environ.get("LC_COMPOSE_TEMPLATES", ""))
+    put_result(res)
+
+
+def cmd_version_meets(a):
+    ok = version_meets(a["_pos"][0], a["_pos"][1])
+    put_result({"yes": ok})
+    if not ok:
+        sys.exit(1)
+
+
+def cmd_minor_newer(a):
+    ok = minor_newer(a["_pos"][0], a["_pos"][1])
+    put_result({"yes": ok})
+    if not ok:
+        sys.exit(1)
+
+
+def cmd_engine_op(a):
+    req = read_json(a["request_file"]) if a.get("request_file") else {}
+    if req is None:
+        raise Failed("engine", "the request file is not a JSON object")
+    sections = [a["in"]] if a.get("in") else []
+    reply = engine_stream(a["op"], a["image"], a["project"], req, volume=a.get("volume"),
+                          sections=sections, out_path=a.get("out"), lines_path=a.get("lines"))
+    put_result(reply)
+
+
+def lifecycle_containers(project):
+    """Ids of leftover lifecycle containers of PROJECT: a state engine with
+    its project label, or a 1a engine or helper mounting its volumes."""
+    vols = set(project_volumes(project).values())
+    ids = []
+    fmt = '{{.ID}}\t{{.Label "%s"}}\t{{.Mounts}}' % PROJECT_OF_LIFECYCLE
+    for line in docker_lines("docker ps", "ps", "-a", "--filter", "label=" + LIFECYCLE_LABEL,
+                             "--format", fmt):
+        parts = (line.split("\t") + ["", ""])[:3]
+        mounts = set(m.strip() for m in parts[2].split(",") if m.strip())
+        if parts[0] and (parts[1] == project or mounts & vols):
+            ids.append(parts[0])
+    return ids
+
+
+def cmd_lc_clean(a):
+    removed = []
+    try:
+        ids = lifecycle_containers(a["project"])
+    except DockerError as e:
+        raise Failed("docker", "could not list containers (%s exited %d)" % (e.what, e.rc))
+    for cid in ids:
+        docker("rm", "-f", cid)
+        removed.append(cid)
+    pruned = []
+    if a.get("dir"):
+        d = os.path.realpath(a["dir"])
+        for root in rp_roots(d):
+            try:
+                names = os.listdir(root)
+            except OSError:
+                continue
+            for n in names:
+                if n.startswith(".pruning-"):
+                    rmtree(os.path.join(root, n))
+                    pruned.append(n)
+            if pruned:
+                fsync_dir(root)
+    ops = lc_clean_ops(os.path.realpath(a["dir"])) if a.get("dir") else []
+    put_result({"removed_containers": removed, "removed_pruning": pruned, "removed_ops": ops})
+
+
+PRE_KEYS = ("schema", "db_bytes", "encrypted", "audit_rows", "audit_head_id", "audit_ok",
+            "totp_fernet", "detections_max_id")
+
+
+def flat_pre(reply):
+    """1a's flat `pre` keys (cmd_verify_upgrade reads them) from a state reply."""
+    db, audit = reply.get("db") or {}, reply.get("audit") or {}
+    marks = reply.get("marks") or {}
+    return {"schema": reply.get("schema"), "db_bytes": db.get("bytes"),
+            "encrypted": db.get("encrypted"), "audit_rows": audit.get("entries"),
+            "audit_head_id": audit.get("head_id"), "audit_ok": audit.get("result") == "ok",
+            "totp_fernet": (reply.get("counts") or {}).get("totp_fernet"),
+            "detections_max_id": (marks.get("tables") or {}).get("detections")}
+
+
+def compare_summary(reply):
+    """What compare journals under auto_rollback.*: counts only."""
+    def n(block):
+        total = 0
+        for v in (block or {}).values():
+            if isinstance(v, bool):
+                total += int(v)
+            elif isinstance(v, (int, float)):
+                total += int(v)
+            elif isinstance(v, (list, dict)):
+                total += len(v) if not (isinstance(v, dict) and all(
+                    isinstance(x, (int, float)) for x in v.values())) else sum(v.values())
+        return total
+    disc = dict((k, v) for k, v in (reply.get("discards") or {}).items()
+                if k not in ("since", "rf"))
+    return {"checkable": reply.get("checkable"), "nothing_new": reply.get("nothing_new"),
+            "rf": (reply.get("discards") or {}).get("rf"),
+            "counts": {"discards": n(disc), "carries": n(reply.get("carries")),
+                       "not_carried": n((reply.get("not_carried") or {}).get("credentials"))
+                       + n((reply.get("not_carried") or {}).get("settings"))}}
+
+
+def store_state(d, key, reply):
+    if not key:
+        return
+    j = journal_load(d)
+    if not j:
+        raise Failed("journal", "there is no journal in %s" % d)
+    value = clean_reply(reply)
+    if key.startswith("auto_rollback."):
+        value = compare_summary(reply) if reply.get("op") == "compare" else {
+            "schema": reply.get("schema"), "audit_head_id": (reply.get("audit") or {})
+            .get("head_id")}
+    set_dotted(j, key, value)
+    if key == "pre_state":
+        j["pre"] = dict(j.get("pre") or {}, **flat_pre(reply))
+    journal_save(d, j)
+
+
+def cmd_state(a, op="state"):
+    d = os.path.realpath(a.get("dir") or ".")
+    req = {"env": env_candidates(a.get("env_file"))}
+    if a.get("root"):
+        # phase2-spec 1.2: "live" or "staging:<rb_id>" (an import's staging).
+        req["root"] = a["root"]
+    if a.get("exempt_nodes"):
+        req["exempt_nodes"] = [x for x in a["exempt_nodes"].split(",") if x]
+    if op == "quiesce":
+        req["mode"] = a.get("mode") or "strict"
+    if (a.get("audit_at") or "").isdigit():
+        # The tag of audit entry N's chain value (phase2-notes F-D21).
+        req["audit_at"] = [int(a["audit_at"])]
+    lines = None
+    if a.get("rf_rows"):
+        req["rf_rows"] = True
+        lines = a["rf_rows"] + ".lines"
+        if os.path.exists(lines):
+            os.unlink(lines)
+    try:
+        reply = engine_stream(op, a["image"], a["project"], req, lines_path=lines,
+                              fallback=a.get("fallback_image"))
+    except EngineFailed as e:
+        if e.code == "quick-check":
+            put_result({"ok": False, "code": "quick-check", "error": str(e)})
+            sys.stderr.write("PRAGMA quick_check found problems in detections.db (%s)\n" % e)
+            sys.exit(1)
+        raise
+    if lines:
+        write_json(a["rf_rows"], rf_rows_from_lines(lines))
+        os.unlink(lines)
+    store_state(d, a.get("journal_key"), reply)
+    put_result(clean_reply(reply))
+
+
+def rf_rows_from_lines(path):
+    rows = {"format": 1, "tables": False, "streams": [], "fences": [], "summary_hours": {}}
+    with open(path, "rb") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "tables" in obj:
+                rows["tables"] = bool(obj["tables"])
+            elif "s" in obj:
+                rows["streams"].append(obj["s"])
+            elif "f" in obj:
+                rows["fences"].append(obj["f"])
+            elif "h" in obj:
+                rows["summary_hours"][obj["h"]] = obj["v"]
+    return rows
+
+
+def cmd_quiesce(a):
+    cmd_state(a, "quiesce")
+
+
+def point_or_refuse(d, rid, project=None):
+    p = find_point(d, rid)
+    if p is None:
+        missing = points_root_missing(d)
+        if missing:
+            refuse("restore point %s lives in %s, which is not there now (an unmounted disk?)."
+                   % (rid, missing[0]), next_cmd="ls -ld " + q(missing[0]))
+        refuse("restore point %s is not in %s." % (rid, ", ".join(rp_roots(d))),
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    return p
+
+
+def verified_manifest(d, p):
+    """The manifest of full point P, after its MAC (E35); M-RP-DAMAGED."""
+    if p.kind != "full":
+        refuse("restore point %s is a files-only restore point, not a full one." % p.id,
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    if p.status == "incomplete":
+        refuse("restore point %s has no valid COMPLETE file (an interrupted run left it)." % p.id,
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    if p.status != "COMPLETE":
+        refuse("restore point %s is damaged (its COMPLETE file is not this install's MAC: it was "
+               "changed, or .sigrift/rp.key is not the one that wrote it), so it is not used."
+               % p.id, next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+    # The MAC covers the manifest, not the directory's name: a point renamed
+    # to another's name is not the point it claims to be (its install is
+    # rp-resolve's M-RP-FOREIGN check).
+    if p.manifest.get("id") != p.id:
+        refuse("restore point %s is damaged (its manifest names %s), so it is not used."
+               % (p.id, p.manifest.get("id")),
+               next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+    return p.manifest
+
+
+def rp_rows(p):
+    path = os.path.join(p.path, "rf_rows.json")
+    try:
+        return read_nofollow(path)
+    except OSError:
+        return b"{}"
+
+
+def compare_request(m, keep_master=True):
+    rp = dict((k, m.get(k)) for k in ("marks", "rf_summary", "security", "captures",
+                                       "created_at", "counts", "db"))
+    rp["audit"] = {"head_id": (m.get("audit") or {}).get("head_id")}
+    req = {"rp": rp, "rf_rows_section": True, "keep_current_master": bool(keep_master)}
+    ex = exempt_nodes_of(m)
+    if ex:
+        req["exempt_nodes"] = ex
+    return req
+
+
+def exempt_nodes_of(m):
+    """compare --exempt-nodes (phase2-spec 1.2): the in-stack node of a
+    point that holds edge_data (its journal comes back with the point)."""
+    names = [v.get("name") for v in m.get("volumes") or []]
+    if "edge_data" not in names:
+        return []
+    return list((m.get("rf_summary") or {}).get("exempt_nodes") or [])
+
+
+def verified_env_text(d, m, p):
+    """files/.env of point P, read once and checked against its manifest
+    entry (M-RP-DAMAGED), or None when the point has none."""
+    entry = [f for f in m.get("files") or [] if f.get("path") == ".env"]
+    if not entry:
+        return None
+    try:
+        data = read_nofollow(os.path.join(p.path, "files", ".env"))
+    except OSError:
+        data = None
+    if data is None or sha256_bytes(data) != entry[0].get("sha256"):
+        refuse("restore point %s is damaged (files/.env does not match its manifest), so it is "
+               "not used." % p.id, next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        refuse("restore point %s is damaged (files/.env is not UTF-8 text), so it is not used."
+               % p.id, next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+
+
+def env_plan_for_rollback(d, m, p, rp_text=None):
+    """(text, kept, reverted, undone, credentials, problems) for the
+    restored .env (E12, 4.6 rule 12) from RP_TEXT (verified_env_text);
+    names only leave this function."""
+    cur_text = read_text(os.path.join(d, ".env")) or ""
+    cur = env_effective(cur_text)
+    if rp_text is None:
+        return None, [], [], [], [], []
+    rp = env_effective(rp_text)
+    bad = [k for k in COMPOSE_KEYS if rp.get(k)]
+    if bad:
+        return rp_text, [], [], [], [], bad
+    keep = {}
+    if cur.get("COMPOSE_PROJECT_NAME"):
+        keep["COMPOSE_PROJECT_NAME"] = cur["COMPOSE_PROJECT_NAME"]
+    for k in HOST_KEYS:
+        if cur.get(k) != rp.get(k):
+            keep[k] = cur.get(k)
+    credentials = []
+    if any(rp.get(k) for k in AUDIT_KEYS):
+        if cur.get("BRIDGE_MASTER_KEY") and cur.get("BRIDGE_MASTER_KEY") != rp.get(
+                "BRIDGE_MASTER_KEY"):
+            keep["BRIDGE_MASTER_KEY"] = cur["BRIDGE_MASTER_KEY"]
+    elif cur.get("BRIDGE_MASTER_KEY") != rp.get("BRIDGE_MASTER_KEY"):
+        credentials.append("BRIDGE_MASTER_KEY")
+    final = dict(rp, **dict((k, v) for k, v in keep.items()))
+    for k in ("BRIDGE_ENV", "UC_CSP_MODE", "BRIDGE_SESSION_BINDING",
+              "BRIDGE_ALLOW_UNBOUND_NODE_KEYS", "BRIDGE_TRUSTED_PROXIES"):
+        if stricter(k, cur.get(k), rp.get(k), final):
+            keep[k] = cur.get(k)
+    written = env_written_tags(d, p.id)
+    text = env_apply_keep(rp_text, keep)
+    new = env_effective(text)
+    kept = sorted(k for k in keep if cur.get(k) != rp.get(k))
+    undone, reverted = [], []
+    for k in sorted(set(cur) | set(new)):
+        if k in keep or k in BOOTSTRAP_KEYS or cur.get(k) == new.get(k):
+            continue
+        if k in written and cur.get(k) is not None and tag(cur.get(k)) == written[k]:
+            undone.append(k)
+        elif k == "BRIDGE_MASTER_KEY":
+            continue
+        else:
+            reverted.append(k)
+    if "BRIDGE_MASTER_KEY" in undone and "BRIDGE_MASTER_KEY" in credentials:
+        credentials.remove("BRIDGE_MASTER_KEY")
+    return text, kept, reverted, undone, credentials, []
+
+
+def stricter(k, cur, rp, final):
+    """The current value of security setting K is the stricter one (rule 12)."""
+    if cur == rp:
+        return False
+    if k == "BRIDGE_ENV":
+        c, r = (cur or "production"), (rp or "production")
+        return c == "production" and r != "production" and all(
+            (final.get(x) or "").strip() for x in ("BRIDGE_MFA_KEY", "BRIDGE_AUDIT_KEY",
+                                                    "UC_PROXY_SECRET", "BRIDGE_MASTER_KEY"))
+    if k in STRICTER:
+        order = STRICTER[k]
+        c = (cur or (order[0] if k == "UC_CSP_MODE" else "none")).strip().lower()
+        r = (rp or (order[0] if k == "UC_CSP_MODE" else "none")).strip().lower()
+        return c in order and r in order and order.index(c) < order.index(r)
+    if k == "BRIDGE_ALLOW_UNBOUND_NODE_KEYS":
+        return not (cur or "").strip() and (rp or "").strip() == "1"
+    if k == "BRIDGE_TRUSTED_PROXIES":
+        cs = set(x.strip() for x in (cur or "").split(",") if x.strip())
+        rs = set(x.strip() for x in (rp or "").split(",") if x.strip())
+        return bool(cs) and cs < rs
+    return False
+
+
+def env_written_tags(d, rp_id):
+    j = journal_load(d) or {}
+    for src in (j.get("upgrade") or {}, j):
+        if src.get("restore_point") == rp_id and isinstance(src.get("env_written"), dict):
+            return src["env_written"]
+    for e in reversed((host_record(d) or {}).get("history") or []):
+        if isinstance(e, dict) and e.get("restore_point") == rp_id and \
+                isinstance(e.get("env_written"), dict):
+            return e["env_written"]
+    return {}
+
+
+def env_apply_keep(text, keep):
+    """TEXT with each key of KEEP set to its value (None: removed), by
+    parse_dotenv positions; new keys appended."""
+    for k, v in keep.items():
+        a = None
+        for x in parse_dotenv(text):
+            if x.name == k:
+                a = x
+        if a is None:
+            if v is not None:
+                if text and not text.endswith("\n"):
+                    text += "\n"
+                text += "%s=%s\n" % (k, dotenv_value(v))
+            continue
+        if v is None:
+            end = a.line_end + 1 if a.line_end < len(text) else a.line_end
+            text = text[:a.line_start] + text[end:]
+            continue
+        start = a.start - (1 if a.quote else 0)
+        end = a.end + (1 if a.quote else 0)
+        text = text[:start] + dotenv_value(v) + text[end:]
+    return text
+
+
+def compose_files_hashes(d, held=False):
+    out = {}
+    base = os.path.join(d, HELD) if held else d
+    for name in ("docker-compose.yml",) + OVERRIDES:
+        p = os.path.join(base, name)
+        out[name] = sha256_file(p) if os.path.isfile(p) else None
+    return out
+
+
+def compose_edited(d):
+    """Compose files that differ from what the installer last wrote (E12)."""
+    j = journal_load(d) or {}
+    ref = (j.get("upgrade") or {}).get("compose_files_sha256") or j.get("compose_files_sha256") \
+        or (host_record(d) or {}).get("compose_files_sha256")
+    if not isinstance(ref, dict):
+        return []
+    held = first_line(os.path.join(d, "docker-compose.yml")).startswith(HOLD_HEADER)
+    now = compose_files_hashes(d, held)
+    return sorted(k for k, v in ref.items() if k in now and now.get(k) != v)
+
+
+def cmd_compare(a):
+    d = os.path.realpath(a.get("dir") or ".")
+    if a.get("import_jid"):
+        return compare_import(a, d)
+    p = point_or_refuse(d, a["rp"])
+    m = verified_manifest(d, p)
+    keep_master = any(env_effective(env_text_of(p)).get(k) for k in AUDIT_KEYS)
+    if a.get("keep_current_master") is not None:
+        keep_master = a["keep_current_master"] == "1"
+    reply = engine_stream("compare", a["image"], a["project"], compare_request(m, keep_master),
+                          sections=[rp_rows(p)], fallback=a.get("fallback_image"))
+    _, kept, reverted, undone, creds, bad = env_plan_for_rollback(d, m, p,
+                                                                   verified_env_text(d, m, p))
+    nc = reply.setdefault("not_carried", {"credentials": {}, "settings": {}})
+    nc["settings"]["env_keys_reverted"] = reverted
+    nc["settings"]["compose_files_edited"] = compose_edited(d)
+    nc["credentials"]["env_keys"] = creds
+    reply["env_kept"] = kept
+    reply["env_undone_with_upgrade"] = undone
+    store_state(d, a.get("journal_key"), reply)
+    put_result(clean_reply(reply))
+    if a.get("rf_guard"):
+        rf_guard(d, p, m, reply, bool(a.get("accept_summary_reset")))
+
+
+def rf_guard(d, p, m, reply, accept):
+    rf = (reply.get("discards") or {}).get("rf")
+    v = m.get("from_version")
+    if rf == "absent-rp":
+        refuse("restore point %s predates the RF summary tables (migration 56), and this "
+               "database has summary rows; the older release cannot keep their fences, so this "
+               "rollback is never done." % p.id, next_cmd=lifecycle_cmd("--status", d))
+    if rf in ("changed", "cannot", "absent-live") and not accept:
+        nodes = ", ".join(reply.get("summary_nodes") or []) or "none"
+        what = ("changed since restore point %s (summary-mode nodes: %s)" % (p.id, nodes)
+                if rf != "cannot" else "cannot be compared (a database is unreadable)")
+        refuse("the RF summary rows %s, so restoring the database would make those nodes' "
+               "journals disagree with this server." % what,
+               ["Repairing forward keeps them consistent (docs/rf-summary-recovery.md, "
+                "\"Downgrade restriction\"). To roll back anyway, accept the reset and confirm "
+                "the version; those nodes then need that document's recovery."],
+               next_cmd=lifecycle_cmd("--rollback %s --accept-summary-reset --confirm %s"
+                                      % (p.id, v), d))
+
+
+def env_text_of(p):
+    try:
+        return read_nofollow(os.path.join(p.path, "files", ".env")).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+# ── the space plan (phase1b-spec 4.8) ───────────────────────────────────
+
+
+def reserve_for(path):
+    env = os.environ.get("SIGRIFT_SNAPSHOT_RESERVE")
+    if env:
+        n = parse_size(env)
+        if n is not None:
+            return n
+    s = STATVFS(existing_parent(path))
+    return max(GiB, int(s.f_blocks * s.f_frsize * 0.05))
+
+
+def same_fs(root, fs):
+    host = STATVFS(existing_parent(root))
+    droot = docker_root()
+    if droot and os.path.exists(droot):
+        try:
+            if os.stat(droot).st_dev == os.stat(existing_parent(root)).st_dev:
+                return True
+        except OSError:
+            pass
+    if not fs:
+        return False
+    def near(a, b):
+        return abs(a - b) <= max(1, 0.01 * max(a, b))
+    # frsize and blocks exactly; files (dynamic on APFS and btrfs) and bavail
+    # (other writers) within 1 %.
+    if (host.f_frsize, host.f_blocks) == (fs.get("frsize"), fs.get("blocks")):
+        return near(host.f_files, fs.get("files") or 0) and near(host.f_bavail,
+                                                                 fs.get("bavail") or 0)
+    return False
+
+
+def newest_ratio(d):
+    for p in list_points(d):
+        if p.kind == "full" and p.complete:
+            for v in p.manifest.get("volumes") or []:
+                if v.get("name") == "bridge_data":
+                    # A measured ratio within (0, 1.25]; anything else (a small
+                    # class, a damaged manifest) counts as 1.0.
+                    return dict((k, x if isinstance(x, (int, float)) and 0 < x <= 1.25
+                                 else 1.0) for k, x in (v.get("ratio") or {}).items())
+    return {}
+
+
+def prunable(d):
+    """Full upgrade points remedy (1) may remove, oldest first (E20)."""
+    pts = [p for p in list_points(d) if p.kind == "full" and p.complete]
+    ups = [p for p in pts if p.manifest.get("reason") == "upgrade"]
+    keep = set(journal_points(d))
+    if ups:
+        keep.add(ups[0].id)
+    dt = default_target(d)
+    if dt:
+        keep.add(dt)
+    return [p for p in reversed(ups) if p.id not in keep]
+
+
+def premig_remedy(d, state, pruned=()):
+    """Remedy (2): the kept pre-migration copy of an upgrade recorded ok whose
+    full restore point is still COMPLETE and is not among PRUNED, the points
+    remedy (1) removes in the same plan (E18), or None."""
+    pm = ((state.get("sizes") or {}).get("bridge_data") or {}).get("premigration") or []
+    if not pm:
+        return None
+    copy = pm[0]
+    mt = copy["mtime_ns"] / 1e9
+    for e in reversed((host_record(d) or {}).get("history") or []):
+        if not isinstance(e, dict) or e.get("op") not in ("upgrade", "adopt"):
+            continue
+        start, at = epoch(e.get("bridge_started_at")), epoch(e.get("at"))
+        if start is None or at is None or not (start - 1 <= mt <= at + 1):
+            continue
+        if e.get("result") != "ok" or not e.get("restore_point"):
+            return None
+        p = find_point(d, e["restore_point"])
+        if p is None or not p.complete or p.id in pruned:
+            return None
+        return {"kind": "premig", "name": copy["name"], "bytes": copy["bytes"],
+                "mtime_ns": copy["mtime_ns"], "upgrade_to": e.get("to"), "at": e.get("at"),
+                "restore_point": p.id}
+    return None
+
+
+def epoch(text):
+    if not text:
+        return None
+    try:
+        import calendar
+        t = str(text).replace("Z", "+00:00")
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", t)
+        if not m:
+            return None
+        return calendar.timegm(tuple(int(x) for x in m.groups()) + (0, 0, 0))
+    except (ValueError, OverflowError):
+        return None
+
+
+def fs_type(path):
+    """The filesystem type of PATH from /proc/self/mounts (longest mount
+    point), or "unknown"."""
+    real = os.path.realpath(existing_parent(path))
+    best, kind = "", "unknown"
+    try:
+        with open("/proc/self/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mnt = parts[1].replace("\\040", " ")
+                if (real == mnt or real.startswith(mnt.rstrip("/") + "/")) and len(mnt) > len(best):
+                    best, kind = mnt, parts[2]
+    except OSError:
+        pass
+    return kind
+
+
+FAT_MAX = (4 << 30) - 1
+
+
+def space_plan_archive(d, a, kind, excl):
+    """Kinds export and import (phase2-spec 1.2, 6.1 step 4, 6.2 step 7)."""
+    project = a["project"]
+    if kind == "export":
+        state = engine_stream("state", a["image"], project, {"env": {}},
+                              fallback=a.get("fallback_image"))
+        plan = space_plan(d, project, "snapshot", state, excl, None, False, False)
+        out = os.path.abspath(a.get("file") or ".")
+        folder = os.path.dirname(out)
+        archive = int((plan["rp"] - OVERHEAD) * 1.001) + (1 << 20)
+        ra = reserve_for(folder)
+        free_a = free_bytes(existing_parent(folder))
+        try:
+            same = os.stat(existing_parent(folder)).st_dev == os.stat(
+                existing_parent(plan["root"])).st_dev
+        except OSError:
+            same = False
+        fst = fs_type(folder)
+        plan.update({"kind": "export", "archive": archive, "archive_free": free_a,
+                     "archive_reserve": ra, "archive_same_fs": same, "archive_fs": fst,
+                     "kept_out": kept_out_of(state)})
+        if same:
+            ok = plan["free"] >= plan["rp"] + archive + plan["reserve"]
+            plan["short"] = None if ok else "host"
+        else:
+            ok = plan["ok"] and free_a >= archive + ra
+            plan["short"] = None if ok else (plan["short"] or "archive")
+        plan["ok"] = ok
+        plan["fat_too_big"] = fst in ("vfat", "msdos") and archive >= FAT_MAX
+        return plan, state
+    # import: staging = the staged parts' raw bytes + 64 MiB, plus the first
+    # start's migration copy, on the Docker volume filesystem; with
+    # --replace also the pre-import restore point.
+    try:
+        with open(a["probe"], "rb") as f:
+            probe = strict_json(f.read(64 << 20))
+    except (OSError, ValueError, KeyError):
+        raise Failed("files", "probe.json cannot be read")
+    meta = probe.get("metadata") or {}
+    stage_parts = [x for x in (a.get("parts") or "bridge_secrets,bridge_data").split(",") if x]
+    st = sum(x.get("bytes_raw") or 0 for x in meta.get("parts") or []
+             if x.get("name") in stage_parts) + OVERHEAD
+    dv = ((probe.get("manifest") or {}).get("db") or {}).get("bytes") or 0
+    state = None
+    if a.get("replace"):
+        state = engine_stream("state", a["image"], project, {"env": {}},
+                              fallback=a.get("fallback_image"))
+        plan = space_plan(d, project, "snapshot", state, excl, None, False, False)
+        fs = (state.get("fs") or {}).get("bridge_data") or {}
+        free_d = (fs.get("bavail") or 0) * (fs.get("frsize") or 0)
+        rd = plan["docker_reserve"]
+        rp = plan["rp"]
+        same = plan["same_fs"]
+    else:
+        root = docker_root()
+        base = existing_parent(root) if root else "/"
+        free_d = free_bytes(base)
+        env_reserve = parse_size(os.environ.get("SIGRIFT_SNAPSHOT_RESERVE") or "")
+        s_ = STATVFS(base)
+        rd = env_reserve if env_reserve is not None else max(GiB, int(s_.f_blocks *
+                                                                   s_.f_frsize * 0.05))
+        rp, same = 0, False
+        plan = {"root": new_root(d, project), "free": free_bytes(existing_parent(
+            new_root(d, project))), "reserve": reserve_for(new_root(d, project))}
+    need_d = st + dv + rd + (rp if same else 0)
+    ok = free_d >= need_d and (same or not rp or plan["free"] >= rp + plan["reserve"])
+    return {"ok": ok, "kind": "import", "st": st, "dv": dv, "rp": rp, "same_fs": same,
+            "docker_free": free_d, "docker_reserve": rd, "need": need_d,
+            "free": plan.get("free"), "reserve": plan.get("reserve"), "root": plan.get("root"),
+            "short": None if ok else "docker"}, state
+
+
+def space_refusal_archive(d, kind, plan, a):
+    cmd = a.get("cmd") or lifecycle_cmd("", d).strip()
+    if kind == "export":
+        if plan.get("fat_too_big"):
+            refuse("the archive (~%s) cannot be written to %s (%s): FAT32 holds at most "
+                   "4 GiB - 1 per file." % (human(plan["archive"]), esc(existing_parent(
+                       os.path.dirname(os.path.abspath(a.get("file") or ".")))),
+                       plan["archive_fs"]),
+                   ["or leave the captures out: %s --exclude iq,pcap" % cmd],
+                   next_cmd="%s (with FILE on an exFAT or ext4 filesystem)" % cmd)
+        refuse("the export needs %s for its restore point in %s and ~%s for the archive in %s, "
+               "and only %s and %s are free there once the reserves (%s, %s) are kept." % (
+                   human(plan["rp"]), esc(existing_parent(plan["root"])),
+                   human(plan["archive"]), esc(existing_parent(os.path.dirname(
+                       os.path.abspath(a.get("file") or ".")))), human(plan["free"]),
+                   human(plan["archive_free"]), human(plan["reserve"]),
+                   human(plan["archive_reserve"])),
+               ["backups/ (%s) and exports/ (%s) stay out of the archive." % (
+                   human(plan["kept_out"]["backups_bytes"]),
+                   human(plan["kept_out"]["exports_bytes"]))],
+               next_cmd="free space there, or %s with FILE on another filesystem" % cmd)
+    refuse("the import stages %s and the first start copies the database (%s) in the Docker "
+           "volume filesystem, and only %s is free there once a %s reserve is kept." % (
+               human(plan["st"]), human(plan["dv"]), human(plan["docker_free"]),
+               human(plan["docker_reserve"])),
+           next_cmd="free space in Docker's data directory (docker system df), then %s" % cmd)
+
+
+def cmd_space_plan(a):
+    d = os.path.realpath(a["dir"])
+    kind = a["kind"]
+    excl = set(x for x in (a.get("exclude") or "").split(",") if x)
+    if kind in ("export", "import"):
+        plan, _state = space_plan_archive(d, a, kind, excl)
+        put_result(plan)
+        if not plan["ok"] or plan.get("fat_too_big"):
+            space_refusal_archive(d, kind, plan, a)
+        return
+    state = engine_stream("state", a["image"], a["project"], {"env": {}},
+                          fallback=a.get("fallback_image"))
+    plan = space_plan(d, a["project"], kind, state, excl, a.get("rp"),
+                      a.get("migrations_pending") == "1", a.get("auto_rollback") != "0")
+    put_result(plan)
+    if not plan["ok"]:
+        space_refusal(d, kind, plan, a.get("cmd"))
+
+
+def space_short(kind, same, rp, dv, st, rh, rd, free_h, free_d):
+    """None when the needs fit, else the side that is short (host: the
+    restore-point root's filesystem; docker: the volumes')."""
+    if kind == "rollback":
+        return "docker" if free_d < st + rd else None
+    if kind == "snapshot":
+        return "host" if free_h < rp + rh else None
+    if same:
+        return "host" if free_h < rp + dv + rh else None
+    if free_h < rp + rh:
+        return "host"
+    return "docker" if free_d < dv + rd else None
+
+
+def space_plan(d, project, kind, state, excl, rp_id, migrations, auto_rollback=True):
+    sizes = (state.get("sizes") or {}).get("bridge_data") or {}
+    classes = dict(sizes.get("classes") or {})
+    sec_raw = ((state.get("sizes") or {}).get("bridge_secrets") or {}).get("total_raw") or 0
+    fs = (state.get("fs") or {}).get("bridge_data") or {}
+    root = new_root(d, project)
+    rh = reserve_for(root)
+    free_h = free_bytes(existing_parent(root))
+    free_d = (fs.get("bavail") or 0) * (fs.get("frsize") or 0)
+    env_reserve = parse_size(os.environ.get("SIGRIFT_SNAPSHOT_RESERVE") or "")
+    rd = env_reserve if env_reserve is not None else max(
+        GiB, int((fs.get("blocks") or 0) * (fs.get("frsize") or 0) * 0.05))
+    same = same_fs(root, fs)
+    if same:
+        free_d, rd = free_h, rh
+    ratio = newest_ratio(d)
+    cap_excluded = [c for c, k in zip(CAPTURE_DIRS, ("iq", "pcap")) if k in excl]
+    est = {}
+    for c in ("db", "captures", "other"):
+        raw = classes.get(c) or 0
+        if c == "captures" and cap_excluded:
+            raw = 0 if len(cap_excluded) == 2 else raw // 2
+        est[c] = int(raw * ratio.get(c, 1.0) * 1.10)
+    est["other"] += int(sec_raw * ratio.get("other", 1.0) * 1.10)
+    rp = sum(est.values()) + OVERHEAD if kind != "rollback" else 0
+    db_bytes = (state.get("db") or {}).get("bytes") or 0
+    dv = (classes.get("db") or 0) + db_bytes if migrations and kind == "upgrade" else 0
+    st = 0
+    if kind == "rollback":
+        p = find_point(d, rp_id) if rp_id else None
+        st = sum(v.get("bytes_raw") or 0 for v in (p.manifest.get("volumes") or [])) + OVERHEAD \
+            if p is not None else OVERHEAD
+    used = {"older_points": sum(p.bytes() for p in list_points(d) if p.kind == "full"),
+            "replaced": sum(x.get("bytes") or 0 for x in sizes.get("replaced") or []),
+            "premigration": sum(x.get("bytes") or 0 for x in sizes.get("premigration") or [])}
+    plan = {"ok": True, "kind": kind, "root": root, "same_fs": same, "est": est, "rp": rp,
+            "dv": dv, "st": st, "free": free_h, "reserve": rh, "docker_free": free_d,
+            "docker_reserve": rd, "used": used, "remedies": [], "operator_options": [],
+            "note": None, "short": None, "next": None,
+            "need": {"rollback": st + rd, "snapshot": rp + rh}.get(
+                kind, rp + dv + rh if same else rp + rh)}
+    gh = gd = 0
+
+    def short(gh_, gd_, rp_=rp, dv_=dv):
+        return space_short(kind, same, rp_, dv_, st, rh, rd, free_h + gh_ + (gd_ if same else 0),
+                           free_d + gd_ + (gh_ if same else 0))
+    if kind != "rollback":
+        for p in prunable(d):
+            if short(gh, gd) is None:
+                break
+            b = p.bytes()
+            plan["remedies"].append({"kind": "prune", "id": p.id, "bytes": b})
+            gh += b
+        if short(gh, gd) is not None:
+            pm = premig_remedy(d, state, [r["id"] for r in plan["remedies"]
+                                          if r["kind"] == "prune"])
+            if pm:
+                plan["remedies"].append(pm)
+                gd += pm["bytes"]
+    side = short(gh, gd)
+    if kind == "upgrade" and side is None and auto_rollback:
+        st_est = (sizes.get("total_raw") or 0) + sec_raw + OVERHEAD
+        room = free_d + gd + (gh if same else 0) - (rp if same else 0) - dv
+        if room < st_est + rd:
+            plan["note"] = ("NOTE: an automatic rollback would not have room to stage the "
+                            "restore point (%s); a failed start would be left for you (exit 4)"
+                            % human(st_est))
+    if side is None:
+        return plan
+    plan["ok"], plan["short"] = False, side
+    opts = []
+    rep = used["replaced"]
+    if rep:
+        opts.append({"kind": "finish", "bytes": rep})
+    cap_est = int((classes.get("captures") or 0) * ratio.get("captures", 1.0) * 1.10)
+    if kind != "rollback" and not cap_excluded and cap_est:
+        opts.append({"kind": "exclude", "bytes": cap_est})
+    for p in list_points(d):
+        if p.kind == "full" and p.manifest.get("reason") == "manual" and p.complete:
+            opts.append({"kind": "manual", "id": p.id, "path": p.path, "bytes": p.bytes()})
+    if kind != "rollback":
+        opts.append({"kind": "snapshot-dir", "bytes": rp})
+    plan["operator_options"] = opts
+    for o in opts:
+        if o["kind"] == "finish":
+            ok = short(gh, gd + o["bytes"]) is None
+        elif o["kind"] == "exclude":
+            ok = short(gh, gd, rp_=rp - o["bytes"]) is None
+        elif o["kind"] == "snapshot-dir":
+            ok = space_short(kind, False, 0, dv, st, rh, rd, free_h, free_d + gd) is None
+        else:
+            continue
+        if ok:
+            plan["next"] = o["kind"]
+            break
+    return plan
+
+
+def space_refusal(d, kind, plan, cmd=None):
+    cmd = cmd or lifecycle_cmd("", d).strip()
+    fs = existing_parent(plan["root"]) if plan["short"] == "host" else \
+        "the Docker volume filesystem"
+    if kind == "rollback":
+        reps = [o for o in plan["operator_options"] if o["kind"] == "finish"]
+        refuse("the rollback stages %s in the Docker volume filesystem (%s) before it changes "
+               "anything, and only %s is free there once a %s reserve is kept."
+               % (human(plan.get("st")), fs, human(plan["docker_free"]),
+                  human(plan["docker_reserve"])),
+               ["copies kept by earlier rollbacks: %s" % (
+                   human(reps[0]["bytes"]) if reps else "none")],
+               next_cmd=lifecycle_cmd("--rollback --finish", d) if reps else "docker system df")
+    what = ("the restore point this upgrade takes first" if kind == "upgrade" else
+            "the restore point --snapshot takes")
+    est = plan["est"]
+    free = plan["free"] if plan["short"] == "host" else plan["docker_free"]
+    details = ["restore point  ~%s (%s database, %s captures, %s other)" % (
+        human(plan["rp"]), human(est.get("db")), human(est.get("captures")),
+        human(est.get("other"))),
+        "already in use: older restore points %s, copies kept by rollbacks %s, pre-migration "
+        "copies %s" % (human(plan["used"]["older_points"]), human(plan["used"]["replaced"]),
+                       human(plan["used"]["premigration"]))]
+    nxt = None
+    for o in plan["operator_options"]:
+        if o["kind"] == "finish":
+            line = "bash install-release.sh --rollback --finish frees %s" % human(o["bytes"])
+            full = lifecycle_cmd("--rollback --finish", d)
+        elif o["kind"] == "exclude":
+            line = ("--exclude iq,pcap leaves %s of captures out of the restore point (they "
+                    "stay in place)" % human(o["bytes"]))
+            full = cmd + " --exclude iq,pcap"
+        elif o["kind"] == "manual":
+            line = "manual restore point %s (%s): rm -rf %s" % (o["id"], human(o["bytes"]),
+                                                                 q(o["path"]))
+            full = None
+        else:
+            line = ("SIGRIFT_SNAPSHOT_DIR=/path/on/a/bigger/disk puts restore points on another "
+                    "disk")
+            full = "SIGRIFT_SNAPSHOT_DIR=/path/on/a/bigger/disk " + cmd
+        details.append(line)
+        if nxt is None and plan.get("next") == o["kind"] and full:
+            nxt = full
+    refuse("there is not enough free disk space for %s: %s has %s free and needs %s (%s) plus a "
+           "%s reserve." % (what, fs, human(free), human(plan["need"]),
+                            "restore point %s%s" % (human(plan["rp"]), ", the bridge's own "
+                                                    "copy %s" % human(plan["dv"]) if plan["dv"]
+                                                    else ""),
+                            human(plan["reserve"])),
+           details, next_cmd=nxt or "df -h " + q(existing_parent(plan["root"])))
+
+
+def cmd_rp_apply_remedies(a):
+    d = os.path.realpath(a["dir"])
+    raw = a.get("plan") or ""
+    if raw.startswith("@"):
+        plan = read_json(raw[1:]) or {}
+    elif raw:
+        plan = json.loads(raw)
+    else:
+        plan = (journal_load(d) or {}).get("rp_plan") or {}
+    done = []
+    total = len([r for r in plan.get("remedies") or [] if r.get("kind") == "prune"])
+    for r in plan.get("remedies") or []:
+        if r.get("kind") == "prune":
+            p = find_point(d, r.get("id"))
+            if p is None or not p.complete or p.id not in [x.id for x in prunable(d)]:
+                continue
+            b = p.bytes()
+            prune_point(p)
+            say("==> To make room: removed restore point %s (%s, the oldest of %d)."
+                % (p.id, human(b), total + 2))
+            done.append({"kind": "prune", "id": p.id, "bytes": b})
+        elif r.get("kind") == "premig":
+            # E18 again at apply time: only while the point that holds the
+            # same database is still COMPLETE (the prunes ran first).
+            p = find_point(d, r.get("restore_point") or "")
+            if p is None or not p.complete or p.kind != "full":
+                continue
+            rep = engine_stream("reclaim", a["image"], a["project"],
+                                {"name": r["name"], "bytes": r["bytes"],
+                                 "mtime_ns": r["mtime_ns"]})
+            if rep.get("removed"):
+                say("==> To make room: removed detections.db.pre-migration (%s, from the upgrade "
+                    "to %s on %s; restore point %s holds the same database)."
+                    % (human(r["bytes"]), r.get("upgrade_to"), (r.get("at") or "")[:10],
+                       r.get("restore_point")))
+                done.append({"kind": "premig", "bytes": r["bytes"]})
+    put_result({"done": done})
+
+
+def prune_point(p):
+    """Rename to .pruning-<id> (root fsynced), then delete (E21)."""
+    dest = os.path.join(p.root, ".pruning-" + p.id)
+    os.rename(p.path, dest)
+    fsync_dir(p.root)
+    rmtree(dest)
+    fsync_dir(p.root)
+
+
+# ── rp-create (phase1b-spec 3.2, 3.3) ───────────────────────────────────
+
+
+def files_point(d, sid):
+    for p in list_points(d):
+        if p.id == sid and p.kind == "files":
+            return p
+    return None
+
+
+def cmd_rp_create(a):
+    d = os.path.realpath(a["dir"])
+    t0 = CLOCK()
+    j = journal_load(d)
+    if not j or j.get("id") != a["journal_id"]:
+        raise Failed("journal", "the journal of %s is not %s" % (d, a["journal_id"]))
+    project = a["project"]
+    root = new_root(d, project)
+    check_root(root, d)
+    fp = files_point(d, a["files_snapshot"])
+    if fp is None or not fp.complete:
+        raise Failed("files", "the files-only restore point %s is missing or incomplete"
+                     % a["files_snapshot"])
+    pre = j.get("pre_state") if a.get("prechecks_from_journal") else None
+    if a.get("prechecks_from_journal") and not isinstance(pre, dict):
+        raise Failed("journal", "the journal holds no pre_state (prechecks did not run)")
+    images = read_json(a["images_file"]) if a.get("images_file") else {}
+    excl = set(x for x in (a.get("exclude") or "").split(",") if x)
+    # phase2-spec 1.2: --volumes bridge_secrets,bridge_data[,edge_data][,pki],
+    # written in that order; --exempt-nodes leaves the in-stack node out of
+    # the RF digest and rows of a point that holds edge_data.
+    want = set(("opt-sigrift-pki" if x == "pki" else x)
+               for x in (a.get("volumes") or "bridge_secrets,bridge_data").split(",") if x)
+    if not {"bridge_secrets", "bridge_data"} <= want or not want <= set(AR_PARTS):
+        raise Failed("files", "--volumes names an unknown part")
+    order = [v for v in AR_PARTS if v in want]
+    exempt = [x for x in (a.get("exempt_nodes") or "").split(",") if x] \
+        if "edge_data" in want else []
+    frm, to = a["from"], (None if a.get("to") in (None, "-", "") else a["to"])
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(CLOCK()))
+    base = "%s-%s-full" % (stamp, re.sub(r"[^A-Za-z0-9._-]", "_", frm or "unknown"))
+    rid, n = base, 1
+    while os.path.lexists(os.path.join(root, rid)) or os.path.lexists(
+            os.path.join(root, ".pruning-" + rid)):
+        n += 1
+        rid = "%s-%d" % (base, n)
+    path = os.path.join(root, rid)
+    tmp_lines = os.path.join(d, LOGS, ".rp-%s.rf.lines" % rid)
+    make_dirs(os.path.join(d, LOGS))
+    # The name goes into the journal before the directory exists (E21).
+    journal_put(d, "rp_partial", {"id": rid, "root": root})
+    reserve = reserve_for(root)
+    try:
+        if os.path.exists(tmp_lines):
+            os.unlink(tmp_lines)
+        state = engine_stream("state", a["image"], project, {"env": {}, "rf_rows": True,
+                                                             "exempt_nodes": exempt},
+                              lines_path=tmp_lines)
+        rows = rf_rows_from_lines(tmp_lines)
+        os.unlink(tmp_lines)
+        src = pre or state
+        make_dirs(root)
+        os.chmod(root, 0o700)
+        check_root(root, d)
+        os.mkdir(path, 0o700)
+        give_owner(path, owner_for(root))
+        key = rp_key(d, create=True)
+        if key is None:
+            raise Failed("files", ".sigrift/rp.key is not this user's 0600 32-byte key")
+        make_dirs(os.path.join(path, "volumes"))
+        vols = []
+
+        def monitor(_written):
+            return free_bytes(root) >= reserve
+
+        if free_bytes(root) < reserve:
+            raise EngineFailed("space", "reserve", "free space is below the reserve")
+        for vol in order:
+            excludes = (list(DATA_EXCLUDES) + [c for c, k in zip(CAPTURE_DIRS, ("iq", "pcap"))
+                                               if k in excl]) if vol == "bridge_data" else []
+            arch = os.path.join(path, "volumes", vol + ".tar.gz")
+            mem = os.path.join(path, "volumes", vol + ".members.json")
+            say("    restore point: %s" % vol)
+            r = engine_stream("snapshot-volume", a["image"], project,
+                              {"excludes": excludes}, volume=vol, out_path=arch,
+                              lines_path=mem, monitor=monitor, label="restore point",
+                              db_bytes=((src.get("db") or {}).get("bytes") or 0))
+            if r["_d_sha256"] != r["archive_sha256"] or r["_d_bytes"] != r["archive_bytes"] or \
+                    r["_m_sha256"] != r["members_sha256"]:
+                raise EngineFailed("stream", "integrity", "the %s archive does not match what "
+                                                          "the engine sent" % vol)
+            entry = {"docker_volume": None, "host_path": PKI_HOST_DIR, "owners": True} \
+                if vol == "opt-sigrift-pki" else {}
+            vols.append(dict({"name": vol, "docker_volume": project_volumes(project).get(vol),
+                         "archive": "volumes/%s.tar.gz" % vol,
+                         "archive_sha256": r["archive_sha256"],
+                         "archive_bytes": r["archive_bytes"], "bytes_raw": r["bytes_raw"],
+                         "members": r["members"], "members_file_sha256": r["members_sha256"],
+                         "excludes": excludes,
+                         "keep_back": (list(DATA_KEEP_BACK) + [c for c in CAPTURE_DIRS
+                                                               if c in excludes])
+                         if vol == "bridge_data" else [],
+                         "classes": r.get("classes"), "ratio": r.get("ratio"),
+                         "skipped": r.get("skipped"), "uid_gid_seen": r.get("uid_gid_seen")},
+                             **entry))
+        files = []
+        for f in fp.manifest.get("files") or []:
+            rel = f["path"]
+            if "symlink" in f:
+                continue
+            if rel not in SNAPSHOT_FILES:
+                raise Failed("files", "the files-only restore point names %s" % rel)
+            data = read_nofollow(os.path.join(fp.path, "files", rel))
+            if sha256_bytes(data) != f.get("sha256"):
+                raise Failed("files", "%s of %s does not match its manifest" % (rel, fp.id))
+            target = os.path.join(path, "files", rel)
+            make_dirs(os.path.dirname(target))
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            files.append({"path": rel, "sha256": f["sha256"], "bytes": len(data),
+                          "mode": f.get("mode"), "via_helper": bool(f.get("via_helper")),
+                          "restore_on_rollback": rel in RESTORE_ON_ROLLBACK})
+        rows_bytes = (json.dumps(rows, sort_keys=True) + "\n").encode()
+        write_bytes_new(os.path.join(path, "rf_rows.json"), rows_bytes)
+        for r_, dirs, _ in os.walk(path):
+            fsync_dir(r_)
+        compose = os.path.join(fp.path, "files", "docker-compose.yml")
+        canon = compose_canon(read_text(compose) or "", os.environ.get(
+            "LC_COMPOSE_TEMPLATES", "")) if os.path.exists(compose) else {}
+        captures = dict(src.get("captures") or {})
+        captures["mode"] = "excluded" if {"iq", "pcap"} <= excl else (
+            "partly excluded" if excl else "included")
+        captures["excluded"] = sorted(excl)
+        manifest = {
+            "format": 1, "kind": "full", "id": rid, "reason": a["reason"],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0)),
+            "seconds": int(CLOCK() - t0), "journal_id": a["journal_id"],
+            "from_version": frm, "to_version": to, "install_id": a["install_id"],
+            "project": project, "installer_release": a.get("installer_release") or
+            os.environ.get("INSTALLER_RELEASE") or "dev",
+            "files_snapshot": fp.id, "images": images or {}, "engine_image": a["image"],
+            "schema_version": src.get("schema"),
+            "db": {"present": (src.get("db") or {}).get("present"),
+                   "encrypted": (src.get("db") or {}).get("encrypted"),
+                   "quick_check": (src.get("db") or {}).get("quick_check"),
+                   "bytes": (src.get("db") or {}).get("bytes"),
+                   "wal_bytes_after_checkpoint": (src.get("db") or {}).get("wal_bytes")},
+            "audit": dict((k, (src.get("audit") or {}).get(k)) for k in (
+                "source", "result", "entries", "head_id", "head_tag")),
+            "marks": src.get("marks"),
+            "rf_summary": dict((state.get("rf") if exempt else src.get("rf")) or
+                               state.get("rf") or {}, rows_file_sha256=sha256_bytes(rows_bytes)),
+            "nodes": state.get("nodes") or [],
+            "kept_out": kept_out_of(state),
+            "security": src.get("security"), "counts": src.get("counts"),
+            "captures": captures, "component_schemas": {},
+            "fingerprints": src.get("fingerprints") or {},
+            "files": files, "missing": [m_ for m_ in fp.manifest.get("missing") or []
+                                        if m_ in SNAPSHOT_FILES],
+            "volumes": vols, "compose_template_sha256": canon.get("sha256")}
+        if a.get("install_type"):
+            manifest["install_type"] = a["install_type"]
+        if a.get("git_commit") is not None:
+            manifest["git_commit"] = a["git_commit"] or None
+        mbytes = (json.dumps(manifest, indent=1, sort_keys=True) + "\n").encode()
+        atomic_write(os.path.join(path, "manifest.json"), mbytes, 0o600)
+        atomic_write(os.path.join(path, "COMPLETE"), (mac_of(key, mbytes) + "\n").encode(), 0o600)
+        fsync_dir(root)
+    except EngineFailed as e:
+        rmtree(path)
+        fsync_dir(root)
+        if e.kind == "space" or e.code == "no-space":
+            sys.stderr.write("kind=space: free space on %s fell below the %s reserve while the "
+                             "restore point was written\n" % (root, human(reserve)))
+            put_result({"ok": False, "kind": "space", "root": root, "reserve": reserve})
+            sys.exit(EXIT_RESERVE)
+        sys.stderr.write("kind=%s: %s\n" % (e.kind if e.kind in ("stream", "files") else "engine",
+                                            e))
+        put_result({"ok": False, "kind": e.kind, "code": e.code, "error": str(e)})
+        sys.exit(1)
+    except OSError as e:
+        rmtree(path)
+        if e.errno == errno.ENOSPC:
+            sys.stderr.write("kind=space: %s is full\n" % root)
+            put_result({"ok": False, "kind": "space", "root": root})
+            sys.exit(EXIT_RESERVE)
+        sys.stderr.write("kind=files: %s\n" % e)
+        put_result({"ok": False, "kind": "files", "error": str(e)})
+        sys.exit(1)
+    except Failed as e:
+        rmtree(path)
+        sys.stderr.write("kind=%s: %s\n" % (e.kind, e))
+        put_result({"ok": False, "kind": e.kind, "error": str(e)})
+        sys.exit(1)
+    ids = owner_for(root)
+    if ids:
+        # A root run: the point stays readable by the folder's owner.
+        for r_, dirs, names_ in os.walk(path):
+            for n_ in dirs + names_:
+                give_owner(os.path.join(r_, n_), ids)
+    j = journal_load(d)
+    j["restore_point"] = rid
+    j["restore_point_root"] = root
+    # COMPLETE now: no longer a partial point an interrupted run may delete.
+    j["rp_partial"] = None
+    journal_save(d, j)
+    put_result({"ok": True, "id": rid, "root": root, "bytes": tree_bytes(path),
+                "seconds": int(CLOCK() - t0)})
+
+
+def kept_out_of(state):
+    """backups/ and exports/ of bridge_data: never in a point or an archive
+    (G15), their sizes named by the export."""
+    ex = (((state.get("sizes") or {}).get("bridge_data") or {}).get("excluded") or {})
+    return {"backups_bytes": ex.get("backups") or 0, "exports_bytes": ex.get("exports") or 0}
+
+
+def write_bytes_new(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def cmd_rp_delete_partial(a):
+    d = os.path.realpath(a["dir"])
+    rid = a["id"]
+    for root in rp_roots(d):
+        path = os.path.join(root, rid)
+        if os.path.isdir(path):
+            # A COMPLETE file means rp-create finished it: never deleted as
+            # a partial one, also when its MAC cannot be checked now (an
+            # unreadable rp.key); --list-snapshots --verify shows it.
+            if os.path.lexists(os.path.join(path, "COMPLETE")):
+                note("restore point %s has a COMPLETE file, so it is kept (not deleted as a "
+                     "partial one)." % rid)
+                put_result({"ok": True, "id": rid, "kept": True})
+                return
+            rmtree(path)
+            fsync_dir(root)
+    put_result({"ok": True, "id": rid})
+
+
+def cmd_rp_verify(a):
+    d = os.path.realpath(a["dir"])
+    p = point_or_refuse(d, a["id"])
+    check_root(p.root, d)
+    m = verified_manifest(d, p)
+    problem = verify_point(p, m, archives=False)
+    if problem:
+        refuse("restore point %s is damaged (%s), so it is not used." % (p.id, problem),
+               next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+    env = env_effective(env_text_of(p))
+    bad = [k for k in COMPOSE_KEYS if env.get(k)]
+    if bad:
+        refuse("the .env of restore point %s sets %s, which would make Compose start other "
+               "files than the installer's; a rollback never starts them." % (p.id, bad[0]),
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    put_result({"ok": True, "id": p.id, "from_version": m.get("from_version"),
+                "to_version": m.get("to_version"), "images": m.get("images"),
+                "schema_version": m.get("schema_version")})
+
+
+def verify_point(p, m, archives=False):
+    """None, or what does not match the manifest of full point P."""
+    for f in m.get("files") or []:
+        if f.get("path") not in SNAPSHOT_FILES:
+            return "it names a file outside the installer's set: %s" % f.get("path")
+        try:
+            if sha256_bytes(read_nofollow(os.path.join(p.path, "files", f["path"]))) != \
+                    f.get("sha256"):
+                return "files/%s does not match its manifest" % f["path"]
+        except OSError:
+            return "files/%s does not match its manifest" % f["path"]
+    for x in m.get("missing") or []:
+        if x not in SNAPSHOT_FILES:
+            return "it names a file outside the installer's set: %s" % x
+    for v in m.get("volumes") or []:
+        mem = os.path.join(p.path, "volumes", v["name"] + ".members.json")
+        arch = os.path.join(p.path, v.get("archive") or "")
+        try:
+            if sha256_bytes(read_nofollow(mem, 1 << 34)) != v.get("members_file_sha256"):
+                return "volumes/%s.members.json does not match its manifest" % v["name"]
+            if os.lstat(arch).st_size != v.get("archive_bytes"):
+                return "%s does not match its manifest" % v.get("archive")
+            if archives and not archive_ok(arch, mem, v):
+                return "%s does not match its manifest" % v.get("archive")
+        except OSError:
+            return "%s does not match its manifest" % (v.get("archive") or v["name"])
+    try:
+        if sha256_bytes(read_nofollow(os.path.join(p.path, "rf_rows.json"))) != \
+                (m.get("rf_summary") or {}).get("rows_file_sha256"):
+            return "rf_rows.json does not match its manifest"
+    except OSError:
+        return "rf_rows.json does not match its manifest"
+    return None
+
+
+def archive_ok(arch, mem, v):
+    """Re-read an archive: its sha256, the gzip CRC, every member against the
+    members file (in order, by size and sha256)."""
+    import tarfile
+    h = hashlib.sha256()
+
+    class Hashing(object):
+        def __init__(self, f):
+            self.f = f
+
+        def read(self, n=-1):
+            b = self.f.read(n)
+            h.update(b)
+            return b
+
+    try:
+        with open(mem, "rb") as f:
+            members = [json.loads(line) for line in f if line.strip()]
+        with open(arch, "rb") as raw:
+            hr = Hashing(raw)
+            import gzip
+            with gzip.GzipFile(fileobj=hr, mode="rb") as gz:
+                with tarfile.open(fileobj=gz, mode="r|") as tar:
+                    i = 0
+                    for ti in tar:
+                        if i >= len(members) or ti.name.rstrip("/") != members[i]["p"]:
+                            return False
+                        if ti.isreg():
+                            fh = tar.extractfile(ti)
+                            hh = hashlib.sha256()
+                            for b in iter(lambda: fh.read(FRAME_MAX), b""):
+                                hh.update(b)
+                            if hh.hexdigest() != members[i].get("h"):
+                                return False
+                        i += 1
+                gz.read()
+            while hr.read(FRAME_MAX):
+                pass
+        return i == len(members) and h.hexdigest() == v.get("archive_sha256")
+    except (OSError, EOFError, ValueError, tarfile.TarError):
+        return False
+
+
+def point_entry(d, p, dt, protect_journal, newest_full, verify):
+    m = p.manifest
+    status = p.status
+    verified = None
+    if verify and p.complete:
+        if p.kind == "full":
+            verified = verify_point(p, m, archives=True) is None
+        else:
+            verified = all(os.path.isfile(os.path.join(p.path, "files", f["path"])) and
+                           sha256_file(os.path.join(p.path, "files", f["path"])) == f.get("sha256")
+                           for f in m.get("files") or [] if "symlink" not in f)
+        if not verified:
+            status = "damaged"
+    protected = None
+    if p.id in protect_journal:
+        protected = "journal"
+    elif p.kind == "full" and m.get("reason") == "manual":
+        protected = "manual"
+    elif p.id == newest_full:
+        protected = "newest"
+    captures = (m.get("captures") or {}).get("mode") if p.kind == "full" else None
+    return {"id": p.id, "kind": p.kind, "reason": m.get("reason"),
+            "complete": status == "COMPLETE", "status": status, "damaged": status == "damaged",
+            "verified": verified, "from_version": m.get("from_version"),
+            "to_version": m.get("to_version"), "created_at": m.get("created_at"),
+            "bytes": p.bytes(), "captures": captures,
+            "root": p.root, "default_target": p.id == dt, "protected": protected,
+            "rollback_cmd": ("bash install-release.sh --rollback %s" % p.id)
+            if p.kind == "full" and status == "COMPLETE" else None}
+
+
+def list_snapshots_json(d, verify=None):
+    pts = list_points(d)
+    dt = default_target(d)
+    jp = journal_points(d)
+    newest = next((p.id for p in pts if p.kind == "full" and p.complete), None)
+    j = journal_load(d) or {}
+    partial = (j.get("rp_partial") or {}).get("id") if isinstance(j.get("rp_partial"),
+                                                                   dict) else None
+    rps, inc = [], []
+    for p in pts:
+        if p.status == "incomplete":
+            inc.append({"id": p.id, "path": p.path, "bytes": p.bytes(),
+                        "journal": j.get("id") if p.id == partial else None})
+            continue
+        v = verify is True or (isinstance(verify, str) and verify == p.id)
+        rps.append(point_entry(d, p, dt, jp, newest, v))
+    facts = {}
+    try:
+        facts = json.loads(os.environ.get("LC_FACTS_JSON") or "{}") or {}
+    except ValueError:
+        facts = {}
+    replaced = [{"id": r.get("id"), "volume": r.get("volume"), "phase": r.get("phase"),
+                 "bytes": r.get("bytes")}
+                for r in ((facts.get("lifecycle") or {}).get("replaced") or [])]
+    fp = [{"id": x.get("id"), "bytes": x.get("bytes"),
+           "finish_cmd": "bash install-release.sh --rollback --finish"}
+          for x in (host_record(d) or {}).get("finish_pending") or [] if isinstance(x, dict)]
+    return {"format": 1, "restore_points": rps, "incomplete_restore_points": inc,
+            "replaced": replaced, "finish_pending": fp,
+            "missing_roots": points_root_missing(d)}
+
+
+def cmd_rp_list(a):
+    d = os.path.realpath(a["dir"])
+    verify = a.get("verify")
+    out = list_snapshots_json(d, verify)
+    put_result(out)
+    if a.get("json"):
+        say(json.dumps(out, indent=1, sort_keys=True))
+    else:
+        for r in out["restore_points"]:
+            flags = []
+            if r["default_target"]:
+                flags.append("default --rollback target")
+            if r["protected"] == "journal":
+                flags.append("protected: journal")
+            if r["protected"] == "manual":
+                flags.append("manual: never pruned")
+            say("%-36s %-15s %-9s -> %-9s %s  %9s  %-8s %-9s %s%s" % (
+                r["id"], "%s/%s" % (r["kind"], r["reason"] or "-"), r["from_version"] or "-",
+                r["to_version"] or "-", (r["created_at"] or "")[:16], human(r["bytes"]),
+                r["captures"] or "-", r["status"], r["root"],
+                ("  (" + ", ".join(flags) + ")") if flags else ""))
+        for r in out["incomplete_restore_points"]:
+            say("%-36s incomplete  %s" % (r["id"], r["path"]))
+        for r in out["replaced"]:
+            say("replaced %s in %s (phase %s, %s): bash install-release.sh --rollback --finish"
+                % (r["id"], r["volume"], r["phase"], human(r["bytes"])))
+    if verify and any(r["status"] == "damaged" for r in out["restore_points"]):
+        sys.exit(1)
+
+
+def cmd_rp_resolve(a):
+    d = os.path.realpath(a["dir"])
+    cur = a["current"]
+    rid = a.get("id")
+    j = journal_load(d) or {}
+    interrupted = j.get("op") == "upgrade" and j.get("state") in ("running", "failed",
+                                                                  "verify_failed") and \
+        j.get("restore_point")
+    if interrupted:
+        if rid and rid != j["restore_point"]:
+            refuse("restore point %s is not in %s (the interrupted upgrade can only go back to "
+                   "%s)." % (rid, ", ".join(rp_roots(d)), j["restore_point"]),
+                   next_cmd=lifecycle_cmd("--list-snapshots", d))
+        rid = j["restore_point"]
+    if not rid:
+        rid = default_target(d)
+        if not rid:
+            hist = (host_record(d) or {}).get("history") or []
+            last = next((e for e in reversed(hist) if isinstance(e, dict) and not (
+                e.get("op") == "rollback" and e.get("result") not in (None, "ok"))), {})
+            why = ("the last operation was a rollback to %s" % last.get("to")
+                   if last.get("op") == "rollback" else
+                   "no upgrade of this install took a full restore point (an older installer "
+                   "installed it, or it ran with --no-snapshot)")
+            refuse("there is nothing to roll back here: %s." % why,
+                   next_cmd=lifecycle_cmd("--list-snapshots", d))
+    p = point_or_refuse(d, rid)
+    m = verified_manifest(d, p)
+    rec = host_record(d) or {}
+    project = a.get("project") or rec.get("project") or j.get("project") or \
+        env_effective(read_text(os.path.join(d, ".env")) or "").get("COMPOSE_PROJECT_NAME")
+    iid = install_id(d)
+    foreign = None
+    replaced = pre_import_entry(d, p, m) if a.get("id") else None
+    if replaced is not None:
+        # phase2-spec 1.2: the point an import with --replace took of the
+        # install it replaced; a rollback to it restores that identity.
+        iid = replaced.get("install_id") or iid
+    if m.get("project") and project and m["project"] != project:
+        foreign = "project %s" % m["project"]
+    elif m.get("install_id") and iid and m["install_id"] != iid:
+        foreign = "another install (id %s…)" % m["install_id"][:8]
+    else:
+        try:
+            vols = project_volumes(project) if project else {}
+        except DockerError:
+            vols = {}
+        names = [v.get("docker_volume") for v in m.get("volumes") or []]
+        if vols and any(n and n not in vols.values() for n in names):
+            foreign = "other volumes (%s)" % ", ".join(n for n in names if n)
+    if foreign:
+        refuse("restore point %s belongs to %s, not to this install." % (p.id, foreign),
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    c = version_cmp(m.get("from_version"), cur)
+    if c is not None and c > 0:
+        refuse("restore point %s holds %s, newer than the installed %s; a rollback never goes "
+               "forward." % (p.id, m.get("from_version"), cur),
+               next_cmd="SIGRIFT_VERSION=%s bash install-release.sh" % m.get("from_version"))
+    put_result({"ok": True, "id": p.id, "root": p.root, "from_version": m.get("from_version"),
+                "to_version": m.get("to_version"), "reason": m.get("reason"),
+                "created_at": m.get("created_at"), "default": rid == default_target(d),
+                "interrupted_upgrade": bool(interrupted), "images": m.get("images"),
+                "schema_version": m.get("schema_version"), "replaced": replaced})
+
+
+def pre_import_entry(d, p, m):
+    """The `replaced` of the import history entry that took pre-import
+    point P, when P's install_id is that entry's (else None)."""
+    if m.get("reason") != "pre-import":
+        return None
+    for e in reversed((host_record(d) or {}).get("history") or []):
+        if not isinstance(e, dict) or e.get("op") != "import":
+            continue
+        rep_ = e.get("replaced")
+        if isinstance(rep_, dict) and rep_.get("restore_point") == p.id:
+            if rep_.get("install_id") and rep_.get("install_id") == m.get("install_id"):
+                return rep_
+            return None
+    return None
+
+
+def cmd_rp_prune(a):
+    d = os.path.realpath(a["dir"])
+    if a.get("id"):
+        # ar-drop-rp (phase2-spec 6.1): exactly that export point.
+        for p in list_points(d):
+            if p.id == a["id"] and p.kind == "full":
+                if p.manifest.get("reason") not in ("export", None) and p.complete:
+                    raise Failed("files", "restore point %s is not an export point" % p.id)
+                prune_point(p)
+                put_result({"removed": [p.id]})
+                return
+        put_result({"removed": []})
+        return
+    protect = set(x for x in (a.get("protect") or "").split(",") if x)
+    protect |= journal_points(d)
+    for root in rp_roots(d):
+        try:
+            for n in os.listdir(root):
+                if n.startswith(".pruning-"):
+                    rmtree(os.path.join(root, n))
+        except OSError:
+            pass
+    pts = [p for p in list_points(d) if p.kind == "full" and p.complete]
+    keep = set(protect)
+    # phase2-spec 1.2 (E21): an export point is never kept by retention
+    # (ar-drop-rp deletes it); a pre-import point is kept like a manual one.
+    keepable = [p for p in pts if p.manifest.get("reason") != "export"]
+    if keepable:
+        keep.add(keepable[0].id)
+    ups = [p for p in pts if p.manifest.get("reason") == "upgrade"]
+    keep |= set(p.id for p in ups[:2])
+    dt = default_target(d)
+    if dt:
+        keep.add(dt)
+    removed = []
+    for p in pts:
+        if p.id in keep or p.manifest.get("reason") in ("manual", "pre-import"):
+            continue
+        prune_point(p)
+        removed.append(p.id)
+        say("pruned %s" % p.id)
+    put_result({"removed": removed})
+
+
+# ── stage, swap and the other volume ops ────────────────────────────────
+
+
+def both(op, a, extra, order=("bridge_secrets", "bridge_data")):
+    out = {}
+    for vol in order:
+        out[vol] = clean_reply(engine_stream(op, a["image"], a["project"], dict(extra),
+                                             volume=vol))
+    return out
+
+
+def point_parts(m):
+    """The parts of a full point in write order (phase2-spec 1.2): every
+    volumes[] entry, bridge_secrets and bridge_data always."""
+    names = [v.get("name") for v in m.get("volumes") or [] if isinstance(v, dict)]
+    return [x for x in AR_PARTS if x in names or x in ("bridge_secrets", "bridge_data")]
+
+
+def parts_arg(a, default=("bridge_secrets", "bridge_data")):
+    """--volumes LIST (pki = opt-sigrift-pki), in write order; else DEFAULT."""
+    if not a.get("volumes"):
+        return tuple(default)
+    want = set("opt-sigrift-pki" if x == "pki" else x for x in a["volumes"].split(",") if x)
+    if not want <= set(AR_PARTS):
+        raise Failed("files", "--volumes names an unknown part")
+    return tuple(x for x in AR_PARTS if x in want)
+
+
+def manifest_for(d, rp_id):
+    p = point_or_refuse(d, rp_id)
+    check_root(p.root, d)
+    return p, verified_manifest(d, p)
+
+
+def vol_entry(m, vol):
+    for v in m.get("volumes") or []:
+        if v.get("name") == vol:
+            return v
+    raise Failed("files", "the manifest has no %s volume" % vol)
+
+
+def cmd_stage(a):
+    d = os.path.realpath(a["dir"])
+    p, m = manifest_for(d, a["rp"])
+    reserve = int(a.get("reserve") or 0)
+    out = {}
+    for vol in point_parts(m):
+        v = vol_entry(m, vol)
+        mem = os.path.join(p.path, "volumes", vol + ".members.json")
+        arch = os.path.join(p.path, v["archive"])
+        if sha256_file(mem) != v["members_file_sha256"]:
+            refuse("restore point %s is damaged (volumes/%s.members.json does not match its "
+                   "manifest), so it is not used." % (p.id, vol),
+                   next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+        req = {"rb_id": a["rb_id"], "restore_point": p.id,
+               "archive_sha256": v["archive_sha256"], "archive_bytes": v["archive_bytes"],
+               "members_file_sha256": v["members_file_sha256"], "keep_back": v.get("keep_back"),
+               "excludes": v.get("excludes"), "reserve_bytes": reserve}
+        try:
+            r = engine_stream("stage", a["image"], a["project"], req, volume=vol,
+                              sections=[mem, arch], label="staging",
+                              fallback=a.get("fallback_image"))
+        except EngineFailed as e:
+            if e.code == "no-space":
+                sys.stderr.write("kind=space: %s\n" % e)
+                put_result({"ok": False, "kind": "space", "volume": vol})
+                sys.exit(EXIT_RESERVE)
+            raise
+        out[vol] = clean_reply(r)
+    put_result({"ok": True, "volumes": out})
+
+
+def cmd_verify_staged(a):
+    d = os.path.realpath(a["dir"])
+    p, m = manifest_for(d, a["rp"])
+    out, bad = {}, []
+    for vol in point_parts(m):
+        v = vol_entry(m, vol)
+        mem = os.path.join(p.path, "volumes", vol + ".members.json")
+        r = clean_reply(engine_stream("verify-staged", a["image"], a["project"],
+                                      {"rb_id": a["rb_id"], "restore_point": p.id,
+                                       "members_file_sha256": v["members_file_sha256"]},
+                                      volume=vol, sections=[mem]))
+        out[vol] = r
+        bad += ["%s:%s" % (vol, x) for x in r.get("mismatches") or []]
+    put_result({"ok": not bad, "mismatches": bad[:20], "volumes": out})
+
+
+def cmd_carry(a):
+    d = os.path.realpath(a["dir"])
+    rb = a["rb_id"]
+    if not ID_RE.match(rb):
+        raise Failed("usage", "not a rollback id")
+    r = clean_reply(engine_stream("carry", a["image"], a["project"],
+                                  {"rb_id": rb, "no_carry": bool(a.get("no_carry")),
+                                   "keep_current_master": a.get("keep_current_master") == "1"}))
+    logs = os.path.join(d, LOGS, "rollback-%s" % rb)
+    make_dirs(logs)
+    write_json(os.path.join(logs, "carry.json"), r)
+    put_result(r)
+
+
+def audit_append_import(a, d):
+    """audit-append --import-jid J --rp-image IMG --relation R --carried JSON
+    [--operator NAME]: an import --replace's carry recorded in the staged
+    copy's audit chain (installer_import, its target the import id), with
+    the audit key of the imported .env (ops/J/env.new), so a later import of
+    the same archive finds the current data the newer copy and carries again
+    (phase2-notes F-D22)."""
+    jid = os.path.basename(a["import_jid"])
+    try:
+        text = read_nofollow(os.path.join(state_root(d), AR_OPS_DIR, jid, "env.new")).decode(
+            "utf-8", "replace")
+    except (OSError, ValueError):
+        text = ""
+    env = dict((k, v) for k, v in env_effective(text).items()
+               if k in AUDIT_KEYS + ("BRIDGE_MASTER_KEY",) and v)
+    try:
+        carried = json.loads(a.get("carried") or "{}")
+    except ValueError:
+        carried = {}
+    probe = import_probe(d, jid)
+    req = {"env": env, "rb_id": jid, "action": "installer_import",
+           "operator": a.get("operator") if a.get("operator") in (
+               "install-release.sh", "quickstart.sh") else "install-release.sh",
+           "details": {"import_id": jid,
+                       "archive_id": (probe.get("metadata") or {}).get("archive_id"),
+                       "relation": a.get("relation") or None,
+                       "carried": carried if isinstance(carried, dict) else {}}}
+    put_result(clean_reply(engine_stream("audit-append", a["rp_image"], a["project"], req)))
+
+
+def cmd_audit_append(a):
+    d = os.path.realpath(a["dir"])
+    if a.get("import_jid"):
+        return audit_append_import(a, d)
+    p, m = manifest_for(d, a["rp"])
+    exp = read_json(a["export"]) if a.get("export") else None
+    if exp is None and a.get("export"):
+        exp = export_summary(a["export"])
+    env = dict((k, v) for k, v in env_effective(env_text_of(p)).items()
+               if k in AUDIT_KEYS + ("BRIDGE_MASTER_KEY",) and v)
+    req = {"env": env, "rb_id": a["rb_id"], "restore_point": p.id,
+           "from_version": a.get("from") or (journal_load(d) or {}).get("current_version"),
+           "to_version": m.get("from_version"),
+           "discarded": {"first_id": (exp or {}).get("first_id"),
+                         "last_id": (exp or {}).get("last_id"),
+                         "count": (exp or {}).get("rows", (exp or {}).get("count")),
+                         "last_hmac": (exp or {}).get("last_hmac"),
+                         "export_sha256": (exp or {}).get("sha256")}}
+    r = clean_reply(engine_stream("audit-append", a["rp_image"], a["project"], req))
+    put_result(r)
+
+
+def export_summary(path):
+    h = hashlib.sha256()
+    first = last = last_hmac = None
+    n = 0
+    with open(path, "rb") as f:
+        for line in f:
+            h.update(line)
+            obj = json.loads(line)
+            first = obj.get("id") if first is None else first
+            last, last_hmac = obj.get("id"), obj.get("hmac_chain")
+            n += 1
+    return {"sha256": h.hexdigest(), "first_id": first, "last_id": last, "rows": n,
+            "last_hmac": last_hmac}
+
+
+def swap_extra(d, a):
+    extra = {"rb_id": a["rb_id"]}
+    if a.get("rp"):
+        p, m = manifest_for(d, a["rp"])
+        v = vol_entry(m, "bridge_data")
+        extra.update({"restore_point": p.id, "from_version": m.get("from_version"),
+                      "keep_back": v.get("keep_back"),
+                      "captures_excluded": "pcap_captures" in (v.get("excludes") or []),
+                      "pcap_after": (m.get("captures") or {}).get("pcap_after") or 0})
+    return extra
+
+
+def marker_fields(a):
+    """Phase 2's marker op and id (move: the archive id; import: the
+    import's id) and the extra parts to mark (edge_data)."""
+    extra = {}
+    if a.get("op"):
+        extra["marker_op"] = a["op"]
+    if a.get("id"):
+        extra["marker_id"] = a["id"]
+    parts = [x for x in (a.get("volumes") or "").split(",") if x == "edge_data"]
+    return extra, parts
+
+
+def cmd_mark(a):
+    d = os.path.realpath(a["dir"])
+    extra = swap_extra(d, a) if a.get("rb_id") else {"rb_id": a.get("id")}
+    j = journal_load(d) or {}
+    extra["created_at"] = now_utc()
+    if a.get("rb_id") and j.get("rb_id") == a["rb_id"] and j.get("restore_point"):
+        extra.setdefault("restore_point", j["restore_point"])
+    if a.get("op") in ("move", "import"):
+        extra["restore_point"] = a.get("rp")
+    mf, parts = marker_fields(a)
+    extra.update(mf)
+    put_result(clean_reply(engine_stream("mark", a["image"], a["project"], extra,
+                                         parts=parts)))
+
+
+def cmd_unmark(a):
+    mf, parts = marker_fields(a)
+    req = {"rb_id": a.get("rb_id") or a.get("id")}
+    req.update(mf)
+    put_result(clean_reply(engine_stream("unmark", a["image"], a["project"], req,
+                                         parts=parts)))
+
+
+def cmd_swap(a):
+    d = os.path.realpath(a["dir"])
+    put_result(both("swap", a, swap_extra(d, a), order=parts_arg(a)))
+
+
+def cmd_unswap(a):
+    d = os.path.realpath(a["dir"])
+    put_result(both("unswap", a, swap_extra(d, a), order=tuple(reversed(parts_arg(a)))))
+
+
+def cmd_discard_staging(a):
+    put_result(both("discard-staging", a, {"rb_id": a["rb_id"]}, order=parts_arg(a)))
+
+
+def cmd_finish(a):
+    extra = {"ids": [a["id"]]} if a.get("id") else {}
+    r = both("finish", a, extra, order=tuple(reversed(parts_arg(a))))
+    r["freed_bytes"] = sum(x.get("freed_bytes") or 0 for x in r.values())
+    put_result(r)
+
+
+def cmd_reclaim(a):
+    put_result(clean_reply(engine_stream("reclaim", a["image"], a["project"], {
+        "name": a["name"], "bytes": int(a["bytes"]), "mtime_ns": int(a["mtime_ns"])})))
+
+
+def cmd_export_audit(a):
+    out = a["out"]
+    if os.path.exists(out):
+        os.unlink(out)
+    r = engine_stream("export-audit", a["image"], a["project"],
+                      {"after": int(a["after"]), "rb_id": a["rb_id"]}, out_path=out)
+    if r["_d_sha256"] != r.get("sha256"):
+        raise Failed("stream", "the exported audit rows do not match what the engine sent")
+    put_result(clean_reply(r))
+
+
+def cmd_verify_carry(a):
+    d = os.path.realpath(a["dir"])
+    path = os.path.join(d, LOGS, "rollback-%s" % a["rb_id"], "carry.json")
+    data = read_nofollow(path)
+    r = clean_reply(engine_stream("verify-carry", a["image"], a["project"], {},
+                                  sections=[data]))
+    put_result(r)
+    if not r.get("carry_ok"):
+        sys.exit(1)
+
+
+def cmd_rf_check(a):
+    d = os.path.realpath(a["dir"])
+    p, m = manifest_for(d, a["rp"])
+    r = clean_reply(engine_stream("rf-check", a["image"], a["project"],
+                                  {"exempt_nodes": exempt_nodes_of(m)},
+                                  sections=[rp_rows(p)]))
+    put_result(r)
+
+
+# ── restore-files (E12, E35) ────────────────────────────────────────────
+
+
+def restore_paths_ok(m, allowed):
+    for f in (m.get("files") or []):
+        if f.get("path") not in allowed:
+            return f.get("path")
+    for x in m.get("missing") or []:
+        if x not in allowed:
+            return x
+    return None
+
+
+def place(d, rel, held):
+    if held and (rel == "docker-compose.yml" or rel in OVERRIDES):
+        return os.path.join(d, HELD, rel)
+    return os.path.join(d, rel)
+
+
+def write_file(path, data, mode, rel):
+    make_dirs(os.path.dirname(path))
+    try:
+        with open(path, "rb") as f:
+            if sha256_bytes(f.read()) == sha256_bytes(data):
+                return False
+    except OSError:
+        pass
+    if rel == "tls/key.pem":
+        mode = 0o600
+        if not os.access(os.path.dirname(path), os.W_OK):
+            tls_key_write(path, data)
+            return True
+    atomic_write(path, data, mode)
+    return True
+
+
+def cmd_restore_files(a):
+    d = os.path.realpath(a["dir"])
+    held = first_line(os.path.join(d, "docker-compose.yml")).startswith(HOLD_HEADER)
+    restored, removed = [], []
+    if a.get("files_snapshot"):
+        if not a.get("all"):
+            raise Failed("usage", "--files-snapshot needs --all")
+        p = files_point(d, a["files_snapshot"])
+        if p is None or not p.complete:
+            refuse("restore point %s is missing or incomplete, so --abort cannot put the files "
+                   "back." % a["files_snapshot"],
+                   next_cmd="ls -la %s/" % q(os.path.join(d, SNAPSHOTS)))
+        m = p.manifest
+        bad = restore_paths_ok(m, SNAPSHOT_FILES)
+        if bad:
+            refuse("restore point %s is damaged (it names a file outside the installer's set: "
+                   "%s), so it is not used." % (p.id, bad),
+                   next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+        plan = []
+        for f in m.get("files") or []:
+            if "symlink" in f:
+                continue
+            data = read_nofollow(os.path.join(p.path, "files", f["path"]))
+            if sha256_bytes(data) != f.get("sha256"):
+                refuse("restore point %s is damaged (%s does not match its manifest), so it is "
+                       "not used." % (p.id, f["path"]), next_cmd="ls -la " + q(p.path))
+            if f["path"] == "docker-compose.yml" and data.startswith(HOLD_HEADER.encode()):
+                refuse("restore point %s holds the hold stub as docker-compose.yml, so it is not "
+                       "used." % p.id, next_cmd=lifecycle_cmd("--status", d))
+            plan.append((f["path"], data, int(f.get("mode") or "0600", 8)))
+        for rel, data, mode in plan:
+            if write_file(place(d, rel, held), data, mode, rel):
+                restored.append(rel)
+        for rel in m.get("missing") or []:
+            target = place(d, rel, held)
+            if os.path.lexists(target) and not os.path.isdir(target):
+                os.unlink(target)
+                removed.append(rel)
+        put_result({"ok": True, "restored": restored, "removed": removed, "held": held})
+        return
+    p, m = manifest_for(d, a["rp"])
+    bad = restore_paths_ok(m, SNAPSHOT_FILES)
+    if bad:
+        refuse("restore point %s is damaged (it names a file outside the installer's set: %s), "
+               "so it is not used." % (p.id, bad),
+               next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+    env_text = verified_env_text(d, m, p)
+    text, kept, reverted, undone, creds, compose_bad = env_plan_for_rollback(d, m, p, env_text)
+    if compose_bad:
+        refuse("the .env of restore point %s sets %s, which would make Compose start other "
+               "files than the installer's; a rollback never starts them." % (p.id,
+                                                                             compose_bad[0]),
+               next_cmd=lifecycle_cmd("--list-snapshots", d))
+    plan = []
+    for f in m.get("files") or []:
+        if not f.get("restore_on_rollback") or f["path"] not in RESTORE_ON_ROLLBACK:
+            continue
+        if f["path"] == ".env":
+            # The text the plan was made from: read once, sha256-checked.
+            plan.append((".env", text.encode("utf-8"), 0o600))
+            continue
+        data = read_nofollow(os.path.join(p.path, "files", f["path"]))
+        if sha256_bytes(data) != f.get("sha256"):
+            refuse("restore point %s is damaged (files/%s does not match its manifest), so it "
+                   "is not used." % (p.id, f["path"]),
+                   next_cmd=lifecycle_cmd("--list-snapshots --verify", d))
+        plan.append((f["path"], data, int(f.get("mode") or "0600", 8)))
+    for rel, data, mode in plan:
+        target = place(d, rel, True)
+        if rel == ".env":
+            target = os.path.join(d, ".env")
+            cur = read_text(target)
+            if cur is not None and cur.encode("utf-8") == data:
+                continue
+            if cur is not None:
+                backup = "%s.bak.%s~" % (target, time.strftime("%Y%m%d-%H%M%S"))
+                n = 0
+                while os.path.lexists(backup):
+                    n += 1
+                    backup = "%s.bak.%s.%d~" % (target, time.strftime("%Y%m%d-%H%M%S"), n)
+                write_bytes_new(backup, cur.encode("utf-8"))
+            atomic_write(target, data, 0o600)
+            restored.append(rel)
+            continue
+        if write_file(target, data, mode, rel):
+            restored.append(rel)
+    for rel in m.get("missing") or []:
+        if rel not in RESTORE_ON_ROLLBACK:
+            continue
+        target = place(d, rel, True)
+        if os.path.lexists(target) and not os.path.isdir(target):
+            os.unlink(target)
+            removed.append(rel)
+    put_result({"ok": True, "restored": restored, "removed": removed, "env_kept": kept,
+                "env_reverted": reverted, "env_undone_with_upgrade": undone,
+                "env_credentials": creds})
+
+
+# ── images, health ──────────────────────────────────────────────────────
+
+
+def cmd_images_ensure(a):
+    d = os.path.realpath(a["dir"])
+    p, m = manifest_for(d, a["rp"])
+    out = {}
+    for svc in ("bridge", "gateway"):
+        img = (m.get("images") or {}).get(svc) or {}
+        ref, iid, digest = img.get("ref"), img.get("id"), img.get("digest")
+        if not ref or not iid:
+            out[svc] = "unknown"
+            continue
+        r = docker("image", "inspect", "--format", "{{.Id}}", ref)
+        cur = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+        if cur == iid:
+            out[svc] = "present"
+            continue
+        have = docker("image", "inspect", "--format", "{{.Id}}", iid).returncode == 0
+        if a.get("check"):
+            out[svc] = "local" if have else ("pullable" if digest else "missing")
+            continue
+        if not have and a.get("pull_allowed") and digest:
+            if docker("pull", digest, timeout=1800).returncode == 0:
+                have = docker("image", "inspect", "--format", "{{.Id}}", iid).returncode == 0
+                out[svc] = "pulled"
+        if not have:
+            refuse("the %s %s image (%s, %s) is not on this host and could not be pulled by its "
+                   "digest, and a rollback starts only the exact images of its restore point."
+                   % (m.get("from_version"), svc, ref, iid.replace("sha256:", "")[:12]),
+                   next_cmd="docker pull " + (digest or ref))
+        if docker("tag", iid, ref).returncode != 0:
+            raise Failed("docker", "docker tag %s %s failed" % (iid[:19], ref))
+        out[svc] = out.get(svc) or "retagged"
+    put_result(out)
+    if a.get("check") and any(v in ("missing", "pullable", "unknown") for v in out.values()):
+        sys.exit(1)
+
+
+def parse_docker_time(text):
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?", text or "")
+    if not m:
+        return None
+    import calendar
+    base = calendar.timegm(tuple(int(x) for x in m.groups()[:6]) + (0, 0, 0))
+    frac = float("0." + m.group(7)) if m.group(7) else 0.0
+    return base + frac
+
+
+def cmd_gateway_ever_healthy(a):
+    r = docker("inspect", "--format", "{{json .State}}", a["container"])
+    try:
+        state = json.loads(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else None
+    except ValueError:
+        state = None
+    since, child = epoch_of(a["since"]), epoch_of(a["child_start"])
+    if not isinstance(state, dict):
+        put_result({"answer": "no", "why": "no such container"})
+        return
+    started = parse_docker_time(state.get("StartedAt"))
+    if started is not None and child is not None and started < child:
+        put_result({"answer": "unwatched", "started_at": state.get("StartedAt")})
+        return
+    for e in ((state.get("Health") or {}).get("Log") or []):
+        t = parse_docker_time(e.get("Start"))
+        if e.get("ExitCode") == 0 and t is not None and since is not None and t >= since:
+            put_result({"answer": "yes", "at": e.get("Start")})
+            return
+    put_result({"answer": "no"})
+
+
+def epoch_of(text):
+    t = parse_docker_time(text)
+    return t if t is not None else epoch(text)
+
+
+# ── Phase 2: archives (phase2-spec 2.4, 3, 5.2) ─────────────────────────
+#
+# The host side of archive format v1. Steps 1-5 of the reader run here in
+# plain python (ar_host_header, a copy of the engine's ar_parse that a test
+# pins), so a hostile header is refused before any container starts. The
+# passphrase is read from fd 4 in this process only and goes to the engine
+# on its stdin as passphrase_b64; the archive data key DK lives in
+# <state>/ops/<jid>/archive.key while an export or import needs it.
+
+AR_MAGIC = b"SIGRIFT-ARCHIVE\x00"
+AR_OPS_DIR = "ops"
+AR_KEY = "archive.key"
+AR_WRAP = "wrap.json"
+AR_PROBE = "probe.json"
+AR_HOST_PART = "host-part.bin"
+AR_STAGED = "staged.json"
+AR_SEGMENT, AR_MEM_LOG2, AR_T, AR_LANES = 1048576, 18, 3, 4
+AR_ENGINE_OPS = ("ar-wrap", "ar-write", "ar-verify", "ar-probe", "ar-stage")
+AR_PP_MAX = 4098
+AR_PARTS = ("bridge_secrets", "bridge_data", "edge_data", "opt-sigrift-pki")
+AR_NAME = re.compile(r"(manifest\.json|rf_rows\.json|files/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*"
+                     r"|volumes/(bridge_secrets|bridge_data|edge_data|opt-sigrift-pki)"
+                     r"\.(members\.json|tar\.gz))")
+PKI_HOST = "/opt/sigrift/pki"
+EDGE_DIR = "/app/edge_data"
+PKI_DIR = "/v/pki"
+# 1a's KEY_CLASSES (lc_tool; scripts/tests/test_lifecycle_import_env.py pins
+# that they are equal), the classes of 4.2.
+KEY_CLASSES = {
+    "COMPOSE_PROJECT_NAME": "identity",
+    "BRIDGE_ENV": "setting", "BRIDGE_MODE": "setting",
+    "SIGRIFT_QUICKSTART_MODE": "setting", "UC_PORT": "setting",
+    "UC_CSP_MODE": "setting", "BRIDGE_SESSION_BINDING": "setting",
+    "BRIDGE_ALLOW_UNBOUND_NODE_KEYS": "setting",
+    "BRIDGE_TRUSTED_PROXIES": "setting", "SIGRIFT_TLS_SANS": "setting",
+    "BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP": "setting",
+    "SIGRIFT_PRESET": "setting", "UC_TLS_CERT": "setting", "UC_TLS_KEY": "setting",
+    "MLRF_NODE_ID": "setting", "MLRF_BT_ADAPTER": "setting",
+    "MLRF_BT_SCAN_INTERVAL": "setting", "MLRF_INPUT_SAMPLES": "setting",
+    "MLRF_MODEL_PATH": "setting", "MLRF_WIFI_BANDS": "setting",
+    "MLRF_WIFI_IFACE": "setting",
+    "SIGRIFT_BIND": "host", "SIGRIFT_BACKEND_SUBNET": "host",
+    "SIGRIFT_BACKEND_IP_RANGE": "host", "SIGRIFT_GATEWAY_BACKEND_IP": "host",
+    "BRIDGE_AUDIT_KEY": "data-bound", "BRIDGE_AUDIT_SECRET": "data-bound",
+    "BRIDGE_MFA_KEY": "data-bound", "BRIDGE_KEYSTORE_KEY": "data-bound",
+    "BRIDGE_BACKUP_ENCRYPTION_KEY": "data-bound",
+    "BRIDGE_DB_ENCRYPTION_KEY": "data-bound",
+    "BRIDGE_MASTER_KEY": "regenerable", "UC_PROXY_SECRET": "regenerable",
+    "BRIDGE_LOCAL_NODE_KEY": "regenerable",
+    "BRIDGE_ADMIN_USER": "bootstrap", "BRIDGE_ADMIN_PASSWORD": "bootstrap",
+    "COMPOSE_FILE": "compose", "COMPOSE_PROFILES": "compose",
+}
+# The keys the release template interpolates (a test derives this list
+# from release_write_compose's heredoc, 14.2 #8): on a switch to release a
+# setting outside it describes the other install type (7.1).
+RELEASE_TEMPLATE_KEYS = (
+    "BRIDGE_ADMIN_PASSWORD", "BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP",
+    "BRIDGE_ALLOW_UNBOUND_NODE_KEYS", "BRIDGE_AUDIT_KEY", "BRIDGE_ENV", "BRIDGE_KEYSTORE_KEY",
+    "BRIDGE_MASTER_KEY", "BRIDGE_MFA_KEY", "BRIDGE_SESSION_BINDING", "BRIDGE_TRUSTED_PROXIES",
+    "SIGRIFT_BACKEND_IP_RANGE", "SIGRIFT_BACKEND_SUBNET", "SIGRIFT_BIND",
+    "SIGRIFT_GATEWAY_BACKEND_IP", "UC_CSP_MODE", "UC_PROXY_SECRET", "UC_TLS_CERT", "UC_TLS_KEY")
+# Keys only a source install (quickstart) uses: to .env.imported on a switch
+# to release unless the release template names them (7.1).
+SOURCE_ONLY_KEYS = ("BRIDGE_LOCAL_NODE_KEY", "SIGRIFT_QUICKSTART_MODE", "SIGRIFT_PRESET",
+                    "UC_TLS_CERT", "UC_TLS_KEY", "UC_PORT", "BRIDGE_MODE")
+OLD_HOST_SETTINGS = ("MLRF_WIFI_IFACE", "MLRF_BT_ADAPTER")
+PRODUCTION_KEYS = ("BRIDGE_MFA_KEY", "BRIDGE_AUDIT_KEY", "UC_PROXY_SECRET", "BRIDGE_MASTER_KEY")
+# Characters Python's str.strip() and Rust's str::trim() treat differently
+# (7.2): the C0 separators U+001C-U+001F.
+STRIP_TRIM_DIFFER = "\x1c\x1d\x1e\x1f"
+AUDIT_VALUE_PLAIN = re.compile(r"[A-Za-z0-9._:+/=-]*")
+
+
+def esc(text):
+    """TEXT with C0, C1 and DEL escaped as \\xNN (Appendix C, P)."""
+    return "".join("\\x%02x" % ord(c) if ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f else c
+                   for c in str(text))
+
+
+def inst_of(a):
+    return a.get("inst") or "bash install-release.sh"
+
+
+def cmd_of(a, default):
+    return a.get("cmd") or "%s %s" % (inst_of(a), default)
+
+
+def hc16(checksum_hex):
+    return (checksum_hex or "")[:16]
+
+
+# ── the header on the host (3.7 steps 1-5) ──────────────────────────────
+
+
+class ArRefused(Exception):
+    def __init__(self, code, **info):
+        Exception.__init__(self, code)
+        self.code, self.info = code, info
+
+
+def ar_host_header(buf, file_len):
+    """Steps 1-5 on header bytes BUF of a file of FILE_LEN bytes (the
+    engine's ar_parse, again here so nothing runs before they pass)."""
+    if file_len < 56 or len(buf) < 56 or buf[:16] != AR_MAGIC:
+        raise ArRefused("A-NOT-ARCHIVE")
+    fmt = struct.unpack(">H", buf[16:18])[0]
+    if fmt != 1:
+        raise ArRefused("A-FORMAT", format=fmt)
+    m = struct.unpack(">I", buf[52:56])[0]
+    if not 17 <= m <= 65552:
+        raise ArRefused("A-HEADER-DAMAGED", why="field", field="meta_len")
+    H = 184 + m
+    if file_len < H or len(buf) < H:
+        raise ArRefused("A-HEADER-DAMAGED", why="short")
+    hdr = bytes(buf[:H])
+    if hashlib.sha256(hdr[:152 + m]).digest() != hdr[152 + m:H]:
+        raise ArRefused("A-HEADER-DAMAGED", why="checksum")
+    kdf_id, mem, t, lanes = hdr[18], hdr[19], hdr[20], hdr[21]
+    aead_id, flags = hdr[38], hdr[39]
+    seg = struct.unpack(">I", hdr[40:44])[0]
+    reserved = hdr[51]
+    ok = (kdf_id == 2 and aead_id == 1 and flags == 0 and reserved == 0 and 16 <= mem <= 18
+          and 1 <= t <= 4 and 1 <= lanes <= 4 and 65536 <= seg <= 4194304
+          and not seg & (seg - 1))
+    if not ok:
+        raise ArRefused("A-PARAMS", kdf_id=kdf_id, mem_log2=mem, t=t, lanes=lanes,
+                        segment_size=seg)
+    return {"format": 1, "kdf": {"id": kdf_id, "mem_log2": mem, "t": t, "lanes": lanes},
+            "segment_size": seg, "meta_len": m, "header_len": H,
+            "header_checksum": hdr[152 + m:H].hex(), "header": hdr}
+
+
+def ar_open_archive(path):
+    """(fd, size) of an archive FILE: a regular file opened once, no symlink."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise ArRefused("A-NOT-ARCHIVE")
+    s = os.fstat(fd)
+    if not stat.S_ISREG(s.st_mode):
+        os.close(fd)
+        raise ArRefused("A-NOT-ARCHIVE")
+    return fd, s.st_size
+
+
+def ar_read_fd(fd, n):
+    parts, left = [], n
+    while left > 0:
+        b = os.read(fd, min(left, FRAME_MAX))
+        if not b:
+            break
+        parts.append(b)
+        left -= len(b)
+    return b"".join(parts)
+
+
+def ar_header_of_fd(fd, size):
+    head = ar_read_fd(fd, 56)
+    if size >= 56 and len(head) == 56 and head[:16] == AR_MAGIC and \
+            struct.unpack(">H", head[16:18])[0] == 1:
+        m = struct.unpack(">I", head[52:56])[0]
+        if 17 <= m <= 65552:
+            head += ar_read_fd(fd, 184 + m - 56)
+    return ar_host_header(head, size)
+
+
+def human_mib(n):
+    n = int(n)
+    if n >= 1 << 20 and not n % (1 << 20):
+        return "%d MiB" % (n >> 20)
+    if n >= 1 << 10 and not n % (1 << 10):
+        return "%d KiB" % (n >> 10)
+    return "%d bytes" % n
+
+
+def sha256_path(path):
+    try:
+        return sha256_file(path)
+    except OSError:
+        return "(unreadable)"
+
+
+def ar_refuse(e, a, path, info=None, late=False, exit_code=EXIT_REFUSED):
+    """The M-AR-* refusal (11.1) or late refusal (11.2) of code E.code."""
+    f = esc(path)
+    inst, cmd = inst_of(a), cmd_of(a, "--import %s" % q(path))
+    c, i = e.code, dict(e.info, **(info or {}))
+    if c == "A-NOT-ARCHIVE":
+        msg = "%s is not a SigRift archive (it does not begin with SIGRIFT-ARCHIVE)." % f
+        return refuse(msg, next_cmd="%s --import <path to the .sigrift-archive file>" % inst)
+    if c == "A-FORMAT":
+        return refuse("%s is archive format %s; this installer reads format 1. A newer SigRift "
+                      "made it." % (f, i.get("format", "?")),
+                      next_cmd="the import with the installer of the newest release: bash "
+                               "<its folder>/install-release.sh --import %s" % q(path))
+    if c == "A-HEADER-DAMAGED":
+        why = {"checksum": "the checksum does not match", "short": "the file ends inside the "
+               "header"}.get(i.get("why"), "field %s is out of range" % i.get("field",
+                                                                              "meta_len"))
+        return refuse("the header of %s is damaged (%s); the file was changed or copied "
+                      "incompletely." % (f, why),
+                      ["sha256 of this file: %s; the export printed the sha256 of the original."
+                       % sha256_path(path)], next_cmd="sha256sum %s" % q(path))
+    if c == "A-PARAMS":
+        if i.get("kdf_id") == 2:
+            what = "Argon2id with %s of memory and %d passes on %d lanes" % (
+                human_mib((1 << i.get("mem_log2", 0)) * 1024) if i.get("mem_log2", 0) < 40
+                else "2^%d KiB" % i["mem_log2"], i.get("t", 0), i.get("lanes", 0))
+        else:
+            what = "key derivation %s, which format 1 readers do not accept" % i.get("kdf_id",
+                                                                                   "?")
+        return refuse("%s asks for %s and segments of %s; this installer accepts Argon2id with "
+                      "64 to 256 MiB, 1 to 4 passes and 1 to 4 lanes and segments of 64 KiB to "
+                      "4 MiB, and refused before deriving any key." % (
+                          f, what, human_mib(i.get("segment_size", 0))),
+                      next_cmd="export again with this release's installer")
+    if c == "A-PASSPHRASE":
+        return refuse("the passphrase does not open %s (or its header was changed on purpose "
+                      "after it was written)." % f, next_cmd=cmd)
+    if c in ("A-HEADER-AUTH", "A-METADATA"):
+        return refuse("the header of %s fails authentication although the passphrase is right: "
+                      "it was altered after it was written." % f,
+                      next_cmd="sha256sum %s" % q(path))
+    if c == "A-LENGTH":
+        d, exp, seg, n = i.get("diff", 0), i.get("expected", 0), i.get("segment_size", 1), \
+            i.get("segments", 0)
+        if d < 0:
+            how = "it was cut off, about %d of %d segments are missing" % (
+                -(-(-d) // (seg + 16)), n)
+            word = "shorter"
+        else:
+            how, word = "something was appended to it", "longer"
+        return refuse("%s is %d bytes %s than its header says (%d): %s." % (
+            f, abs(d), word, exp, how), next_cmd="copy the archive again, then sha256sum %s"
+            % q(path))
+    if c == "A-NO-CRYPTO":
+        what = "Argon2id in its cryptography package" if i.get("kdf") else \
+            "cryptography package"
+        ref = a.get("image_ref") or a.get("image") or "the bridge image"
+        return refuse("the bridge image %s (%s) has no %s; every released SigRift bridge image "
+                      "ships both, so this image is damaged or was built with an older "
+                      "cryptography." % (esc(ref), (a.get("image") or "")[:19], what),
+                      next_cmd=("docker compose build bridge" if a.get("source")
+                                else "docker pull %s" % q(ref)))
+    if c == "NOT-EXPECTED":
+        return refuse("%s is archive %s, not %s: an older archive, or another install's." % (
+            f, i.get("hc16"), i.get("expected")),
+            ["the export printed the --expect value of the archive it wrote"],
+            next_cmd="sha256sum %s" % q(path))
+    late_text = {
+        "A-SEGMENT": "segment %s of %s of %s (bytes %s-%s) fails authentication: it is "
+                     "damaged, or it comes from another archive." % (
+                         i.get("segment"), i.get("of"), f, i.get("first_byte"),
+                         i.get("last_byte")),
+        "A-ORDER": "segment %s of %s holds the data of segment %s: segments are %s (a broken "
+                   "copy)." % (i.get("segment"), f, i.get("held"), "missing" if (
+                       i.get("held") or 0) > (i.get("segment") or 0) else
+                       "repeated or out of order"),
+        "A-TRUNCATED": "%s ends after segment %s, which is not its last." % (
+            f, i.get("segment")),
+        "A-TRAILING": "%s has %s bytes after its last segment." % (f, i.get("diff", "some")),
+        "A-TAR": "the content of %s is not what its header lists (%s: %s)." % (
+            f, esc(i.get("member_name") or "the member list"), i.get("why_text") or "it differs"),
+    }
+    if c in late_text:
+        undone = i.get("undone")
+        return refuse(late_text[c], ([undone] if undone else []),
+                      next_cmd="copy the archive again, then sha256sum %s" % q(path))
+    return refuse("%s could not be read as an archive (%s)." % (f, c), next_cmd=cmd)
+
+
+WHY_TEXT = {"sha256": "its sha256 differs", "size": "its size differs",
+            "manifest": "it differs from the restore point's manifest",
+            "inner-integrity": "a file in it differs from its members list",
+            "inner-unsafe": "it holds a path, a link or a file type that is never restored",
+            "inner-tar": "it is not a readable tar.gz", "list": "the member list differs",
+            "promote": "its audit.key does not match", "inner-phase": "staging failed"}
+
+
+def ar_engine_refusal(e, meta=None, h=None):
+    """An ArRefused for an engine E frame of an archive op."""
+    obj = getattr(e, "obj", {}) or {}
+    code = obj.get("archive_error") or {"no-crypto": "A-NO-CRYPTO", "no-kdf": "A-NO-CRYPTO"
+                                         }.get(e.code, e.code)
+    info = dict((k, obj[k]) for k in ("segment", "of", "held", "member", "why", "expected")
+                if k in obj)
+    if code == "A-LENGTH" and h and isinstance(obj.get("expected"), int):
+        info.update(diff=h.get("file_bytes", 0) - obj["expected"],
+                    segment_size=h["segment_size"], segments=obj.get("of") or 0)
+    if e.code == "no-kdf":
+        info["kdf"] = True
+    members = (meta or {}).get("members") or []
+    if isinstance(info.get("member"), int) and 0 <= info["member"] < len(members):
+        info["member_name"] = members[info["member"]].get("n")
+    info["why_text"] = WHY_TEXT.get(info.get("why"))
+    if h and isinstance(info.get("segment"), int):
+        seg = h["segment_size"]
+        a0 = h["header_len"] + info["segment"] * (seg + 16)
+        last = (meta or {}).get("segments")
+        ln = seg + 16
+        if last and info["segment"] == last - 1:
+            ln = meta["payload_bytes"] - seg * (last - 1) + 16
+        info["first_byte"], info["last_byte"] = a0, a0 + ln - 1
+    return ArRefused(code, **info)
+
+
+# ── the state directory and the key files (5.2) ─────────────────────────
+
+
+def state_root(d):
+    """<state>: .sigrift of the install, or LC_STATE_DIR (quickstart's XDG
+    state dir, phase2-spec 8.1)."""
+    return os.environ.get("LC_STATE_DIR") or os.path.join(d, STATE_DIR)
+
+
+class StateUnsafe(Exception):
+    def __init__(self, path, why, mode=None, anc=None):
+        Exception.__init__(self, why)
+        self.path, self.why, self.mode, self.anc = path, why, mode, anc
+
+
+def state_unsafe_refuse(e):
+    p = esc(e.path)
+    if e.why == "owner":
+        what = "is not owned by you"
+    elif e.why == "mode":
+        what = "is open to group or others (mode %04o)" % e.mode
+    elif e.why == "symlink":
+        what = "is a symlink"
+    elif e.why == "type":
+        what = "is not a directory"
+    else:
+        what = "lies below %s, which others can write without the sticky bit" % esc(e.anc)
+    details = ["chmod 700 %s" % q(e.path)] if e.why == "mode" else []
+    refuse("%s %s; the archive key cannot be kept there." % (p, what), details,
+           next_cmd="ls -ld %s" % q(e.path))
+
+
+def sd_check(fd, path):
+    s = os.fstat(fd)
+    if not stat.S_ISDIR(s.st_mode):
+        raise StateUnsafe(path, "type")
+    if s.st_uid != os.geteuid():
+        raise StateUnsafe(path, "owner")
+    if stat.S_IMODE(s.st_mode) & 0o077:
+        raise StateUnsafe(path, "mode", stat.S_IMODE(s.st_mode))
+
+
+def sd_open_at(parent_fd, name, path, create):
+    """NAME under PARENT_FD as a directory fd (O_NOFOLLOW), created 0700
+    when CREATE and missing; -> (fd, created)."""
+    created = False
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not create:
+            raise
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        created = True
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise StateUnsafe(path, "symlink" if os.path.islink(path) else "type")
+        raise
+    try:
+        sd_check(fd, path)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, created
+
+
+class StateDir(object):
+    """<state> and <state>/ops opened by fd and checked (owner, 0700, no
+    symlink, ancestors not writable by others without the sticky bit)."""
+
+    def __init__(self, d, create=True):
+        self.path = os.path.abspath(state_root(d))
+        self.ops = os.path.join(self.path, AR_OPS_DIR)
+        self.created = []
+        parent = os.path.dirname(self.path)
+        if create and not os.path.isdir(parent):
+            # Quickstart's XDG state dir (8.1) may have no parents yet on a
+            # fresh checkout (an --import there): made 0700, like <state>.
+            missing, p = [], parent
+            while not os.path.isdir(p) and p != os.path.dirname(p):
+                missing.append(p)
+                p = os.path.dirname(p)
+            for p in reversed(missing):
+                os.mkdir(p, 0o700)
+                self.created.append(p)
+        anc = parent
+        while True:
+            try:
+                s = os.stat(anc)
+            except OSError:
+                s = None
+            if s is not None and s.st_mode & 0o022 and not s.st_mode & stat.S_ISVTX:
+                raise StateUnsafe(self.path, "ancestor", anc=anc)
+            if anc == os.path.dirname(anc):
+                break
+            anc = os.path.dirname(anc)
+        pfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            self.fd, c = sd_open_at(pfd, os.path.basename(self.path), self.path, create)
+        finally:
+            os.close(pfd)
+        if c:
+            self.created.append(self.path)
+        try:
+            self.ops_fd, c = sd_open_at(self.fd, AR_OPS_DIR, self.ops, create)
+        except BaseException:
+            os.close(self.fd)
+            raise
+        if c:
+            self.created.append(self.ops)
+            fsync_dir(self.path)
+
+    def sub(self, name, create=False):
+        """ops/NAME as a checked directory fd."""
+        if not re.fullmatch(r"(\.pending-[0-9a-f]{16}|[0-9]{8}T[0-9]{6}Z(-[0-9]+)?)", name):
+            raise Failed("files", "not an op directory name")
+        fd, _c = sd_open_at(self.ops_fd, name, os.path.join(self.ops, name), create)
+        return fd
+
+    def new_pending(self):
+        import secrets
+        name = ".pending-" + secrets.token_hex(8)
+        os.mkdir(name, 0o700, dir_fd=self.ops_fd)
+        fsync_fd(self.ops_fd)
+        return name, self.sub(name)
+
+    def close(self):
+        for attr in ("ops_fd", "fd"):
+            fd = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+def sd_drop_created(sd):
+    """<state> and ops/ this run made, removed again when left empty."""
+    for path in reversed(sd.created):
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+
+
+def fsync_fd(fd):
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+
+
+def open_state(d, create=True):
+    try:
+        return StateDir(d, create)
+    except StateUnsafe as e:
+        state_unsafe_refuse(e)
+
+
+def key_write(dfd, dk):
+    """archive.key: temp O_CREAT|O_EXCL|O_NOFOLLOW 0600, fsync, link into
+    place, directory fsync."""
+    import secrets
+    tmp = ".archive.key.%s.tmp" % secrets.token_hex(4)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, dk)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.link(tmp, AR_KEY, src_dir_fd=dfd, dst_dir_fd=dfd)
+    finally:
+        os.unlink(tmp, dir_fd=dfd)
+    fsync_fd(dfd)
+
+
+def key_read(dfd):
+    """The 32-byte DK of archive.key (a regular 0600 file of the caller),
+    or None."""
+    try:
+        fd = os.open(AR_KEY, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError:
+        return None
+    try:
+        s = os.fstat(fd)
+        if not stat.S_ISREG(s.st_mode) or stat.S_IMODE(s.st_mode) != 0o600 or \
+                s.st_uid != os.geteuid() or s.st_size != 32:
+            return None
+        b = os.read(fd, 33)
+    finally:
+        os.close(fd)
+    return b if len(b) == 32 else None
+
+
+def json_write_at(dfd, name, obj):
+    """NAME (0600, atomic) in directory DFD."""
+    import secrets
+    tmp = ".%s.%s.tmp" % (name, secrets.token_hex(4))
+    data = (json.dumps(obj, sort_keys=True) + "\n").encode()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+    try:
+        write_all(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+    fsync_fd(dfd)
+
+
+def json_read_at(dfd, name, limit=64 << 20):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError:
+        return None
+    try:
+        s = os.fstat(fd)
+        if not stat.S_ISREG(s.st_mode):
+            return None
+        with os.fdopen(os.dup(fd), "rb") as f:
+            raw = f.read(limit)
+    finally:
+        os.close(fd)
+    try:
+        return strict_json(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def strict_json(raw):
+    """JSON with duplicate keys and NaN/Infinity refused (Appendix C, O)."""
+    def pairs(kv):
+        out = {}
+        for k, v in kv:
+            if k in out:
+                raise ValueError("duplicate key")
+            out[k] = v
+        return out
+
+    def const(_x):
+        raise ValueError("not a number")
+    return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw,
+                      object_pairs_hook=pairs, parse_constant=const)
+
+
+def rmtree_at(dfd, name):
+    """Remove NAME under DFD, never following a symlink (archive.key first)."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+    except FileNotFoundError:
+        return
+    except OSError:
+        try:
+            os.unlink(name, dir_fd=dfd)
+        except OSError:
+            pass
+        return
+    try:
+        names = os.listdir(fd)
+        if AR_KEY in names:
+            names.remove(AR_KEY)
+            names.insert(0, AR_KEY)
+        for n in names:
+            try:
+                s = os.lstat(n, dir_fd=fd)
+            except OSError:
+                continue
+            if stat.S_ISDIR(s.st_mode):
+                rmtree_at(fd, n)
+            else:
+                os.unlink(n, dir_fd=fd)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=dfd)
+    fsync_fd(dfd)
+
+
+def ar_setrlimit():
+    """No core dump of a process that holds a passphrase or DK (5.1)."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
+def ar_excepthook(t, _v, _tb):
+    sys.stderr.write("lc_state_tool: %s\n" % getattr(t, "__name__", "error"))
+
+
+# ── the passphrase (2.4) ────────────────────────────────────────────────
+
+
+class PassRefused(Exception):
+    def __init__(self, code, why=None):
+        Exception.__init__(self, code)
+        self.code, self.why = code, why
+
+
+GEN_FORM = re.compile(r"[A-Za-z2-7]{4}(?:[ -]?[A-Za-z2-7]{4}){5}")
+PP_ROWS = ("0123456789", "abcdefghijklmnopqrstuvwxyz", "`1234567890-=", "qwertyuiop[]\\",
+           "asdfghjkl;'", "zxcvbnm,./", "~!@#$%^&*()_+", "QWERTYUIOP{}|", "ASDFGHJKL:\"",
+           "ZXCVBNM<>?")
+PP_BAD_CATEGORIES = ("Cn", "Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+
+
+def pp_fold(text):
+    return re.sub(r"[ \-_.]", "", text.casefold())
+
+
+def pp_canonical(raw, export=False, generated=False, names=()):
+    """2.4's rules 1-8 on the bytes of one entry: -> the canonical text."""
+    import unicodedata
+    u32 = unicodedata.ucd_3_2_0
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise PassRefused("ENCODING")
+    if text.startswith("﻿"):
+        text = text[1:]
+    text = "".join(" " if u32.category(c) == "Zs" else c for c in text)
+    if GEN_FORM.fullmatch(text):
+        s = re.sub(r"[ -]", "", text.lower())
+        text = "-".join(s[i:i + 4] for i in range(0, 24, 4))
+    text = unicodedata.normalize("NFC", text)
+    if not 12 <= len(text) <= 1024 or "\x00" in text:
+        raise PassRefused("SHORT")
+    if not export:
+        return text
+    if any(u32.category(c) in PP_BAD_CATEGORIES for c in text):
+        raise PassRefused("CHARS")
+    if generated:
+        return text
+    if len(set(text)) < 6:
+        raise PassRefused("WEAK", "distinct")
+    f = pp_fold(text)
+    for row in PP_ROWS:
+        r = pp_fold(row)
+        if f in r or f in r[::-1]:
+            raise PassRefused("WEAK", "row")
+    rest = text.lower()
+    for name in ["sigrift"] + [str(n).lower() for n in names if n]:
+        rest = rest.replace(name, "")
+    if len(text) - len(rest) >= len(text) / 2.0:
+        raise PassRefused("WEAK", "name")
+    return text
+
+
+def pp_read_line(fd):
+    """One line of FD by os.read: up to the first \\n, EOF or 4,098 bytes;
+    one trailing \\r removed. -> bytes, or None for no input."""
+    buf = b""
+    while len(buf) < AR_PP_MAX:
+        try:
+            b = os.read(fd, AR_PP_MAX - len(buf))
+        except InterruptedError:
+            continue
+        if not b:
+            break
+        buf += b
+        if b"\n" in b:
+            break
+    if b"\n" in buf:
+        line = buf[:buf.index(b"\n")]
+    elif len(buf) >= AR_PP_MAX:
+        raise PassRefused("SHORT")
+    else:
+        line = buf
+    if not buf:
+        return None
+    if line.endswith(b"\r"):
+        line = line[:-1]
+    return line
+
+
+class TtyRestart(Exception):
+    """A stop signal (Ctrl-Z, then fg) interrupted a prompt: it starts over."""
+
+
+TTY_END_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")
+TTY_STOP_SIGNALS = ("SIGTSTP", "SIGTTIN", "SIGTTOU")
+
+
+class Tty(object):
+    """/dev/tty read-write with echo off (TCSAFLUSH); restored in close()
+    and on SIGINT, SIGTERM, SIGHUP, SIGQUIT and the stop signals. After a
+    stop (Ctrl-Z) and fg, echo is turned off again (and checked) before
+    anything more is read, and the prompt starts over, as readpassphrase(3)
+    does; no process without a controlling terminal ever prompts."""
+
+    def __init__(self):
+        import signal
+        import termios
+        self.termios, self.signal = termios, signal
+        self.fd, self.saved, self.handlers = None, None, {}
+        self.reading, self.stopped = False, False
+        self.stop_sigs = set(getattr(signal, n) for n in TTY_STOP_SIGNALS if hasattr(signal, n))
+        try:
+            self.fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+        except OSError:
+            raise PassRefused("NEEDED", "notty")
+        try:
+            self.saved = termios.tcgetattr(self.fd)
+            self.echo_off()
+        except (termios.error, OSError, PassRefused):
+            self.close()
+            raise PassRefused("NEEDED", "echo")
+        for name in TTY_END_SIGNALS + TTY_STOP_SIGNALS:
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            try:
+                self.handlers[sig] = signal.signal(sig, self.on_signal)
+            except (OSError, ValueError):
+                pass
+
+    def quiet(self, fn):
+        """FN() with SIGTTOU ignored, so tcsetattr from a background job
+        changes the modes instead of stopping or failing."""
+        s = self.signal
+        try:
+            old = s.signal(s.SIGTTOU, s.SIG_IGN)
+        except (OSError, ValueError, AttributeError):
+            old = None
+        try:
+            fn()
+        finally:
+            if old is not None:
+                s.signal(s.SIGTTOU, old)
+
+    def echo_off(self):
+        t = self.termios
+
+        def apply():
+            new = t.tcgetattr(self.fd)
+            new[3] &= ~(t.ECHO | t.ECHONL)
+            t.tcsetattr(self.fd, t.TCSAFLUSH, new)
+        self.quiet(apply)
+        if t.tcgetattr(self.fd)[3] & t.ECHO:
+            raise PassRefused("NEEDED", "echo")
+
+    def on_signal(self, sig, _frame):
+        s = self.signal
+        self.restore()
+        try:
+            s.signal(sig, s.SIG_DFL)
+        except (OSError, ValueError):
+            pass
+        os.kill(os.getpid(), sig)
+        if sig not in self.stop_sigs:
+            # The default action ends the process; this is only reached when
+            # it did not (the terminal is restored already).
+            os._exit(128 + sig)
+        # Continued after a stop: echo off again before anything is read.
+        try:
+            s.signal(sig, self.on_signal)
+        except (OSError, ValueError):
+            pass
+        try:
+            self.echo_off()
+        except (self.termios.error, OSError):
+            raise PassRefused("NEEDED", "echo")
+        self.stopped = True
+        if self.reading:
+            raise TtyRestart()
+
+    def restore(self):
+        if self.saved is not None and self.fd is not None:
+            def apply():
+                self.termios.tcsetattr(self.fd, self.termios.TCSAFLUSH, self.saved)
+            try:
+                self.quiet(apply)
+            except (self.termios.error, OSError):
+                pass
+
+    def write(self, text):
+        os.write(self.fd, text.encode("utf-8", "replace"))
+
+    def columns(self):
+        try:
+            return os.get_terminal_size(self.fd).columns or 80
+        except OSError:
+            return 80
+
+    def ask(self, prompt):
+        """PROMPT, then one line with echo off; after a stop and fg the
+        prompt is printed again and the line starts over."""
+        again = False
+        while True:
+            self.reading = True
+            try:
+                self.write(("\n" if again else "") + prompt)
+                return self.read_line()
+            except TtyRestart:
+                again = True
+            finally:
+                self.reading = False
+
+    def wait_enter(self):
+        """One line, whatever it holds (the generated passphrase's pause)."""
+        while True:
+            self.reading = True
+            try:
+                self.read_line()
+                return
+            except TtyRestart:
+                pass
+            finally:
+                self.reading = False
+
+    def read_line(self):
+        buf = b""
+        while len(buf) < AR_PP_MAX:
+            b = os.read(self.fd, 1)
+            if not b or b == b"\n":
+                break
+            buf += b
+        self.write("\n")
+        if len(buf) >= AR_PP_MAX:
+            raise PassRefused("SHORT")
+        return buf[:-1] if buf.endswith(b"\r") else buf
+
+    def close(self):
+        self.restore()
+        for sig, h in self.handlers.items():
+            try:
+                self.signal.signal(sig, h)
+            except (OSError, ValueError):
+                pass
+        self.handlers = {}
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+
+
+def pp_rows(lines, cols):
+    """Screen rows that LINES take on a terminal COLS wide (auto-wrap; a
+    line of exactly COLS characters takes one row)."""
+    cols = max(1, int(cols or 80))
+    return sum(max(1, -(-len(line) // cols)) for line in lines)
+
+
+def pp_fd_file_check(fd, archive_dir=None):
+    """A regular-file fd 4 must be the caller's and 0600-like (2.4); a NOTE
+    when it sits in the archive's directory."""
+    s = os.fstat(fd)
+    if not stat.S_ISREG(s.st_mode):
+        return None
+    path = "the passphrase file"
+    try:
+        p = os.readlink("/proc/self/fd/%d" % fd)
+        if p.startswith("/"):
+            path = p
+    except OSError:
+        pass
+    if s.st_uid != os.geteuid():
+        raise PassRefused("FILE", ("owner", path, None))
+    if s.st_mode & 0o077:
+        raise PassRefused("FILE", ("mode", path, stat.S_IMODE(s.st_mode)))
+    if archive_dir:
+        try:
+            for e in os.scandir(archive_dir):
+                try:
+                    es = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if (es.st_dev, es.st_ino) == (s.st_dev, s.st_ino):
+                    note("the passphrase file is in the same directory as the archive; keep it "
+                         "on another medium")
+                    break
+        except OSError:
+            pass
+    return path
+
+
+URANDOM = os.urandom
+
+
+def pp_generate():
+    import base64
+    s = base64.b32encode(URANDOM(15)).decode().lower()
+    return "-".join(s[i:i + 4] for i in range(0, 24, 4))
+
+
+def pp_read(fd, export, a, archive_dir=None, attempt=None):
+    """The canonical passphrase as UTF-8 bytes (2.4): a TTY prompt on
+    /dev/tty when fd 4 is a terminal, else one line of fd 4. ATTEMPT(bytes)
+    for an import at a TTY: False asks again (three tries)."""
+    names = (a.get("project"), a.get("hostname") or socket_hostname())
+    if not os.isatty(fd):
+        pp_fd_file_check(fd, archive_dir)
+        try:
+            if stat.S_ISFIFO(os.fstat(fd).st_mode) and os.isatty(2):
+                sys.stderr.write("Reading the archive passphrase from standard input (one "
+                                 "line).\n")
+        except OSError:
+            pass
+        line = pp_read_line(fd)
+        if not line:
+            raise PassRefused("NEEDED", "stdin")
+        return pp_canonical(line, export, names=names).encode("utf-8")
+    tty = Tty()
+    try:
+        if not export:
+            label = esc(a.get("file") or "the archive")
+            for _try in range(3):
+                text = pp_canonical(tty.ask("Passphrase for %s: " % label), False).encode("utf-8")
+                if attempt is None or attempt(text):
+                    return text
+            raise PassRefused("PASSPHRASE")
+        last = None
+        for _round in range(3):
+            first = tty.ask("Archive passphrase (12 or more characters; Enter generates one): ")
+            generated = False
+            if first == b"":
+                gen = pp_generate()
+                shown = ["Your archive passphrase: %s" % gen,
+                         "Write it down now: it is shown only this once, and without it the "
+                         "archive cannot be opened.", "Press Enter to continue."]
+                tty.stopped = False
+                tty.write("\n".join(shown))
+                tty.wait_enter()
+                # Erase what was shown (2.4, Appendix C K): the rows the lines
+                # took at this width; after a stop and fg the screen moved, so
+                # all of it is cleared.
+                if tty.stopped:
+                    tty.write("\x1b[H\x1b[2J")
+                else:
+                    tty.write("\r\x1b[%dA\x1b[J" % pp_rows(shown, tty.columns()))
+                first, generated = gen.encode(), True
+                prompt = "Type it back: "
+            else:
+                prompt = "Type it again: "
+            try:
+                text = pp_canonical(first, True, generated, names)
+            except PassRefused as e:
+                last = e
+                continue
+            again = tty.ask(prompt)
+            try:
+                if pp_canonical(again, True, True, names) == text:
+                    return text.encode("utf-8")
+            except PassRefused:
+                pass
+            last = PassRefused("MISMATCH")
+        raise last or PassRefused("MISMATCH")
+    finally:
+        tty.close()
+
+
+def socket_hostname():
+    import socket
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
+
+
+def pp_refuse(e, a, export):
+    cmd = cmd_of(a, "--export FILE" if export else "--import FILE")
+    c = e.code
+    if c == "NEEDED":
+        why = {"echo": "the terminal's echo cannot be turned off",
+               "notty": "standard input is a terminal, but this process has no controlling "
+                        "terminal (/dev/tty) to ask on"}.get(
+            e.why, "standard input is not a terminal and holds no line")
+        refuse("%s needs a passphrase: %s." % ("--export" if export else "--import", why),
+               next_cmd="%s < ~/.config/sigrift/archive-pass" % cmd)
+    if c == "ENCODING":
+        refuse("the passphrase is not valid UTF-8.", next_cmd=cmd)
+    if c == "CHARS":
+        refuse("the passphrase holds a control, format, private-use or unassigned character "
+               "(by Unicode 3.2); such characters do not read back the same on every terminal "
+               "and Python.", ["ASCII passphrases are the most portable"], next_cmd=cmd)
+    if c == "WEAK":
+        why = {"distinct": "it has fewer than 6 different characters",
+               "row": "it is a keyboard row or a run of letters or digits"}.get(
+            e.why, "it is mostly the name of this install or host")
+        refuse("the passphrase is too easy to guess (%s); anyone with the archive file can try "
+               "passphrases offline without limit." % why,
+               ["at a terminal, press Enter at the prompt to have one generated; for scripts "
+                "see INSTALL.md \"Archives and passphrases\""], next_cmd=cmd)
+    if c == "FILE":
+        kind, path, mode = e.why
+        what = "not yours" if kind == "owner" else \
+            "readable or writable by group or others (mode %04o)" % mode
+        refuse("the passphrase file %s is %s." % (esc(path), what),
+               next_cmd="chmod 600 %s" % (q(path) if path.startswith("/") else path))
+    if c == "MISMATCH":
+        refuse("the two passphrases differed three times.", next_cmd=cmd)
+    if c == "PASSPHRASE":
+        ar_refuse(ArRefused("A-PASSPHRASE"), a, a.get("file") or "the archive")
+    refuse("the passphrase must be 12 to 1024 characters without NUL.", next_cmd=cmd)
+
+
+# ── engine runs of the archive ops ──────────────────────────────────────
+
+
+def ar_engine(op, a, req, sections=(), out_path=None, out_fd=None, monitor=None,
+              project=None, parts=()):
+    """An ar-* engine run in a.image (the request built in memory and sent
+    on the engine's stdin only, 5.1 hygiene); -> R, or raises EngineFailed
+    with .obj, the E frame."""
+    return engine_stream(op, a["image"], project or a.get("project") or "sigrift", req,
+                         sections=sections, out_path=out_path, out_fd=out_fd, monitor=monitor,
+                         parts=parts)
+
+
+def dk_new():
+    return os.urandom(32)
+
+
+def b64(b):
+    import base64
+    return base64.b64encode(b).decode("ascii")
+
+
+def unb64(text):
+    import base64
+    return base64.b64decode(str(text or ""), validate=True)
+
+
+def ar_tool_setup():
+    ar_setrlimit()
+    sys.excepthook = ar_excepthook
+
+
+def crypto_refusal(e, a):
+    if isinstance(e, EngineFailed) and e.code in ("no-crypto", "no-kdf"):
+        ar_refuse(ArRefused("A-NO-CRYPTO", kdf=e.code == "no-kdf"), a, a.get("file") or "")
+
+
+def cmd_ar_header(a):
+    path = a["file"]
+    try:
+        fd, size = ar_open_archive(path)
+        try:
+            h = ar_header_of_fd(fd, size)
+        finally:
+            os.close(fd)
+    except ArRefused as e:
+        ar_refuse(e, a, path)
+    res = dict((k, v) for k, v in h.items() if k != "header")
+    if a.get("expect"):
+        exp = a["expect"].lower()
+        if hc16(h["header_checksum"]) != exp:
+            put_result(res)
+            ar_refuse(ArRefused("NOT-EXPECTED", hc16=hc16(h["header_checksum"]), expected=exp),
+                      a, path)
+    put_result(res)
+
+
+def expect_value(a):
+    v = a.get("expect")
+    if v is None:
+        return None
+    if not re.fullmatch(r"[0-9A-Fa-f]{16}", v):
+        sys.stderr.write("lc_state_tool: --expect needs 16 hex digits\n")
+        sys.exit(2)
+    return v.lower()
+
+
+def cmd_ar_wrap(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    sd = open_state(d)
+    name = None
+    try:
+        try:
+            passphrase = pp_read(int(a.get("passphrase_fd") or 4), True, a,
+                                 archive_dir=a.get("archive_dir"))
+        except PassRefused as e:
+            pp_refuse(e, a, True)
+        dk = dk_new()
+        kdf = {"mem_log2": int(a.get("mem_log2") or AR_MEM_LOG2), "t": int(a.get("t") or AR_T),
+               "lanes": int(a.get("lanes") or AR_LANES)}
+        req = {"passphrase_b64": b64(passphrase), "data_key": b64(dk), "kdf": kdf,
+               "segment_size": int(a.get("segment_size") or AR_SEGMENT)}
+        del passphrase
+        try:
+            r = ar_engine("ar-wrap", a, req)
+        except EngineFailed as e:
+            crypto_refusal(e, a)
+            raise
+        del req
+        name, dfd = sd.new_pending()
+        try:
+            key_write(dfd, dk)
+            if key_read(dfd) != dk:
+                raise Failed("files", "the archive key file did not read back")
+            import uuid
+            wrap = {"format": 1, "salt": r["salt"], "kdf": r["kdf"],
+                    "segment_size": r["segment_size"], "prefix": r["prefix"],
+                    "wrapped": r["wrapped"], "wrap_check": r["wrap_check"],
+                    "nonce_prefix": r["nonce_prefix"], "archive_id": str(uuid.uuid4()),
+                    "created_at": now_utc(), "crypto": r.get("crypto") or {},
+                    "kdf_seconds": r.get("seconds")}
+            json_write_at(dfd, AR_WRAP, wrap)
+        finally:
+            os.close(dfd)
+        put_result(dict(wrap, pending=os.path.join(sd.ops, name), created=sd.created))
+    except BaseException:
+        if name:
+            rmtree_at(sd.ops_fd, name)
+        sd.close()
+        sd_drop_created(sd)
+        raise
+    finally:
+        sd.close()
+
+
+def cmd_ops_adopt(a):
+    d = os.path.realpath(a["dir"])
+    sd = open_state(d, create=False)
+    try:
+        src = os.path.abspath(a["from"])
+        if os.path.dirname(src) != sd.ops or not os.path.basename(src).startswith(".pending-"):
+            raise Failed("files", "the pending directory is not in this install's ops/")
+        jid = a["jid"]
+        if not ID_RE.match(jid):
+            raise Failed("files", "not an op id")
+        fd = sd.sub(os.path.basename(src))
+        os.close(fd)
+        os.rename(os.path.basename(src), jid, src_dir_fd=sd.ops_fd, dst_dir_fd=sd.ops_fd)
+        fsync_fd(sd.ops_fd)
+        fsync_fd(sd.fd)
+        put_result({"ok": True, "dir": os.path.join(sd.ops, jid)})
+    finally:
+        sd.close()
+
+
+def ar_key_or_fail(sd, jid, what, inside=True, a=None, details=()):
+    """(dir fd, DK) of ops/JID; M-AR-KEY-DAMAGED otherwise (exit 1 inside a
+    step, 3 before any, and 3 with DETAILS for ar-stage's late refusal)."""
+    try:
+        dfd = sd.sub(jid)
+    except FileNotFoundError:
+        dfd = None
+    dk = key_read(dfd) if dfd is not None else None
+    if dk is None:
+        if dfd is not None:
+            os.close(dfd)
+        path = os.path.join(sd.ops, jid, AR_KEY)
+        text = ("the archive key file of this %s (%s) is damaged; nothing was %s with it."
+                % (what, esc(path), "encrypted" if what == "export" else "decrypted"))
+        nxt = "%s --abort, then the command again" % inst_of(a or {})
+        if inside:
+            sys.stderr.write("Error: " + text + "\nNext: " + nxt + "\n")
+            put_result({"ok": False, "code": "key-damaged"})
+            sys.exit(1)
+        put_result({"ok": False, "code": "key-damaged"})
+        refuse(text, details, next_cmd=nxt)
+    return dfd, dk
+
+
+def cmd_ar_key_check(a):
+    """--resume's check before any step that stops the stack (5.2, 10)."""
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    sd = open_state(d, create=False)
+    try:
+        what = "export" if a.get("export") else "import"
+        dfd, dk = ar_key_or_fail(sd, a["jid"], what, inside=False, a=a)
+        if a.get("export"):
+            wrap = json_read_at(dfd, AR_WRAP)
+            ok = False
+            try:
+                prefix, wrapped = unb64(wrap["prefix"]), unb64(wrap["wrapped"])
+                salt = prefix[22:38]
+                prk = hmac.new(salt, dk, hashlib.sha256).digest()
+                kw = hmac.new(prk, b"sigrift-archive v1 wrapcheck\x01", hashlib.sha256).digest()
+                ok = hmac.compare_digest(hmac.new(kw, prefix + wrapped, hashlib.sha256)
+                                         .hexdigest(), str(wrap["wrap_check"]))
+            except (TypeError, KeyError, ValueError):
+                ok = False
+            if not ok:
+                os.close(dfd)
+                refuse("the archive key file of this export (%s) is damaged; nothing was "
+                       "encrypted with it." % esc(os.path.join(sd.ops, a["jid"], AR_KEY)),
+                       next_cmd="%s --abort, then the command again" % inst_of(a))
+        os.close(dfd)
+        put_result({"ok": True})
+    finally:
+        sd.close()
+
+
+def ar_members_of_point(p, m):
+    """[(member, path)] of full restore point P in 3.6 order, with the
+    sha256 its manifest names (the engine checks the bytes against them)."""
+    out = [({"n": "manifest.json", "s": len(p.raw), "h": sha256_bytes(p.raw)},
+            os.path.join(p.path, "manifest.json"))]
+    rf = os.path.join(p.path, "rf_rows.json")
+    out.append(({"n": "rf_rows.json", "s": os.lstat(rf).st_size,
+                 "h": (m.get("rf_summary") or {}).get("rows_file_sha256")}, rf))
+    for f in m.get("files") or []:
+        path = os.path.join(p.path, "files", f["path"])
+        out.append(({"n": "files/" + f["path"], "s": os.lstat(path).st_size,
+                     "h": f.get("sha256")}, path))
+    for v in m.get("volumes") or []:
+        mem = os.path.join(p.path, "volumes", v["name"] + ".members.json")
+        arch = os.path.join(p.path, v.get("archive") or "")
+        out.append(({"n": "volumes/%s.members.json" % v["name"], "s": os.lstat(mem).st_size,
+                     "h": v.get("members_file_sha256")}, mem))
+        out.append(({"n": "volumes/%s.tar.gz" % v["name"], "s": os.lstat(arch).st_size,
+                     "h": v.get("archive_sha256")}, arch))
+    for mem, _path in out:
+        if not isinstance(mem["h"], str) or not AR_NAME.fullmatch(mem["n"]):
+            raise Failed("files", "restore point %s cannot become an archive (%s)"
+                         % (p.id, mem["n"]))
+    return out
+
+
+def env_names(text):
+    """{keys: {K: set|empty}, parse: ok|line N} of a .env text (names only)."""
+    keys, parse = {}, "ok"
+    for x in parse_dotenv(text or ""):
+        keys[x.name] = "set" if x.value else "empty"
+        if x.odd and parse == "ok":
+            parse = "line %d" % ((text or "")[:x.line_start].count("\n") + 1)
+    return {"keys": dict(sorted(keys.items())), "parse": parse}
+
+
+def audit_value_for(source, env, file_text=None):
+    """7.2's promoted BRIDGE_AUDIT_KEY for SOURCE, or None when the source
+    value cannot be promoted so that the bridge (str.strip) and the gateway
+    (str::trim) hash the same bytes: a single quote, a line break or a C0
+    separator U+001C-U+001F anywhere in it, or nothing left after strip."""
+    raw = {"legacy-secret": env.get("BRIDGE_AUDIT_SECRET"),
+           "master": env.get("BRIDGE_MASTER_KEY"), "file": file_text}.get(source)
+    if raw is None or any(c in raw for c in STRIP_TRIM_DIFFER) or "'" in raw or \
+            "\n" in raw.strip() or "\r" in raw.strip() or not raw.strip():
+        return None
+    return ("bridge-audit-hmac:" if source == "master" else "") + raw.strip()
+
+
+def audit_value_ok(value):
+    """Whether VALUE (a promoted key) can be written and read back as is."""
+    return bool(value) and "'" not in value and "\n" not in value and "\r" not in value \
+        and not any(c in value for c in STRIP_TRIM_DIFFER) and value == value.strip()
+
+
+def ip_addresses():
+    """This host's non-loopback, non-link-local addresses (at most 8)."""
+    import ipaddress
+    import socket
+    out = []
+    try:
+        r = subprocess.run(["ip", "-o", "addr", "show"], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=10)
+        for line in r.stdout.decode("utf-8", "replace").splitlines():
+            parts = line.split()
+            for i, w in enumerate(parts):
+                if w in ("inet", "inet6") and i + 1 < len(parts):
+                    out.append(parts[i + 1].split("/")[0])
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not out:
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                out.append(info[4][0])
+        except OSError:
+            pass
+    good = []
+    for x in out:
+        try:
+            ip = ipaddress.ip_address(x.split("%")[0])
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or str(ip) in good:
+            continue
+        good.append(str(ip))
+    return good[:8]
+
+
+def tls_facts(d):
+    """(names, sha256 of the DER) of tls/cert.pem (stdlib ssl only)."""
+    import ssl
+    path = os.path.join(d, "tls", "cert.pem")
+    try:
+        pem = read_nofollow(path, 1 << 20).decode("ascii", "replace")
+        der = ssl.PEM_cert_to_DER_cert(pem)
+    except (OSError, ValueError):
+        return [], None
+    names = []
+    try:
+        info = ssl._ssl._test_decode_cert(path)
+        for kind, v in info.get("subjectAltName") or ():
+            if kind in ("DNS", "IP Address"):
+                names.append(v.strip())
+    except (AttributeError, OSError, ValueError):
+        pass
+    return names, hashlib.sha256(der).hexdigest()
+
+
+def arch_name():
+    import platform
+    m = platform.machine().lower()
+    return {"x86_64": "amd64", "aarch64": "arm64", "armv7l": "arm"}.get(m, m)
+
+
+def host_id_of():
+    r = docker("info", "--format", "{{.Name}}:{{.ID}}")
+    if r.returncode:
+        return ""
+    raw = "sigrift-host-v1:" + r.stdout.decode("utf-8", "replace").strip()
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def ar_metadata(d, a, p, m, env_text):
+    """3.5's metadata but the size fields and the fields taken from the wrap."""
+    eff = env_effective(env_text or "")
+    names, cert = tls_facts(d)
+    sec = m.get("security") or {}
+    counts = m.get("counts") or {}
+    src_type = a.get("install_type") or m.get("install_type") or "release"
+    audit = m.get("audit") or {}
+    env = env_names(env_text)
+    source = audit.get("source") or "none"
+    if source in ("env-key", "none", "file"):
+        env["audit_value"] = "n/a"
+    else:
+        env["audit_value"] = "ok" if audit_value_ok(audit_value_for(source, eff)) else \
+            "unwritable"
+    nodes = m.get("nodes") or []
+    port = a.get("port") or eff.get("UC_PORT") or "8444"
+    meta = {
+        "tool": a.get("tool") or "install-release.sh",
+        "installer_release": a.get("installer_release") or os.environ.get("INSTALLER_RELEASE")
+        or "dev",
+        "sigrift_version": a.get("sigrift_version") or m.get("from_version") or "unknown",
+        "bridge_release": a.get("bridge_release") or "unknown",
+        "install_type": src_type, "install_id": m.get("install_id") or install_id(d),
+        "project": m.get("project") or a.get("project"),
+        "moved": a.get("moved") in ("1", True),
+        "source": {"hostname": socket_hostname(), "arch": arch_name(), "host_id": host_id_of(),
+                   "working_dir": d, "addresses": ip_addresses(),
+                   "port": int(port) if str(port).isdigit() else port,
+                   "bind": eff.get("SIGRIFT_BIND") or "0.0.0.0", "tls_names": names,
+                   "tls_cert_sha256": cert,
+                   "host_keys": dict((k, eff[k]) for k in HOST_KEYS if eff.get(k))},
+        "schema_version": m.get("schema_version"),
+        "db_encrypted": bool((m.get("db") or {}).get("encrypted")),
+        "audit": {"source": source, "result": audit.get("result"),
+                  "head_id": audit.get("head_id")},
+        "env": env,
+        "counts": {"users": counts.get("users"), "keys": counts.get("keys"),
+                   "nodes": counts.get("nodes"),
+                   "webhooks": len(sec.get("webhooks") or {}),
+                   "crypto_keys": counts.get("crypto_keys"),
+                   "detections": counts.get("detections"),
+                   "totp_fernet": counts.get("totp_fernet")},
+        "summary_nodes": sorted(n.get("node_id") for n in nodes
+                                if isinstance(n, dict) and n.get("summary")),
+        "in_stack_node": (eff.get("MLRF_NODE_ID") or "local-edge") if src_type == "source"
+        else None,
+        "parts": [{"name": v["name"], "bytes_raw": v.get("bytes_raw") or 0}
+                  for v in m.get("volumes") or []],
+        "captures": "excluded" if (m.get("captures") or {}).get("mode") != "included"
+        else "included",
+        "kept_out": dict(m.get("kept_out") or {"backups_bytes": 0, "exports_bytes": 0})}
+    if src_type == "source" and m.get("git_commit"):
+        meta["sigrift_version"] = m["git_commit"]
+    return meta
+
+
+def partial_name(out):
+    import secrets
+    return os.path.join(os.path.dirname(out), ".%s.%s.sigrift-partial" % (
+        os.path.basename(out), secrets.token_hex(8)))
+
+
+def fadvise_dontneed(fd):
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+
+
+def cmd_ar_write(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    out = os.path.abspath(a["out"])
+    sd = open_state(d, create=False)
+    try:
+        dfd, dk = ar_key_or_fail(sd, a["jid"], "export", a=a)
+        wrap = json_read_at(dfd, AR_WRAP)
+        os.close(dfd)
+        if not isinstance(wrap, dict):
+            raise Failed("files", "wrap.json of op %s cannot be read" % a["jid"])
+    finally:
+        sd.close()
+    p, m = manifest_for(d, a["rp"])
+    members = ar_members_of_point(p, m)
+    env_text = None
+    for f in m.get("files") or []:
+        if f["path"] == ".env":
+            env_text = read_nofollow(os.path.join(p.path, "files", ".env")).decode("utf-8",
+                                                                                 "replace")
+    meta = ar_metadata(d, a, p, m, env_text)
+    j = journal_load(d) or {}
+    old = j.get("partial")
+    if isinstance(old, str) and os.path.dirname(old) == os.path.dirname(out) and \
+            old.endswith(".sigrift-partial") and os.path.lexists(old):
+        os.unlink(old)
+    part = partial_name(out)
+    journal_put(d, "partial", part)
+    reserve = reserve_for(os.path.dirname(out))
+    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    req = {"data_key": b64(dk), "metadata": meta, "members": [x for x, _ in members],
+           "wrap": dict((k, wrap.get(k)) for k in ("prefix", "wrapped", "wrap_check",
+                                                   "archive_id", "created_at", "crypto"))}
+    del dk
+
+    def monitor(_n):
+        return free_bytes(os.path.dirname(out)) >= reserve
+    why = None
+    try:
+        try:
+            r = ar_engine("ar-write", a, req, sections=[path for _, path in members],
+                          out_fd=fd, monitor=monitor)
+        finally:
+            del req
+        os.fsync(fd)
+        fsync_dir(os.path.dirname(out))
+        fadvise_dontneed(fd)
+        os.close(fd)
+        fd = None
+        if sha256_file(part) != r["archive_sha256"] or os.lstat(part).st_size != \
+                r["archive_bytes"] or r.get("_d_sha256") != r["archive_sha256"]:
+            raise Failed("files", "the written file does not match what the engine sent")
+    except EngineFailed as e:
+        why = "reserve" if e.kind == "space" or e.code == "no-space" else (
+            "restore-point" if (getattr(e, "obj", None) or {}).get("archive_error") == "A-TAR"
+            else "key" if e.code == "integrity" else "io")
+    except OSError as e:
+        why = "efbig" if e.errno == errno.EFBIG else "space" if e.errno == errno.ENOSPC \
+            else "io"
+    except Failed:
+        why = "io"
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if why:
+        if os.path.lexists(part):
+            os.unlink(part)
+        fsync_dir(os.path.dirname(out))
+        ar_write_failed(a, out, why)
+    res = {"archive_bytes": r["archive_bytes"], "archive_sha256": r["archive_sha256"],
+           "segments": r["segments"], "header_checksum": r["header_checksum"],
+           "partial": part}
+    journal_put(d, "archive", {"bytes": r["archive_bytes"], "sha256": r["archive_sha256"],
+                               "segments": r["segments"],
+                               "header_checksum": r["header_checksum"]})
+    put_result(res)
+
+
+def ar_write_failed(a, out, why, verify=False):
+    inst = inst_of(a)
+    fs = existing_parent(os.path.dirname(out))
+    m = re.fullmatch(r"\.(.+)\.[0-9a-f]{16}\.sigrift-partial", os.path.basename(out))
+    if m:
+        out = os.path.join(os.path.dirname(out), m.group(1))
+    if why == "efbig":
+        sys.stderr.write("Error: the archive cannot be written to %s: FAT32 holds at most "
+                         "4 GiB - 1 per file.\nNext: %s --abort, then export to another place "
+                         "(an exFAT or ext4 filesystem)\n" % (esc(fs), inst))
+        put_result({"ok": False, "code": "efbig"})
+        sys.exit(1)
+    if why == "key":
+        sys.stderr.write("Error: the archive key file of this export is damaged; nothing was "
+                         "encrypted with it.\nNext: %s --abort, then the command again\n" % inst)
+        put_result({"ok": False, "code": "key-damaged"})
+        sys.exit(1)
+    text = {"reserve": "no space left on %s" % esc(fs), "space": "no space left on %s" % esc(fs),
+            "io": "I/O error",
+            "verify": "the written file does not verify: the medium may be faulty",
+            "restore-point": "the restore point no longer matches its own checksums"}[why]
+    stack = "stays stopped and held (--move)" if a.get("moved") in ("1", True) else \
+        "is running again"
+    nxt = "%s --abort" % inst if why == "restore-point" else "%s --resume" % inst
+    lines = ["Error: writing %s failed (%s). The partial file was removed; the stack %s; the "
+             "restore point is kept for the retry." % (esc(out), text, stack)]
+    if why != "restore-point":
+        lines.append("  Or give up: %s --abort" % inst)
+    lines.append("Next: " + nxt)
+    sys.stderr.write("\n".join(lines) + "\n")
+    put_result({"ok": False, "code": why})
+    sys.exit(EXIT_RESERVE if why == "reserve" else 1)
+
+
+def cmd_ar_verify(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    path = os.path.abspath(a["file"])
+    sd = open_state(d, create=False)
+    try:
+        dfd, dk = ar_key_or_fail(sd, a["jid"], "export", a=a)
+        wrap = json_read_at(dfd, AR_WRAP)
+        os.close(dfd)
+    finally:
+        sd.close()
+    j = journal_load(d) or {}
+    arch = j.get("archive") or {}
+    p, m = manifest_for(d, a["rp"]) if a.get("rp") else (None, None)
+    members = [x for x, _ in ar_members_of_point(p, m)] if p is not None else \
+        a.get("members") or []
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        ar_write_failed(a, path, "verify")
+    fadvise_dontneed(fd)
+    size = os.fstat(fd).st_size
+    req = {"data_key": b64(dk), "wrap_check": (wrap or {}).get("wrap_check"),
+           "header_checksum": arch.get("header_checksum"), "archive_bytes": size,
+           "members": members}
+    del dk
+    try:
+        with os.fdopen(fd, "rb") as f:
+            r = ar_engine("ar-verify", a, req, sections=[f])
+    except EngineFailed as e:
+        if e.code == "integrity":
+            ar_write_failed(a, path, "key")
+        if (getattr(e, "obj", None) or {}).get("archive_error") == "A-TAR" and \
+                (e.obj or {}).get("why") == "list":
+            if os.path.lexists(path):
+                os.unlink(path)
+            ar_write_failed(a, path, "restore-point")
+        if os.path.lexists(path) and path.endswith(".sigrift-partial"):
+            os.unlink(path)
+        ar_write_failed(a, path, "verify")
+    put_result({"ok": True, "segments": r.get("segments"), "members": r.get("members")})
+
+
+def cmd_ar_publish(a):
+    d = os.path.realpath(a["dir"]) if a.get("dir") else None
+    target = os.path.abspath(a["file"])
+    j = journal_load(d) if d else {}
+    part = a.get("partial") or (j or {}).get("partial")
+    want = ((j or {}).get("archive") or {}).get("sha256")
+    folder = os.path.dirname(target)
+    if os.path.lexists(target):
+        if want and os.path.isfile(target) and not os.path.islink(target) and \
+                sha256_file(target) == want:
+            if part and os.path.lexists(part):
+                os.unlink(part)
+        else:
+            sys.stderr.write("Error: %s exists; an export never overwrites a file.\nNext: move "
+                             "it away, then %s --resume\n" % (esc(target), inst_of(a)))
+            put_result({"ok": False, "code": "exists"})
+            sys.exit(4)
+    else:
+        if not part or not os.path.isfile(part):
+            raise Failed("files", "the verified partial file is gone")
+        try:
+            os.link(part, target)
+            os.unlink(part)
+        except OSError as e:
+            if e.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EXDEV):
+                raise
+            if os.path.lexists(target):
+                sys.stderr.write("Error: %s exists; an export never overwrites a file.\n"
+                                 % esc(target))
+                sys.exit(4)
+            os.rename(part, target)
+        fsync_dir(folder)
+    mode_note = None
+    try:
+        os.chmod(target, 0o600)
+        if stat.S_IMODE(os.stat(target).st_mode) != 0o600:
+            mode_note = "the filesystem of %s ignores file modes" % esc(folder)
+    except OSError:
+        mode_note = "the filesystem of %s ignores file modes" % esc(folder)
+    if mode_note:
+        note(mode_note)
+    if d and a.get("jid"):
+        sd = open_state(d, create=False)
+        try:
+            try:
+                dfd = sd.sub(a["jid"])
+                try:
+                    os.unlink(AR_KEY, dir_fd=dfd)
+                    fsync_fd(dfd)
+                except FileNotFoundError:
+                    pass
+                finally:
+                    os.close(dfd)
+            except FileNotFoundError:
+                pass
+        finally:
+            sd.close()
+    if d and j:
+        journal_put(d, "published", True)
+    put_result({"ok": True, "file": target, "mode_note": mode_note})
+
+
+def cmd_ar_forget(a):
+    d = os.path.realpath(a["dir"])
+    try:
+        sd = StateDir(d, create=False)
+    except FileNotFoundError:
+        put_result({"ok": True, "removed": []})
+        return
+    except StateUnsafe as e:
+        state_unsafe_refuse(e)
+    removed = []
+    try:
+        for name in [x for x in (a.get("jid"), a.get("pending")) if x]:
+            name = os.path.basename(name)
+            if not re.fullmatch(r"(\.pending-[0-9a-f]{16}|[0-9]{8}T[0-9]{6}Z(-[0-9]+)?)", name):
+                continue
+            if os.path.lexists(os.path.join(sd.ops, name)):
+                rmtree_at(sd.ops_fd, name)
+                removed.append(name)
+        empty_ops = not os.listdir(sd.ops_fd)
+    finally:
+        sd.close()
+    if a.get("pending") and empty_ops:
+        try:
+            os.rmdir(sd.ops)
+            if not os.listdir(sd.path):
+                os.rmdir(sd.path)
+        except OSError:
+            pass
+    put_result({"ok": True, "removed": removed})
+
+
+def cmd_ar_probe(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    path = a["file"]
+    expect = expect_value(a)
+    a["file"] = path
+    try:
+        fd, size = ar_open_archive(path)
+    except ArRefused as e:
+        ar_refuse(e, a, path)
+    try:
+        try:
+            h = ar_header_of_fd(fd, size)
+        except ArRefused as e:
+            ar_refuse(e, a, path)
+        if expect and hc16(h["header_checksum"]) != expect:
+            ar_refuse(ArRefused("NOT-EXPECTED", hc16=hc16(h["header_checksum"]),
+                                expected=expect), a, path)
+        sd = open_state(d)
+        name, dfd = sd.new_pending()
+        ok = False
+        try:
+            want_key = not a.get("no_key")
+            tmp = ".manifest.%s.tmp" % os.urandom(4).hex()
+            tmp_path = os.path.join(sd.ops, name, tmp)
+            box = {}
+
+            def attempt(passphrase):
+                req = {"passphrase_b64": b64(passphrase), "header": b64(h["header"]),
+                       "want_key": want_key, "archive_bytes": size}
+                os.lseek(fd, h["header_len"], os.SEEK_SET)
+                if os.path.lexists(tmp_path):
+                    os.unlink(tmp_path)
+                try:
+                    with os.fdopen(os.dup(fd), "rb", buffering=0) as f:
+                        box["r"] = ar_engine("ar-probe", a, req, sections=[f],
+                                             out_path=tmp_path)
+                    return True
+                except EngineFailed as e:
+                    if (getattr(e, "obj", None) or {}).get("archive_error") == "A-PASSPHRASE" \
+                            and os.isatty(int(a.get("passphrase_fd") or 4)):
+                        return False
+                    box["e"] = e
+                    return True
+            adir = os.path.dirname(os.path.abspath(path))
+            try:
+                pp_read(int(a.get("passphrase_fd") or 4), False, a, attempt=attempt) \
+                    if os.isatty(int(a.get("passphrase_fd") or 4)) else \
+                    attempt(pp_read(int(a.get("passphrase_fd") or 4), False, a,
+                                    archive_dir=adir))
+            except PassRefused as e:
+                pp_refuse(e, a, False)
+            if "e" in box:
+                e = box["e"]
+                crypto_refusal(e, a)
+                ar_refuse(ar_engine_refusal(e, None, dict(h, file_bytes=size)), a, path)
+            r = box["r"]
+            meta = r.get("metadata") or {}
+            mraw = read_nofollow(tmp_path, 17 << 20)
+            os.unlink(tmp_path)
+            if sha256_bytes(mraw) != r.get("manifest_sha256") or \
+                    r.get("manifest_sha256") != (meta.get("members") or [{}])[0].get("h"):
+                ar_refuse(ArRefused("A-TAR", member_name="manifest.json",
+                                    why_text="its sha256 differs"), a, path)
+            try:
+                manifest = strict_json(mraw)
+            except (ValueError, UnicodeDecodeError):
+                ar_refuse(ArRefused("A-METADATA"), a, path)
+            expected = h["header_len"] + meta["payload_bytes"] + 16 * meta["segments"]
+            size_now = os.fstat(fd).st_size
+            if size_now != expected:
+                ar_refuse(ArRefused("A-LENGTH", diff=size_now - expected, expected=expected,
+                                    segment_size=h["segment_size"],
+                                    segments=meta["segments"]), a, path)
+            probe = {"format": 1, "metadata": meta, "manifest": manifest,
+                     "manifest_sha256": r["manifest_sha256"],
+                     "rf_rows_sha256": r["rf_rows_sha256"],
+                     "header_checksum": h["header_checksum"], "header_len": h["header_len"],
+                     "segment_size": h["segment_size"], "archive_bytes": size}
+            json_write_at(dfd, AR_PROBE, probe)
+            if want_key:
+                key_write(dfd, unb64(r["data_key"]))
+            r.pop("data_key", None)
+            ok = True
+        finally:
+            os.close(dfd)
+            if not ok:
+                rmtree_at(sd.ops_fd, name)
+            sd.close()
+            if not ok:
+                sd_drop_created(sd)
+    finally:
+        os.close(fd)
+    put_result(dict(probe, pending=os.path.join(sd.ops, name), created=sd.created))
+
+
+def cmd_ar_stage(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    path = a["file"]
+    jid = a["jid"]
+    sd = open_state(d, create=False)
+    dfd = None
+    undone = [a["undone"]] if a.get("undone") else []
+    try:
+        # A key that is gone or damaged is a late refusal (exit 3, 6.2
+        # im-stage: the caller undoes the import), like E integrity below.
+        dfd, dk = ar_key_or_fail(sd, jid, "import", inside=False, a=a, details=undone)
+        probe = json_read_at(dfd, AR_PROBE)
+        if not isinstance(probe, dict):
+            raise Failed("files", "probe.json of op %s cannot be read" % jid)
+        ar_drop_host_part(dfd)
+        try:
+            fd, size = ar_open_archive(path)
+        except ArRefused as e:
+            ar_refuse(e, a, path)
+        staged = False
+        try:
+            try:
+                h = ar_header_of_fd(fd, size)
+            except ArRefused as e:
+                ar_refuse(e, a, path)
+            if h["header_checksum"] != probe.get("header_checksum"):
+                ar_refuse(ArRefused("NOT-EXPECTED", hc16=hc16(h["header_checksum"]),
+                                    expected=hc16(probe.get("header_checksum"))), a, path)
+            parts = json.loads(a.get("parts") or "[]")
+            req = {"data_key": b64(dk), "header_checksum": h["header_checksum"],
+                   "archive_bytes": size, "rb_id": jid, "parts": parts,
+                   "reserve_bytes": int(a.get("reserve") or 0),
+                   "manifest_sha256": probe.get("manifest_sha256")}
+            del dk
+            hp = os.path.join(sd.ops, jid, AR_HOST_PART)
+            os.lseek(fd, 0, os.SEEK_SET)
+            # From here host-part.bin holds decrypted members: every way out
+            # but the finished split removes it (and payload/), 5.2.
+            hfd = os.open(AR_HOST_PART, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                          0o600, dir_fd=dfd)
+            try:
+                try:
+                    with os.fdopen(os.dup(fd), "rb", buffering=0) as f:
+                        r = ar_engine("ar-stage", a, req, sections=[f], out_fd=hfd,
+                                      parts=[p["name"] for p in parts
+                                             if p.get("action") == "stage"])
+                    os.fsync(hfd)
+                finally:
+                    os.close(hfd)
+                host = ar_split_host_part(dfd, hp, probe, r)
+                res = {"ok": True, "staged": r.get("staged"), "verified_only":
+                       r.get("verified_only"), "segments": r.get("segments"), "host_part": host}
+                # The stage is done once this file exists: a resume of im-stage
+                # goes on from here without the key (it is unlinked below).
+                json_write_at(dfd, AR_STAGED, res)
+                staged = True
+            except EngineFailed as e:
+                ar_drop_host_part(dfd)
+                if e.kind == "space" or e.code == "no-space":
+                    sys.stderr.write("kind=space: %s\n" % e)
+                    put_result({"ok": False, "kind": "space"})
+                    sys.exit(EXIT_RESERVE)
+                if e.code == "integrity":
+                    put_result({"ok": False, "code": "key-damaged"})
+                    if (getattr(e, "obj", None) or {}).get("why") == "header-checksum":
+                        refuse("%s changed while it was read: its header is no longer the one "
+                               "this import checked; nothing was decrypted." % esc(path),
+                               undone, next_cmd="sha256sum %s" % q(path))
+                    refuse("the archive key file of this import (%s) is damaged; nothing was "
+                           "decrypted with it." % esc(os.path.join(sd.ops, jid, AR_KEY)),
+                           undone, next_cmd="%s --abort, then the command again" % inst_of(a))
+                crypto_refusal(e, a)
+                ar_refuse(ar_engine_refusal(e, probe.get("metadata"), dict(h, file_bytes=size)),
+                          a, path, {"undone": a.get("undone")})
+            finally:
+                if not staged:
+                    ar_drop_host_part(dfd)
+        finally:
+            os.close(fd)
+        os.unlink(AR_HOST_PART, dir_fd=dfd)
+        try:
+            os.unlink(AR_KEY, dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+        fsync_fd(dfd)
+        put_result(res)
+    finally:
+        if dfd is not None:
+            os.close(dfd)
+        sd.close()
+
+
+def ar_drop_host_part(dfd):
+    """host-part.bin and payload/ of an ar-stage that did not finish go."""
+    try:
+        os.unlink(AR_HOST_PART, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    try:
+        rmtree_at(dfd, "payload")
+    except OSError:
+        pass
+    try:
+        fsync_fd(dfd)
+    except OSError:
+        pass
+
+
+def ar_split_host_part(dfd, hp, probe, r):
+    """host-part.bin -> payload/ (0600, O_EXCL|O_NOFOLLOW), by probe.json's
+    members list; promote/audit.key against its bridge_data members line."""
+    meta = probe.get("metadata") or {}
+    names = (r.get("host_part") or {}).get("members") or []
+    sizes = dict((m["n"], m) for m in meta.get("members") or [])
+    if sha256_file(hp) != (r.get("host_part") or {}).get("sha256"):
+        raise Failed("files", "the host part does not match what the engine sent")
+    try:
+        rmtree_at(dfd, "payload")
+    except OSError:
+        pass
+    os.mkdir("payload", 0o700, dir_fd=dfd)
+    pfd = os.open("payload", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+    written = []
+    blobs = {}
+    try:
+        with open(hp, "rb") as f:
+            for n in names:
+                if n == "promote/audit.key":
+                    line = None
+                    for x in (blobs.get("bridge_data") or b"").decode("utf-8").splitlines():
+                        if x.strip():
+                            e = strict_json(x)
+                            if e.get("p") == "audit.key":
+                                line = e
+                    if line is None:
+                        raise Failed("files", "no audit.key line in the bridge_data members")
+                    want = {"s": line.get("s"), "h": line.get("h")}
+                else:
+                    if n not in sizes:
+                        raise Failed("files", "the host part names a member outside the list")
+                    want = sizes[n]
+                data = f.read(want["s"])
+                if len(data) != want["s"] or sha256_bytes(data) != want["h"]:
+                    raise Failed("files", "a host-part member does not match its sha256")
+                if n == "manifest.json" and sha256_bytes(data) != probe.get("manifest_sha256"):
+                    raise Failed("files", "the manifest differs from the probed one")
+                mm = re.fullmatch(r"volumes/([a-z_-]+)\.members\.json", n)
+                if mm:
+                    blobs[mm.group(1)] = data
+                parts = n.split("/")
+                cur = pfd
+                opened = []
+                try:
+                    for comp in parts[:-1]:
+                        try:
+                            os.mkdir(comp, 0o700, dir_fd=cur)
+                        except FileExistsError:
+                            pass
+                        nfd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=cur)
+                        opened.append(nfd)
+                        cur = nfd
+                    wfd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                  os.O_NOFOLLOW, 0o600, dir_fd=cur)
+                    try:
+                        write_all(wfd, data)
+                        os.fsync(wfd)
+                    finally:
+                        os.close(wfd)
+                finally:
+                    for x in opened:
+                        os.close(x)
+                written.append(n)
+            if f.read(1):
+                raise Failed("files", "the host part is longer than its members")
+    except BaseException:
+        os.close(pfd)
+        pfd = None
+        rmtree_at(dfd, "payload")
+        raise
+    finally:
+        if pfd is not None:
+            os.close(pfd)
+    return {"members": written}
+
+
+def write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        view = view[n:]
+
+
+# ── env-import (4.2, 7.1, 7.2) ──────────────────────────────────────────
+
+ACTIVE_STATES = ("running", "failed", "verify_failed", "aborting")
+KEEP_BIND = ("127.0.0.1", "::1", "0.0.0.0", "::", "")
+
+
+def bind_refused(value, addresses):
+    """4.2: SIGRIFT_BIND of the archive names an address of the old host
+    that this host does not have."""
+    return (value or "") not in KEEP_BIND and value not in addresses
+
+
+def env_quote(value):
+    """A value written so 1a's parse_dotenv and Compose read it back as is
+    (single quotes: Compose takes them literally)."""
+    return value if AUDIT_VALUE_PLAIN.fullmatch(value) else "'" + value + "'"
+
+
+class EnvRefused(Exception):
+    def __init__(self, code, detail=None):
+        Exception.__init__(self, code)
+        self.code, self.detail = code, detail
+
+
+def env_refuse(e, late=False, undone=None):
+    what = {"unreadable": "cannot be read the way Docker Compose reads it (%s)" % e.detail,
+            "production": "lacks %s, which production needs while data depends on them"
+                          % ", ".join(e.detail or []),
+            "audit-value": "audit key cannot be written so that the bridge and the gateway "
+                           "read the same bytes"}[e.code]
+    refuse("the archive's .env %s." % what, ([undone] if undone else []),
+           next_cmd="TROUBLESHOOTING.md \"Importing an archive\"")
+
+
+def env_import_plan(names, eff, meta, manifest, target, mode, port, bind, backend, current,
+                    promote_text=None):
+    """The class rules of 4.2 and 7.1 on the archive's .env: NAMES (key ->
+    set|empty, every key), EFF (key -> value, or {} in a dry run). ->
+    {changes: {key: (value or None to remove, rule)}, moved: [(key, rule)],
+    added: {key: value}, promoted, generated, kept}."""
+    src_type = meta.get("install_type") or "release"
+    switch = "source-to-release" if src_type == "source" and target == "release" else \
+        "release-to-source" if src_type == "release" and target == "source" else None
+    audit = manifest.get("audit") or meta.get("audit") or {}
+    counts = manifest.get("counts") or meta.get("counts") or {}
+    source = audit.get("source") or "none"
+    moved, changes, added, kept = [], {}, {}, []
+    generated, promoted = [], None
+    for k in sorted(names):
+        cls = KEY_CLASSES.get(k)
+        if k == "COMPOSE_PROJECT_NAME":
+            changes[k] = (None, "identity")
+            continue
+        if k.startswith("COMPOSE_") or k.startswith("DOCKER_") or cls == "compose":
+            moved.append((k, "compose"))
+            continue
+        if k in ("SIGRIFT_BACKEND_SUBNET", "SIGRIFT_BACKEND_IP_RANGE",
+                 "SIGRIFT_GATEWAY_BACKEND_IP"):
+            moved.append((k, "host"))
+            continue
+        if k == "SIGRIFT_BIND":
+            continue
+        if k in OLD_HOST_SETTINGS:
+            moved.append((k, "old-host"))
+            continue
+        if switch == "source-to-release":
+            if k == "BRIDGE_ENV":
+                if eff.get(k) != "production":
+                    moved.append((k, "switch"))
+                continue
+            if (k in SOURCE_ONLY_KEYS or k.startswith("MLRF_")) and \
+                    k not in RELEASE_TEMPLATE_KEYS:
+                moved.append((k, "switch"))
+                continue
+        if switch == "release-to-source" and k in ("UC_PORT", "SIGRIFT_QUICKSTART_MODE"):
+            continue
+        kept.append(k)
+    # Host keys: the import's own (a fresh import: what im-volumes chose; a
+    # --replace: the target's current values).
+    own = backend if backend is not None else dict(
+        (k, current.get(k)) for k in ("SIGRIFT_BACKEND_SUBNET", "SIGRIFT_BACKEND_IP_RANGE",
+                                      "SIGRIFT_GATEWAY_BACKEND_IP") if current.get(k))
+    for k, v in sorted((own or {}).items()):
+        if v:
+            added[k] = v
+    if bind is not None:
+        added["SIGRIFT_BIND"] = bind
+    elif "SIGRIFT_BIND" in names:
+        kept.append("SIGRIFT_BIND")
+    if switch == "source-to-release":
+        added["BRIDGE_ENV"] = "production"
+    if switch == "release-to-source":
+        added["UC_PORT"] = str(port)
+        added["SIGRIFT_QUICKSTART_MODE"] = mode or "dashboard-only"
+        generated.append("BRIDGE_LOCAL_NODE_KEY")
+    if target == "release" and source in ("legacy-secret", "master", "file"):
+        if source == "file":
+            value = None if promote_text is None else audit_value_for(source, eff,
+                                                                      promote_text)
+            dry = promote_text is None
+        else:
+            value = audit_value_for(source, eff) if eff else None
+            dry = not eff
+        if dry:
+            if source != "file" and meta.get("env", {}).get("audit_value") == "unwritable":
+                raise EnvRefused("audit-value")
+        elif not audit_value_ok(value):
+            raise EnvRefused("audit-value")
+        else:
+            added["BRIDGE_AUDIT_KEY"] = value
+        if source == "legacy-secret":
+            moved.append(("BRIDGE_AUDIT_SECRET", "promoted"))
+        promoted = {"from": source, "to": "BRIDGE_AUDIT_KEY"}
+    if target == "release":
+        have = lambda k: names.get(k) == "set" or bool(added.get(k))  # noqa: E731
+        need = []
+        for k in PRODUCTION_KEYS:
+            if have(k) or (k == "BRIDGE_AUDIT_KEY" and promoted):
+                continue
+            if k == "BRIDGE_MFA_KEY" and (counts.get("totp_fernet") or 0) > 0:
+                need.append(k)
+            elif k == "BRIDGE_AUDIT_KEY" and source not in ("none",) and (
+                    audit.get("entries") or audit.get("head_id")):
+                need.append(k)
+            else:
+                generated.append(k)
+        if need:
+            raise EnvRefused("production", need)
+    return {"switch": switch, "moved": moved, "changes": changes, "added": added,
+            "kept": sorted(set(kept) - set(added)), "generated": generated,
+            "promoted": promoted}
+
+
+def env_texts(text, plan, meta):
+    """(env.new, env.imported.new) from the archive's .env TEXT and PLAN."""
+    moved = dict(plan["moved"])
+    added = dict(plan["added"])
+    out, imported, pos = [], [], 0
+    seen = set()
+    for x in parse_dotenv(text):
+        end = x.line_end + 1 if x.line_end < len(text) else len(text)
+        out.append(text[pos:x.line_start])
+        line = text[x.line_start:end]
+        pos = end
+        if x.name in moved or x.name in plan["changes"]:
+            if x.name in moved:
+                imported.append((x.name, moved[x.name], line))
+            continue
+        if x.name in added:
+            if x.name not in seen:
+                out.append("%s=%s\n" % (x.name, env_quote(added[x.name])))
+                seen.add(x.name)
+            continue
+        out.append(line if line.endswith("\n") else line + "\n")
+    out.append(text[pos:])
+    body = "".join(out)
+    if body and not body.endswith("\n"):
+        body += "\n"
+    for k in sorted(added):
+        if k not in seen:
+            body += "%s=%s\n" % (k, env_quote(added[k]))
+    src = meta.get("source") or {}
+    head = ("# Values from archive %s of %s (%s) that describe the old host or the other "
+            "install type. Not used here.\n" % (esc(meta.get("archive_id")),
+                                                 esc(src.get("hostname")),
+                                                 esc(meta.get("created_at"))))
+    imp = head + "".join("# %s: %s\n" % (k, ENV_RULE_TEXT.get(r, r)) for k, r, _ in imported)
+    imp += "".join(line if line.endswith("\n") else line + "\n" for _, _, line in imported)
+    return body, imp
+
+
+ENV_RULE_TEXT = {"compose": "a Compose or Docker setting, which an import never activates",
+                 "host": "the old host's backend network (detected again here)",
+                 "old-host": "an adapter name of the old host (detected again)",
+                 "switch": "a setting of the other install type",
+                 "promoted": "promoted into BRIDGE_AUDIT_KEY"}
+
+
+FERNET_KEYS = ("BRIDGE_MFA_KEY", "BRIDGE_KEYSTORE_KEY")
+
+
+def env_fill_generated(plan):
+    """The values of PLAN's generated keys go into the same one write (4.2:
+    what 1a's env_plan R3-R8 would add, which nothing in the archive's data
+    depends on: a Fernet key for BRIDGE_MFA_KEY, a token otherwise)."""
+    import base64
+    import secrets
+    for k in plan.get("generated") or []:
+        plan["added"][k] = base64.urlsafe_b64encode(os.urandom(32)).decode() \
+            if k in FERNET_KEYS else secrets.token_urlsafe(32)
+    return plan
+
+
+def cmd_env_import(a):
+    ar_tool_setup()
+    d = os.path.realpath(a["dir"])
+    sd = open_state(d, create=False)
+    try:
+        dfd = sd.sub(os.path.basename(a["jid"]))
+        try:
+            probe = json_read_at(dfd, AR_PROBE)
+            if not isinstance(probe, dict):
+                raise Failed("files", "probe.json cannot be read")
+            meta, manifest = probe.get("metadata") or {}, probe.get("manifest") or {}
+            backend = json.loads(a["backend"]) if a.get("backend") else None
+            current = env_effective(read_text(a["current_env"]) or "") if a.get(
+                "current_env") else {}
+            port = a.get("port") or (meta.get("source") or {}).get("port") or 8444
+            bind = a.get("bind")
+            try:
+                if a.get("dry"):
+                    env = meta.get("env") or {}
+                    if env.get("parse", "ok") != "ok":
+                        raise EnvRefused("unreadable", env.get("parse"))
+                    names = dict(env.get("keys") or {})
+                    plan = env_import_plan(names, {}, meta, manifest, a["target"], a.get("mode"),
+                                           port, bind, backend, current)
+                    sha = None
+                else:
+                    text = read_at(dfd, "payload/files/.env")
+                    if text is None:
+                        raise EnvRefused("unreadable", "missing")
+                    try:
+                        text = text.decode("utf-8")
+                    except UnicodeDecodeError:
+                        raise EnvRefused("unreadable", "line 1")
+                    for x in parse_dotenv(text):
+                        if x.odd:
+                            raise EnvRefused("unreadable", "line %d" % (
+                                text[:x.line_start].count("\n") + 1))
+                    names = dict((x.name, "set" if x.value else "empty")
+                                 for x in parse_dotenv(text))
+                    promote = read_at(dfd, "payload/promote/audit.key")
+                    plan = env_import_plan(names, env_effective(text), meta, manifest,
+                                           a["target"], a.get("mode"), port, bind, backend,
+                                           current, promote.decode("utf-8", "replace")
+                                           if promote is not None else None)
+                    env_fill_generated(plan)
+                    body, imp = env_texts(text, plan, meta)
+                    for name, data in (("env.new", body), ("env.imported.new", imp)):
+                        try:
+                            os.unlink(name, dir_fd=dfd)
+                        except FileNotFoundError:
+                            pass
+                        wfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                      os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+                        try:
+                            write_all(wfd, data.encode("utf-8"))
+                            os.fsync(wfd)
+                        finally:
+                            os.close(wfd)
+                    fsync_fd(dfd)
+                    sha = sha256_bytes(body.encode("utf-8"))
+            except EnvRefused as e:
+                env_refuse(e, late=not a.get("dry"), undone=a.get("undone"))
+        finally:
+            os.close(dfd)
+    finally:
+        sd.close()
+    put_result({"ok": True, "env_text_sha256": sha, "switch": plan["switch"],
+                "moved": [{"key": k, "rule": r} for k, r in plan["moved"]],
+                "kept": plan["kept"], "promoted": plan["promoted"],
+                "generated": plan["generated"], "added": sorted(plan["added"])})
+
+
+def read_at(dfd, rel):
+    """The bytes of REL under DFD, never through a symlink, or None."""
+    parts = rel.split("/")
+    cur, opened = dfd, []
+    try:
+        for comp in parts[:-1]:
+            cur = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur)
+            opened.append(cur)
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=cur)
+    except OSError:
+        return None
+    finally:
+        for x in opened:
+            os.close(x)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(os.dup(fd), "rb") as f:
+            return f.read(64 << 20)
+    finally:
+        os.close(fd)
+
+
+# ── live-source-probe (6.4) ─────────────────────────────────────────────
+
+
+def tls_peer_sha256(host, port, timeout=2.0, server_name=None):
+    """sha256 of the certificate HOST:PORT presents (a ClientHello only;
+    the certificate is compared, never trusted), or None."""
+    import socket
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            with ctx.wrap_socket(s, server_hostname=server_name) as t:
+                der = t.getpeercert(binary_form=True)
+    except (OSError, ssl.SSLError, ValueError):
+        return None
+    return hashlib.sha256(der).hexdigest() if der else None
+
+
+TLS_PEER = tls_peer_sha256
+
+
+def cmd_live_source_probe(a):
+    import ipaddress
+    probe = None
+    try:
+        with open(a["probe"], "rb") as f:
+            probe = strict_json(f.read(64 << 20))
+    except (OSError, ValueError):
+        raise Failed("files", "probe.json cannot be read")
+    meta = probe.get("metadata") or {}
+    src = meta.get("source") or {}
+    port = src.get("port") or 8444
+    want = src.get("tls_cert_sha256")
+    targets = []
+    for t in list(src.get("addresses") or []) + list(src.get("tls_names") or []):
+        if isinstance(t, str) and t and t not in targets:
+            targets.append(t)
+    targets = targets[:12]
+    local = set(ip_addresses()) if a.get("skip_local") else set()
+    answered, unreachable, skipped = [], [], []
+    for t in targets:
+        if t in local:
+            skipped.append(t)
+            continue
+        try:
+            ipaddress.ip_address(t)
+            sni = None
+        except ValueError:
+            sni = t
+        got = TLS_PEER(t, int(port), 2.0, sni)
+        if got is None:
+            unreachable.append(t)
+        else:
+            answered.append({"target": t, "port": port, "same_cert": bool(want) and got == want})
+    res = {"answered": answered, "unreachable": unreachable, "skipped": skipped}
+    put_result(res)
+    live = [x for x in answered if x["same_cert"]]
+    if live:
+        inst = inst_of(a)
+        refuse("the install this archive came from still answers at %s:%s with the same "
+               "certificate; two gateways would serve the same keys and CA, and edges would "
+               "split between them." % (esc(live[0]["target"]), port),
+               ["If you are sure it must keep running (a test copy): %s --allow-live-source"
+                % cmd_of(a, "--import FILE")],
+               next_cmd="on that host %s --export <file> --move" % inst)
+
+
+# ── import-plan (6.2 step 5) ────────────────────────────────────────────
+
+
+def read_volume_file(volume, rel, limit=65536):
+    helper = helper_image()
+    if not helper:
+        return None
+    r = docker(*(helper_run_args("record", "1500:1500") + [
+        "-v", volume + ":/v:ro", helper, "head", "-c", str(limit + 1), "/v/" + rel]))
+    if r.returncode or len(r.stdout) > limit:
+        return None
+    try:
+        obj = json.loads(r.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def running_projects():
+    """The projects with a running container. A Docker error is a failure,
+    never "nothing runs" (the same-install check depends on it)."""
+    out = set()
+    try:
+        for line in docker_lines("docker ps", "ps", "--filter", "label=" + PROJECT_LABEL,
+                                 "--format", '{{.Label "%s"}}' % PROJECT_LABEL):
+            if line.strip():
+                out.add(line.strip())
+    except DockerError as e:
+        raise Failed("docker", "could not list the running containers (%s exited %d)"
+                     % (e.what, e.rc))
+    return out
+
+
+def published_ports(exclude_project=None):
+    ports = set()
+    try:
+        lines = docker_lines("docker ps", "ps", "--format",
+                             '{{.Label "%s"}}\t{{.Ports}}' % PROJECT_LABEL)
+    except DockerError:
+        return ports
+    for line in lines:
+        proj, _, text = line.partition("\t")
+        if exclude_project and proj == exclude_project:
+            continue
+        for m in re.finditer(r":(\d+)->", text):
+            ports.add(int(m.group(1)))
+    return ports
+
+
+def port_bindable(bind, port):
+    import socket
+    fam = socket.AF_INET6 if ":" in (bind or "") else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((bind or "0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+PORT_BINDABLE = port_bindable
+
+
+def cmd_import_plan(a):
+    d = os.path.realpath(a["dir"])
+    sd = open_state(d, create=False)
+    try:
+        dfd = sd.sub(os.path.basename(a["jid"]))
+        try:
+            probe = json_read_at(dfd, AR_PROBE)
+        finally:
+            os.close(dfd)
+    finally:
+        sd.close()
+    if not isinstance(probe, dict):
+        raise Failed("files", "probe.json cannot be read")
+    meta = probe.get("metadata") or {}
+    src = meta.get("source") or {}
+    target = a["project"]
+    replace = bool(a.get("replace"))
+    inst = inst_of(a)
+    cmd = cmd_of(a, "--import FILE")
+    try:
+        vols = list_volumes()
+    except DockerError as e:
+        raise Failed("docker", "could not list volumes (%s exited %d)" % (e.what, e.rc))
+    projects = {}
+    for name, proj, vol in vols:
+        projects.setdefault(proj, {})[vol] = name
+    running = running_projects()
+    moved_away, same = [], None
+    for proj, pv in sorted(projects.items()):
+        if "bridge_data" not in pv:
+            continue
+        rec = read_volume_file(pv["bridge_data"], ".sigrift-install.json") or {}
+        marker = read_volume_file(pv["bridge_data"], ".sigrift-restore-incomplete") or {}
+        if (rec.get("imported_from") or {}).get("archive_id") == meta.get("archive_id") and \
+                not replace:
+            refuse("archive %s was already imported here (%s, %s)." % (
+                str(meta.get("archive_id"))[:8], esc(rec.get("working_dir") or proj),
+                esc((rec.get("imported_from") or {}).get("at") or "?")),
+                next_cmd="%s --replace in that folder" % cmd)
+        if rec.get("install_id") and rec.get("install_id") == meta.get("install_id") and \
+                proj != target:
+            # A running project is the same install running, whatever its
+            # markers say (a moved install started by hand, 6.4); only a
+            # stopped one with a move marker is moved away.
+            if proj in running:
+                refuse("the install this archive came from (%s, install %s) runs on this host "
+                       "in %s." % (esc(proj), str(meta.get("install_id"))[:8],
+                                   esc(rec.get("working_dir") or "?")),
+                       next_cmd="cd %s && %s --export <file> --move" % (
+                           q(rec.get("working_dir") or "<its folder>"), inst))
+            if marker.get("op") == "move":
+                moved_away.append({"project": proj, "volumes": sorted(pv.values()),
+                                   "rm": "docker volume rm " + " ".join(sorted(pv.values()))})
+                continue
+            refuse("the install this archive came from is on this host (%s, stopped) and was "
+                   "not moved into this archive; importing it would make two copies of one "
+                   "install." % esc(rec.get("working_dir") or proj),
+                   next_cmd="cd %s && %s --export <file> --move" % (
+                       q(rec.get("working_dir") or "<its folder>"), inst))
+        if proj == target and rec.get("install_id") == meta.get("install_id"):
+            same = True
+    if target in projects and not replace:
+        k = 2
+        while "%s-%d" % (target, k) in projects:
+            k += 1
+        refuse("project %s (from this folder's name) already has volumes on this host."
+               % esc(target), next_cmd="%s --project %s-%d" % (cmd, target, k))
+    port = int(a.get("port") or src.get("port") or 8444)
+    hk = src.get("host_keys") or {}
+    bind = a.get("bind")
+    if bind is None:
+        bind = hk.get("SIGRIFT_BIND", "") or ""
+        if bind_refused(bind, ip_addresses()):
+            mine = ip_addresses()
+            refuse("the archive binds the dashboard to %s, an address of %s that this host does "
+                   "not have." % (esc(bind), esc(src.get("hostname"))),
+                   ["this host's addresses: %s" % (", ".join(mine) or "none found")],
+                   next_cmd="SIGRIFT_BIND=%s %s" % (mine[0] if mine else "0.0.0.0", cmd))
+    busy = published_ports(target if replace else None)
+
+    def free(p):
+        return p not in busy and PORT_BINDABLE(bind or "0.0.0.0", p)
+    if not free(port) and not (replace and port in published_ports() - busy):
+        f = 8444
+        while not free(f) and f < 65535:
+            f += 1
+        refuse("port %d (the archive's) is in use on %s; edges dial that port, so keep it if "
+               "you can." % (port, esc(bind or "0.0.0.0")), next_cmd="UC_PORT=%d %s" % (f, cmd))
+    lines = ["archive   %s, made %s on %s (%s): %s %s install, %s" % (
+        hc16(probe.get("header_checksum")), esc(meta.get("created_at")),
+        esc(src.get("hostname")), esc(src.get("arch")), esc(meta.get("sigrift_version")),
+        esc(meta.get("install_type")), "with --move" if meta.get("moved") else
+        "without --move")]
+    if not meta.get("moved"):
+        lines.append("NOTE      this archive was made without --move: the install it came from "
+                     "may still be running")
+    if not a.get("expected"):
+        lines.append("NOTE      the archive was not checked against its export (--expect)")
+    lines.append("target    project %s (%s), port %d free, bind %s" % (
+        esc(target), "replaces its data" if replace else "new volumes", port,
+        esc(bind or "0.0.0.0")))
+    for x in moved_away:
+        lines.append("old       %s (moved away): %s" % (esc(x["project"]), x["rm"]))
+    put_result({"ok": True, "target": {"project": target, "port": port, "bind": bind,
+                                       "replace": replace},
+                "same_install": bool(same), "moved_away": moved_away, "lines": lines,
+                "later_lines": import_plan_later_lines(probe, a, replace)})
+
+
+def import_plan_later_lines(probe, a, replace):
+    """11.4's files, TLS, edges (and --replace) lines of the import plan,
+    from the sealed metadata and the export's manifest."""
+    meta = probe.get("metadata") or {}
+    m = probe.get("manifest") or {}
+    src = meta.get("source") or {}
+    out = {}
+    paths = [f.get("path") for f in m.get("files") or [] if isinstance(f, dict)]
+    imp = ["%s -> %s.imported (inactive)" % (x, x) for x in paths
+           if x in ("docker-compose.override.yml", "docker-compose.override.yaml")]
+    out["files"] = "files     %s" % (", ".join(imp) if imp else
+                                     ".env, tls/ and the scanner config; no compose file of "
+                                     "the archive becomes active")
+    if a.get("regenerate_tls"):
+        out["tls"] = "TLS       regenerated for this host (--regenerate-tls)"
+    else:
+        names = set(str(x) for x in src.get("tls_names") or [])
+        mine = [socket_hostname()] + ip_addresses()
+        missing = [x for x in mine if x and x not in names and x not in ("127.0.0.1", "::1")]
+        out["tls"] = "TLS       kept; %s" % (
+            "this host's names %s are not in it" % ", ".join(esc(x) for x in missing)
+            if missing else "every name of this host is in it")
+    nodes = m.get("nodes") or []
+    summ = [esc(n.get("node_id")) for n in nodes if isinstance(n, dict) and n.get("summary")]
+    other = [esc(n.get("node_id")) for n in nodes if isinstance(n, dict) and not n.get("summary")]
+    if summ or other:
+        out["edges"] = "edges     %s" % "; ".join(
+            x for x in ("summary mode: %s (keep their URL)" % ", ".join(summ) if summ else "",
+                        "other: %s" % ", ".join(other) if other else "") if x)
+    # --replace: the relation, DISCARDS and KEEPS lines come from
+    # import-relate and compare --import-jid (lc_tool im-plan; F-D21).
+    return out
+
+
+# ── --replace: which side is newer, and what it drops (phase2-notes F-D21) ──
+
+
+def import_probe(d, jid):
+    """probe.json of import JID (ops/<jid>/ or a .pending-* dir)."""
+    sd = open_state(d, create=False)
+    try:
+        dfd = sd.sub(os.path.basename(jid))
+        try:
+            probe = json_read_at(dfd, AR_PROBE)
+        finally:
+            os.close(dfd)
+    finally:
+        sd.close()
+    if not isinstance(probe, dict):
+        raise Failed("files", "probe.json cannot be read")
+    return probe
+
+
+def compare_import(a, d):
+    """compare --import-jid J [--whole] [--common-head N] [--staged]: the
+    live state against the archive's export point (its manifest in
+    probe.json), as 1b's compare against a restore point: DISCARDS is what
+    the live data has that the archive lacks. --whole (another install):
+    against nothing, so DISCARDS is all of the live data. --common-head: the
+    last audit entry both copies hold (import-relate's common_head), against
+    which the API keys, certificates and protocol keys the live data lacks
+    are dated (unrecorded, phase2-notes F-D22). --staged: rows and captures
+    matched against the staged copy (the archive's data), not by the export
+    point's marks. The rollback's host-side .env and compose lists do not
+    apply (the import writes its own .env and compose)."""
+    probe = import_probe(d, a["import_jid"])
+    m = {} if a.get("whole") else (probe.get("manifest") or {})
+    rows = b"{}"
+    try:
+        rows = read_nofollow(os.path.join(state_root(d), AR_OPS_DIR, os.path.basename(
+            a["import_jid"]), "payload", "rf_rows.json"))
+    except (OSError, ValueError):
+        rows = b"{}"
+    req = compare_request(m, True)
+    if a.get("common_head") is not None:
+        req["common_head"] = int(a["common_head"]) if re.match(
+            r"^[0-9]{1,18}$", a["common_head"] or "") else None
+    if a.get("staged") and not a.get("whole"):
+        req["staged_rb"] = os.path.basename(a["import_jid"])
+    reply = engine_stream("compare", a["image"], a["project"], req,
+                          sections=[rows], fallback=a.get("fallback_image"))
+    nc = reply.setdefault("not_carried", {"credentials": {}, "settings": {}})
+    nc.setdefault("settings", {})["env_keys_reverted"] = []
+    nc["settings"]["compose_files_edited"] = []
+    nc.setdefault("credentials", {})["env_keys"] = []
+    reply["env_kept"], reply["env_undone_with_upgrade"] = [], []
+    reply["whole"] = bool(a.get("whole"))
+    reply["since"] = m.get("created_at")
+    store_state(d, a.get("journal_key"), reply)
+    put_result(clean_reply(reply))
+
+
+def chain_of(obj):
+    """{chain, head_id, head_tag, at} of 1a's facts (audit_chain) or of a
+    state reply (audit); chain "unreadable" when neither has one."""
+    obj = obj if isinstance(obj, dict) else {}
+    c = obj.get("audit_chain")
+    if not isinstance(c, dict):
+        au = obj.get("audit") if isinstance(obj.get("audit"), dict) else {}
+        c = {"chain": au.get("chain"), "head_id": au.get("head_id"),
+             "head_tag": au.get("head_tag"), "at": au.get("at") or {}}
+    if obj.get("ok") is False:
+        c = dict(c, chain="unreadable")
+    return {"chain": c.get("chain") or "unreadable", "head_id": c.get("head_id"),
+            "head_tag": c.get("head_tag"), "at": c.get("at") if isinstance(c.get("at"), dict)
+            else {}}
+
+
+def relation_of(arch, live, staged=None):
+    """(relation, why) from the audit heads (phase2-notes F-D21):
+    same | live-newer | archive-newer | archive-newer? (the staged copy not
+    read yet) | diverged | unknown. ARCH is the archive's head {head_id,
+    head_tag}; LIVE and STAGED are chain_of() results (LIVE's at names the
+    archive's head id, STAGED's names the live head id)."""
+    aid, atag = arch.get("head_id"), arch.get("head_tag")
+    if type(aid) is not int or not atag:
+        return "unknown", ("the archive records no audit chain head" if aid is None else
+                           "the archive's audit head %s has no chain value" % aid)
+    if live["chain"] != "ok":
+        return "unknown", {"empty": "the current audit log is empty",
+                           "no-table": "the current database has no audit log",
+                           "no-column": "the current audit log has no chain values",
+                           "no-db": "the current data has no database"}.get(
+            live["chain"], "the current audit log cannot be read")
+    lid, ltag = live.get("head_id"), live.get("head_tag")
+    if type(lid) is not int or not ltag:
+        return "unknown", "the current audit head %s has no chain value" % lid
+    if staged is not None and (staged["chain"] != "ok" or staged.get("head_id") != aid
+                               or staged.get("head_tag") != atag):
+        # Whatever the relation: the data that will come in must be the data
+        # the archive's head names (phase2-notes F-D22).
+        return "unknown", "the staged copy's audit head is not the archive's"
+    if (lid, ltag) == (aid, atag):
+        return "same", "both end at audit entry %d" % aid
+    if lid >= aid:
+        got = live["at"].get(str(aid))
+        if got == atag:
+            return "live-newer", "the current data continues the archive's chain (%d -> %d)" % (
+                aid, lid)
+        if got is None:
+            return "unknown", "the current audit log has no entry %d (the archive's head)" % aid
+        return "diverged", "audit entry %d differs between the current data and the archive" % aid
+    if staged is None:
+        return "archive-newer?", "the archive's head %d is above the current %d" % (aid, lid)
+    got = staged["at"].get(str(lid))
+    if got == ltag:
+        return "archive-newer", "the archive continues the current data's chain (%d -> %d)" % (
+            lid, aid)
+    if got is None:
+        return "unknown", "the archive's audit log has no entry %d (the current head)" % lid
+    return "diverged", "audit entry %d differs between the current data and the archive" % lid
+
+
+# Relations a run may find later than its plan found (more data arrived
+# while the current stack served; the confirmation rules then apply).
+RELATION_LATER = {("same", "live-newer"), ("archive-newer?", "archive-newer")}
+
+
+def cmd_import_relate(a):
+    """import-relate --dir D --jid J --live F [--staged F] [--planned R]
+    [--no-carry] [--project P] --inst I --cmd C [--undone TEXT]: which side
+    of a same-install --replace is newer (phase2-notes F-D21), from the
+    archive's audit head (its export point's manifest) and the live one (1a's
+    facts with --audit-at, or a state reply), and, with --staged, the
+    archive's chain in the staged copy. Result {relation, carry, why,
+    archive_head, live_head, staged}; diverged or unknown refuses (exit 3)
+    unless --no-carry; so does a relation the plan did not allow (--planned)."""
+    d = os.path.realpath(a.get("dir") or ".")
+    probe = import_probe(d, a["jid"])
+    au = (probe.get("manifest") or {}).get("audit") or {}
+    arch = {"head_id": au.get("head_id"), "head_tag": au.get("head_tag")}
+    live = chain_of(read_json(a["live"]))
+    staged = chain_of(read_json(a["staged"])) if a.get("staged") else None
+    rel, why = relation_of(arch, live, staged)
+    no_carry = bool(a.get("no_carry"))
+    planned = a.get("planned") or ""
+    # The last audit entry both copies hold: the archive's head when the
+    # current data holds it, the current head when the archive holds that
+    # (compare --common-head dates what changes without an audit entry).
+    common = arch["head_id"] if rel in ("same", "live-newer") else (
+        live.get("head_id") if rel in ("archive-newer", "archive-newer?") else None)
+    res = {"ok": True, "relation": rel, "why": why, "carry": rel == "live-newer" and not no_carry,
+           "no_carry": no_carry, "archive_head": arch["head_id"], "live_head": live.get("head_id"),
+           "common_head": common, "staged": staged is not None, "planned": planned or None}
+    put_result(res)
+    cmd = cmd_of(a, "--import FILE --replace")
+    undone = [a["undone"]] if a.get("undone") else []
+    if no_carry or a.get("report"):
+        # --report: a dry run's plan shows the relation, never refuses (1b B11).
+        return
+    if rel in ("diverged", "unknown"):
+        what = ("the current data and the archive each hold audit entries the other lacks (%s), "
+                "so neither is an older copy of the other" % why if rel == "diverged" else
+                "the installer cannot tell whether the current data or the archive is the newer "
+                "copy (%s)" % why)
+        refuse(what + ".", undone + [
+            "An import --replace of the same install carries what was revoked or deleted here "
+            "into the archive's data only when the current data is the newer copy, and keeps the "
+            "archive's data as it is when the archive is; it never guesses which.",
+            "To replace the current data with the archive's as it is, carrying nothing from it "
+            "(keys, users, webhooks and protocol keys revoked or deleted here since the two "
+            "parted stay as the archive has them; the current data stays in the pre-import "
+            "restore point and the replaced copy), add --no-carry-revocations and confirm."],
+            next_cmd="%s --no-carry-revocations" % cmd)
+    if planned and rel != planned and (planned, rel) not in RELATION_LATER:
+        refuse("the current data changed after the import was planned (it was %s of the "
+               "archive, now %s: %s), so the import did not go on." % (planned, rel, why),
+               undone, next_cmd="%s --dry-run" % cmd)
+
+
+def cmd_tls_served(a):
+    """tls-served --port P --sha256 S [--host H]: whether the gateway answers
+    on H:P (127.0.0.1) and serves the certificate of sha256 S (im-verify)."""
+    host = a.get("host") or "127.0.0.1"
+    try:
+        got = TLS_PEER(host, int(a["port"]))
+    except (OSError, ValueError):
+        got = None
+    put_result({"ok": True, "answered": got is not None,
+                "same": got is not None and got == (a.get("sha256") or "").lower()})
+
+
+def cmd_volume_lifecycle_only(a):
+    """volume-lifecycle-only --volume V: whether V's root holds lifecycle
+    entries (.sigrift-*) alone (6.2 --abort removes only such a volume)."""
+    helper = helper_image()
+    if not helper:
+        raise Failed("docker", "no helper image to look into volume %s with" % a["volume"])
+    r = docker(*(helper_run_args("record", "1500:1500") + [
+        "-v", a["volume"] + ":/v:ro", helper, "ls", "-A", "/v"]))
+    if r.returncode:
+        raise Failed("docker", "could not list volume %s" % a["volume"])
+    names = [x for x in r.stdout.decode("utf-8", "replace").splitlines() if x.strip()]
+    other = [n for n in names if not n.startswith(".sigrift-")]
+    put_result({"ok": True, "only_lifecycle": not other, "entries": len(names),
+                "other": len(other)})
+
+
+def cmd_same_install_running(a):
+    """same-install-running --install-id I --project P: the running projects
+    other than P whose volume record holds install id I (6.3, 7.4)."""
+    iid = a.get("install_id") or ""
+    found = []
+    if iid:
+        try:
+            vols = list_volumes()
+        except DockerError as e:
+            raise Failed("docker", "could not list volumes (%s exited %d)" % (e.what, e.rc))
+        running = running_projects()
+        for name, proj, vol in vols:
+            if vol != "bridge_data" or proj == a.get("project") or proj not in running:
+                continue
+            rec = read_volume_file(name, ".sigrift-install.json") or {}
+            if rec.get("install_id") == iid:
+                found.append({"project": proj, "working_dir": rec.get("working_dir")})
+    put_result({"ok": True, "running": found})
+
+
+def cmd_import_rules(a):
+    """import-rules (5.1) on the import's staging of bridge_data."""
+    def ids(x):
+        return [i for i in (x or "").split(",") if i]
+    rules = {"sessions": True, "revoke_key_ids": ids(a.get("revoke")),
+             "drop_revoked_key_ids": ids(a.get("drop")),
+             "carry_from_live": bool(a.get("carry_from_live")), "no_carry": bool(a.get("no_carry"))}
+    put_result(clean_reply(engine_stream("import-rules", a["image"], a["project"],
+                                         {"rb_id": a["rb_id"], "rules": rules})))
+
+
+def cmd_pki_detect(a):
+    fmt = '{{.Mounts}}\t{{.Label "com.docker.compose.project.config_files"}}'
+    try:
+        lines = docker_lines("docker ps", "ps", "-a", "--filter", "label=%s=%s" % (
+            PROJECT_LABEL, a["project"]), "--format", fmt)
+    except DockerError as e:
+        raise Failed("docker", "could not list containers (%s exited %d)" % (e.what, e.rc))
+    pki = any(PKI_HOST in line or "docker-compose.pki.yml" in line for line in lines)
+    put_result({"pki": pki})
+
+
+def lc_clean_ops(d):
+    """lc-clean's Phase 2 part: every <state>/ops entry no active journal
+    names (archive.key first), and the partial a finished journal names."""
+    j = journal_load(d) or {}
+    active = j.get("state") in ACTIVE_STATES
+    removed = []
+    try:
+        sd = StateDir(d, create=False)
+    except (FileNotFoundError, StateUnsafe):
+        sd = None
+    if sd is not None:
+        try:
+            for n in sorted(os.listdir(sd.ops_fd)):
+                if active and n == j.get("id"):
+                    continue
+                if n.startswith(".pending-") or ID_RE.match(n):
+                    rmtree_at(sd.ops_fd, n)
+                    removed.append(n)
+        finally:
+            sd.close()
+    part = j.get("partial")
+    if not active and isinstance(part, str) and part.endswith(".sigrift-partial") and \
+            os.path.basename(part).startswith(".") and os.path.lexists(part):
+        os.unlink(part)
+        removed.append(part)
+    return removed
+
+
+COMMANDS = {
+    "engine-op": (cmd_engine_op, {"project": True, "image": True, "op": True, "volume": True,
+                                  "request-file": True, "out": True, "in": True,
+                                  "lines": True}),
+    "lc-clean": (cmd_lc_clean, {"project": True, "dir": True}),
+    "state": (cmd_state, {"project": True, "image": True, "env-file": True, "rf-rows": True,
+                          "journal-key": True, "dir": True, "fallback-image": True,
+                          "root": True, "exempt-nodes": True, "audit-at": True}),
+    "quiesce": (cmd_quiesce, {"project": True, "image": True, "env-file": True, "mode": True,
+                              "journal-key": True, "dir": True, "fallback-image": True,
+                              "audit-at": True}),
+    "compare": (cmd_compare, {"project": True, "image": True, "rp": True, "journal-key": True,
+                              "dir": True, "keep-current-master": True, "rf-guard": False,
+                              "accept-summary-reset": False, "fallback-image": True,
+                              "import-jid": True, "whole": False, "common-head": True,
+                              "staged": False}),
+    "space-plan": (cmd_space_plan, {"dir": True, "project": True, "image": True, "kind": True,
+                                    "rp": True, "migrations-pending": True, "exclude": True,
+                                    "cmd": True, "fallback-image": True,
+                                    "auto-rollback": True, "file": True, "probe": True,
+                                    "parts": True, "replace": False}),
+    "rp-apply-remedies": (cmd_rp_apply_remedies, {"dir": True, "project": True, "image": True,
+                                                  "plan": True}),
+    "rp-create": (cmd_rp_create, {"dir": True, "project": True, "image": True,
+                                  "journal-id": True, "files-snapshot": True, "reason": True,
+                                  "from": True, "to": True, "install-id": True,
+                                  "images-file": True, "prechecks-from-journal": False,
+                                  "exclude": True, "installer-release": True,
+                                  "volumes": True, "exempt-nodes": True,
+                                  "install-type": True, "git-commit": True}),
+    "rp-delete-partial": (cmd_rp_delete_partial, {"dir": True, "id": True}),
+    "rp-list": (cmd_rp_list, {"dir": True, "json": False, "verify": "?"}),
+    "rp-resolve": (cmd_rp_resolve, {"dir": True, "id": True, "current": True, "project": True}),
+    "rp-verify": (cmd_rp_verify, {"dir": True, "id": True}),
+    "rp-prune": (cmd_rp_prune, {"dir": True, "protect": True, "id": True}),
+    "stage": (cmd_stage, {"dir": True, "project": True, "image": True, "rp": True,
+                          "rb-id": True, "reserve": True, "fallback-image": True}),
+    "verify-staged": (cmd_verify_staged, {"dir": True, "project": True, "image": True,
+                                          "rp": True, "rb-id": True}),
+    "carry": (cmd_carry, {"dir": True, "project": True, "image": True, "rb-id": True,
+                          "no-carry": False, "keep-current-master": True}),
+    "audit-append": (cmd_audit_append, {"dir": True, "project": True, "rp-image": True,
+                                        "rp": True, "rb-id": True, "export": True,
+                                        "from": True, "import-jid": True, "relation": True,
+                                        "carried": True, "operator": True}),
+    "mark": (cmd_mark, {"dir": True, "project": True, "image": True, "rb-id": True,
+                        "rp": True, "op": True, "id": True, "volumes": True}),
+    "unmark": (cmd_unmark, {"dir": True, "project": True, "image": True, "rb-id": True,
+                            "rp": True, "op": True, "id": True, "volumes": True}),
+    "swap": (cmd_swap, {"dir": True, "project": True, "image": True, "rb-id": True,
+                        "rp": True, "volumes": True}),
+    "unswap": (cmd_unswap, {"dir": True, "project": True, "image": True, "rb-id": True,
+                            "rp": True, "volumes": True}),
+    "discard-staging": (cmd_discard_staging, {"dir": True, "project": True, "image": True,
+                                              "rb-id": True, "rp": True, "volumes": True}),
+    "finish": (cmd_finish, {"dir": True, "project": True, "image": True, "id": True,
+                            "volumes": True}),
+    "reclaim": (cmd_reclaim, {"project": True, "image": True, "name": True, "bytes": True,
+                              "mtime-ns": True}),
+    "export-audit": (cmd_export_audit, {"project": True, "image": True, "after": True,
+                                        "rb-id": True, "out": True}),
+    "verify-carry": (cmd_verify_carry, {"dir": True, "project": True, "image": True,
+                                        "rb-id": True}),
+    "rf-check": (cmd_rf_check, {"dir": True, "project": True, "image": True, "rp": True}),
+    "restore-files": (cmd_restore_files, {"dir": True, "rp": True, "files-snapshot": True,
+                                          "all": False}),
+    "images-ensure": (cmd_images_ensure, {"rp": True, "dir": True, "pull-allowed": False,
+                                          "check": False}),
+    "gateway-ever-healthy": (cmd_gateway_ever_healthy, {"container": True, "since": True,
+                                                        "child-start": True}),
+    "compose-canon": (cmd_compose_canon, {"templates": True}),
+    "version-meets": (cmd_version_meets, {}),
+    "minor-newer": (cmd_minor_newer, {}),
+    # Phase 2 (phase2-spec 5.2).
+    "ar-header": (cmd_ar_header, {"file": True, "expect": True, "inst": True, "cmd": True}),
+    "ar-wrap": (cmd_ar_wrap, {"dir": True, "image": True, "passphrase-fd": True,
+                              "project": True, "hostname": True, "inst": True, "cmd": True,
+                              "image-ref": True, "source": False, "mem-log2": True, "t": True,
+                              "lanes": True, "segment-size": True, "archive-dir": True}),
+    "ar-probe": (cmd_ar_probe, {"file": True, "image": True, "dir": True,
+                                "passphrase-fd": True, "expect": True, "no-key": False,
+                                "project": True, "inst": True, "cmd": True, "image-ref": True,
+                                "source": False}),
+    "ops-adopt": (cmd_ops_adopt, {"from": True, "dir": True, "jid": True}),
+    "ar-key-check": (cmd_ar_key_check, {"dir": True, "jid": True, "export": False,
+                                        "inst": True}),
+    "ar-write": (cmd_ar_write, {"dir": True, "jid": True, "image": True, "rp": True,
+                                "out": True, "project": True, "inst": True, "tool": True,
+                                "installer-release": True, "sigrift-version": True,
+                                "bridge-release": True, "install-type": True, "port": True,
+                                "moved": True}),
+    "ar-verify": (cmd_ar_verify, {"dir": True, "jid": True, "image": True, "file": True,
+                                  "rp": True, "project": True, "inst": True, "moved": True}),
+    "ar-publish": (cmd_ar_publish, {"file": True, "dir": True, "jid": True, "partial": True,
+                                    "inst": True}),
+    "ar-forget": (cmd_ar_forget, {"dir": True, "jid": True, "pending": True}),
+    "ar-stage": (cmd_ar_stage, {"dir": True, "jid": True, "image": True, "file": True,
+                                "parts": True, "reserve": True, "project": True, "inst": True,
+                                "cmd": True, "undone": True, "image-ref": True,
+                                "source": False}),
+    "env-import": (cmd_env_import, {"dir": True, "jid": True, "target": True, "mode": True,
+                                    "port": True, "bind": True, "dry": False, "backend": True,
+                                    "current-env": True, "undone": True}),
+    "live-source-probe": (cmd_live_source_probe, {"probe": True, "skip-local": False,
+                                                  "inst": True, "cmd": True}),
+    "import-plan": (cmd_import_plan, {"dir": True, "jid": True, "replace": False,
+                                      "project": True, "port": True, "bind": True,
+                                      "expected": False, "inst": True, "cmd": True,
+                                      "regenerate-tls": False}),
+    "same-install-running": (cmd_same_install_running, {"install-id": True, "project": True}),
+    "tls-served": (cmd_tls_served, {"port": True, "sha256": True, "host": True}),
+    "volume-lifecycle-only": (cmd_volume_lifecycle_only, {"volume": True}),
+    "pki-detect": (cmd_pki_detect, {"project": True}),
+    "import-rules": (cmd_import_rules, {"dir": True, "project": True, "image": True,
+                                        "rb-id": True, "revoke": True, "drop": True,
+                                        "carry-from-live": False, "no-carry": False}),
+    "import-relate": (cmd_import_relate, {"dir": True, "jid": True, "live": True, "staged": True,
+                                          "planned": True, "no-carry": False, "project": True,
+                                          "inst": True, "cmd": True, "undone": True,
+                                          "report": False}),
+}
+
+
+def main(argv):
+    if not argv or argv[0] not in COMMANDS:
+        sys.stderr.write("lc_state_tool: unknown command %r\n" % (argv[0] if argv else ""))
+        sys.exit(2)
+    fn, spec = COMMANDS[argv[0]]
+    spec = dict(spec, result=True)
+    a = parse_flags(argv[1:], spec)
+    RESULT["path"] = a.get("result")
+    try:
+        fn(a)
+    except Refused:
+        raise
+    except EngineFailed as e:
+        sys.stderr.write("kind=%s: %s%s\n" % (e.kind if e.kind in ("stream", "files", "space")
+                                              else "engine", e,
+                                              " (%s)" % e.code if e.code else ""))
+        put_result({"ok": False, "kind": e.kind, "code": e.code, "error": str(e)})
+        sys.exit(EXIT_RESERVE if e.kind == "space" else 1)
+    except Failed as e:
+        sys.stderr.write("kind=%s: %s\n" % (e.kind, e))
+        put_result({"ok": False, "kind": e.kind, "error": str(e)})
+        sys.exit(1)
+    except DockerError as e:
+        sys.stderr.write("kind=docker: %s exited %d\n" % (e.what, e.rc))
+        put_result({"ok": False, "kind": "docker", "error": "%s exited %d" % (e.what, e.rc)})
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+PY
+}
+# <<< shared: state-tool
+
+# >>> shared: state-engine (keep byte-identical in scripts/quickstart.sh and
+#     scripts/install-release.sh; scripts/tests/test_install_scripts.py checks)
+#
+# The state engine (Phase 1b): framed ops on the data volumes, standard
+# library only, sent in front of the lifecycle engine's source (they are
+# one module): the volume archives of a full restore point, staging,
+# the carry-forward, the swap and its undo, and the comparisons that
+# decide what a rollback discards.
+lc_state_engine_source() {
+    cat <<'PY'
+"""SigRift state engine (Phase 1b): restore points, staging, carry, swap.
+
+Runs in the bridge image like the lifecycle engine after it (the two
+sources are one module, one exec), with bridge_data at the bridge's own
+path and bridge_secrets at /app/secrets. Every op here is framed: stdout
+carries binary frames (kind byte, 8-byte big-endian length, payload):
+D data, M member or row lines, P progress, and exactly one terminal R
+(reply) or E (error), then EOF. stdin holds the two records of the
+bootstrap, then, for the upload ops, data sections of <len>\\n<bytes>
+frames, each ended by 0\\n.
+
+Standard library only (it runs unchanged in the v0.1.0 bridge image and
+in the scripts/tests fake host); only audit-append, and evaluate through
+st_evaluate, import bridge code. It reads no environment variable and
+creates nothing outside the volume roots the request names. Replies hold
+hashes, counts, ids and tags (truncated sha256), never a secret value.
+"""
+
+import binascii
+import errno
+import fnmatch
+import gzip
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import stat
+import struct
+import sys
+import tarfile
+import threading
+import time
+
+# Indirections for the crash and space tests (patched in process).
+RENAME = os.replace
+CHOWN = os.chown
+FSYNC = os.fsync
+SYNC = os.sync
+STATVFS = os.statvfs
+CLOCK = time.time
+SLEEP = time.sleep
+# Where frames go and stdin data comes from (the tests set these).
+ST_IO = {}
+
+ST_MARKER = ".sigrift-restore-incomplete"
+ST_RESTORE = ".sigrift-restore-"
+ST_REPLACED = ".sigrift-replaced-"
+ST_STAGED = ".sigrift-staged"
+ST_CARRIED = ".sigrift-carried"
+ST_PHASE = ".sigrift-phase"
+ST_PCAP_AFTER = ".sigrift-pcap-after-rp"
+ST_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\Z")
+# A marker id: a rollback or import id (ST_ID) or an archive id (uuid4).
+ST_MARK_ID = re.compile(r"([0-9]{8}T[0-9]{6}Z(-[0-9]+)?|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                        r"[0-9a-f]{4}-[0-9a-f]{12})\Z")
+ST_MARK_OPS = ("rollback", "move", "import")
+# The parts a restore point may hold (phase2-spec 1.2) and the request
+# field that names each one's root in the engine container.
+ST_VOLUMES = (("bridge_secrets", "secrets_dir"), ("bridge_data", "data_dir"),
+              ("edge_data", "edge_dir"), ("opt-sigrift-pki", "pki_dir"))
+# The only owners the pki part restores (its members lines carry "o").
+ST_PKI = "opt-sigrift-pki"
+ST_PKI_OWNERS = ("0:0", "1500:1500")
+ST_RP_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,40}-full(-[0-9]+)?\Z")
+ST_FRAME_MAX = 1 << 20
+ST_HEARTBEAT = 5.0
+ST_SPACE_STEP = 64 << 20
+ST_RATIO_MIN = 64 << 20
+ST_PHASES = ("none", "out", "out-done", "in-done", "kept-done", "done",
+             "undo-kept", "undo-in", "undo-out")
+ST_DB = "detections.db"
+ST_CAPTURES = ("iq_captures", "pcap_captures")
+ST_PCAP = re.compile(r"([0-9]+)\.pcap\.gz\Z")
+
+# Table classes (phase1b-spec 4.5). VOLATILE: never compared. DERIVED:
+# rebuilt by INSERT OR REPLACE from counted tables. CONTENT: compared by
+# their own content digests (RF digest, summaries digest), never by rowid,
+# because the bridge's rollups rewrite them with INSERT OR REPLACE. QUEUE:
+# counted, but drained by the stack itself.
+ST_VOLATILE = ("sessions", "mfa_tokens", "oidc_states", "totp_replay_cache",
+               "account_lockout", "rate_limit_login", "mfa_attempts", "schema_version")
+ST_DERIVED = ("detection_aggregates", "wifi_metadata_hourly", "bt_devices_hourly",
+              "zigbee_devices_hourly", "device_lifecycles_daily", "fhss_event_summaries")
+ST_CONTENT = ("detection_summaries_hourly", "rf_summary_streams", "rf_summary_generations",
+              "rf_summary_components")
+ST_QUEUE = ("pending_commands", "webhook_retries", "saf_queue", "iq_capture_requests",
+            "ingest_hook_claims", "protocol_decode_claims")
+ST_SESSION_TABLES = ("sessions", "mfa_tokens", "oidc_states")
+ST_RF_TABLES = (
+    ("rf_summary_streams", "tenant_id, node_id, stream_id", "tenant_id, node_id"),
+    ("rf_summary_generations",
+     "tenant_id, node_id, stream_id, hour, generation, digest, payload, retired",
+     "tenant_id, node_id, hour"),
+    ("rf_summary_components",
+     "tenant_id, node_id, stream_id, component, hour, signal_class, family, freq_bin_hz, "
+     "detection_count, data",
+     "tenant_id, node_id, component, stream_id, hour, signal_class, family, freq_bin_hz"),
+)
+ST_SUMMARY_COLS = ("tenant_id, hour, node_id, signal_class, family, freq_bin_hz, "
+                   "detection_count, avg_confidence, min_confidence, max_confidence, "
+                   "avg_snr_db, avg_power_dbm, avg_anomaly, max_anomaly")
+ST_SUMMARY_ORDER = "tenant_id, hour, node_id, signal_class, family, freq_bin_hz"
+# persistence.py _STATE_FILES (minus webhooks, which is in the security
+# projection): (name, file, main field).
+ST_STATE_FILES = (("nodes", "nodes.json", "nodes"), ("alerts", "alerts.json", "alerts"),
+                  ("history", "history.json", "history"), ("jobs", "jobs.json", "jobs"),
+                  ("schedules", "schedules.json", "schedules"),
+                  ("wifi_whitelist", "wifi_whitelist.json", "whitelist"),
+                  ("bt_whitelist", "bt_whitelist.json", "whitelist"),
+                  ("alert_rules", "alert_rules.json", "rules"),
+                  ("watch_bands", "watch_bands.json", "watch_bands"),
+                  ("syslog_targets", "syslog_targets.json", "syslog_targets"))
+# Fields of a state file the bridge's own jobs rewrite without new input
+# (none shown so far; each entry needs a test, phase1b-spec 4.5).
+ST_STATE_VOLATILE = {}
+# persistence.py _ROLE_ORDER (a test reads it from persistence.py).
+ST_ROLE_ORDER = ("SENSOR", "NODE", "VIEWER", "ANALYST", "ADMIN", "KEYMASTER")
+
+
+class StError(Exception):
+    def __init__(self, code, message, where=None):
+        Exception.__init__(self, message)
+        self.code, self.where = code, where
+
+
+# -- frames -----------------------------------------------------------------
+
+
+class StOut(object):
+    """The framed stdout of one op; every frame under one lock."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.lock = threading.Lock()
+        self.phase = "start"
+        self.progress = 0
+        self.bytes = 0
+        self.members = 0
+        self.total = None
+        self.terminal = False
+        self.last_frame = CLOCK()
+        self.last_p = (CLOCK(), 0)
+        self.stop = threading.Event()
+
+    def frame(self, kind, payload):
+        with self.lock:
+            if self.terminal:
+                return
+            self.stream.write(kind + struct.pack(">Q", len(payload)) + payload)
+            self.stream.flush()
+            self.last_frame = CLOCK()
+            if kind in (b"R", b"E"):
+                self.terminal = True
+
+    def p_payload(self):
+        return json.dumps({"phase": self.phase, "bytes": self.bytes, "members": self.members,
+                           "total": self.total, "progress": self.progress}).encode()
+
+    def step(self, nbytes=0, members=0, n=0, phase=None):
+        """Advance the progress counter (bytes, members or SQLite steps)."""
+        if phase is not None and phase != self.phase:
+            self.phase = phase
+            self.last_p = (0, 0)
+        self.progress += nbytes + members + n
+        self.bytes += nbytes
+        self.members += members
+        t, b = self.last_p
+        now = CLOCK()
+        if now - t >= ST_HEARTBEAT or self.bytes - b >= (16 << 20):
+            self.last_p = (now, self.bytes)
+            self.frame(b"P", self.p_payload())
+
+    def heartbeat(self):
+        """Repeat the last P frame while nothing else is sent; it never
+        advances the counter, so a stuck op still trips the watchdog."""
+        while not self.stop.wait(ST_HEARTBEAT):
+            if CLOCK() - self.last_frame >= ST_HEARTBEAT:
+                self.frame(b"P", self.p_payload())
+
+    def reply(self, obj):
+        self.frame(b"R", json.dumps(obj, sort_keys=True).encode())
+
+    def error(self, code, message, where):
+        self.frame(b"E", json.dumps({"format": 1, "ok": False, "code": code,
+                                     "error": message[:300], "where": where}).encode())
+
+
+class StData(object):
+    """A file-like sink that sends what is written as D frames."""
+
+    def __init__(self, out):
+        self.out, self.buf, self.n = out, [], 0
+        self.h = hashlib.sha256()
+        self.total = 0
+
+    def write(self, b):
+        b = bytes(b)
+        if not b:
+            return 0
+        self.h.update(b)
+        self.total += len(b)
+        self.buf.append(b)
+        self.n += len(b)
+        if self.n >= ST_FRAME_MAX:
+            self.flush_frames()
+        return len(b)
+
+    def flush_frames(self, final=False):
+        data = b"".join(self.buf)
+        self.buf, self.n = [], 0
+        while len(data) >= ST_FRAME_MAX or (final and data):
+            self.out.frame(b"D", data[:ST_FRAME_MAX])
+            data = data[ST_FRAME_MAX:]
+        if data:
+            self.buf, self.n = [data], len(data)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        self.flush_frames(final=True)
+
+
+class StLines(object):
+    """JSON lines sent as M frames (each frame whole lines, <= 1 MiB)."""
+
+    def __init__(self, out):
+        self.out, self.buf, self.n = out, [], 0
+        self.h = hashlib.sha256()
+        self.count = 0
+
+    def add(self, obj):
+        line = (json.dumps(obj, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        self.h.update(line)
+        self.count += 1
+        if self.n + len(line) > ST_FRAME_MAX and self.buf:
+            self.flush()
+        self.buf.append(line)
+        self.n += len(line)
+
+    def flush(self):
+        if self.buf:
+            self.out.frame(b"M", b"".join(self.buf))
+            self.buf, self.n = [], 0
+
+
+class StSection(object):
+    """One stdin data section: <len>\\n<bytes> frames ended by 0\\n."""
+
+    def __init__(self, stream, out):
+        self.stream, self.out = stream, out
+        self.cur, self.pos = b"", 0
+        self.ended = False
+        self.h = hashlib.sha256()
+        self.n = 0
+
+    def _frame(self):
+        line = self.stream.readline(32)
+        if not line.endswith(b"\n"):
+            raise StError("short-input", "the input ended inside a data section")
+        try:
+            n = int(line.strip())
+        except ValueError:
+            raise StError("short-input", "a data frame has no length")
+        if n == 0:
+            self.ended = True
+            return b""
+        if n < 0 or n > ST_FRAME_MAX:
+            raise StError("short-input", "a data frame is larger than 1 MiB")
+        b = self.stream.read(n)
+        if len(b) != n:
+            raise StError("short-input", "the input ended inside a data frame")
+        self.h.update(b)
+        self.n += n
+        self.out.step(nbytes=n)
+        return b
+
+    def read(self, size=-1):
+        parts, need = [], size
+        while not self.ended and (size < 0 or need > 0):
+            if self.pos >= len(self.cur):
+                self.cur, self.pos = self._frame(), 0
+                continue
+            avail = len(self.cur) - self.pos
+            take = avail if size < 0 else min(need, avail)
+            parts.append(self.cur[self.pos:self.pos + take])
+            self.pos += take
+            if size >= 0:
+                need -= take
+        return b"".join(parts)
+
+    def drain(self):
+        while not self.ended:
+            self._frame()
+        return self.h.hexdigest(), self.n
+
+
+def st_stdout():
+    return ST_IO.get("out") or sys.stdout.buffer
+
+
+def st_stdin():
+    return ST_IO.get("in") or sys.stdin.buffer
+
+
+def st_framed(fn):
+    """Run op FN(req, out) with frames, a heartbeat and one terminal frame."""
+
+    def op(req):
+        out = StOut(st_stdout())
+        beat = threading.Thread(target=out.heartbeat, daemon=True)
+        beat.start()
+        try:
+            try:
+                reply = fn(req, out)
+            except StError as e:
+                out.error(e.code, "%s: %s" % (type(e).__name__, str(e)), e.where or out.phase)
+                raise SystemExit(1)
+            except SystemExit:
+                raise
+            except Exception as e:
+                code = "no-space" if isinstance(e, OSError) and e.errno == errno.ENOSPC else "io"
+                out.error(code, "%s: %s" % (type(e).__name__, str(e)[:200]), out.phase)
+                raise SystemExit(1)
+            out.reply(reply)
+        finally:
+            # The heartbeat ends before the op returns: no thread is left
+            # running while the interpreter exits.
+            out.stop.set()
+            beat.join(5)
+        return None
+    return op
+
+
+# -- small helpers ------------------------------------------------------------
+
+
+def st_fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        FSYNC(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def st_atomic_bytes(path, data, mode=0o600):
+    tmp = path + ".st-tmp"
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            FSYNC(f.fileno())
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    RENAME(tmp, path)
+    st_fsync_dir(os.path.dirname(path))
+
+
+def st_atomic_json(path, obj, mode=0o600):
+    st_atomic_bytes(path, (json.dumps(obj, sort_keys=True) + "\n").encode(), mode)
+
+
+def st_read_json(path):
+    """(object, state): state is ok, absent or unparsed."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None, "absent"
+    except OSError:
+        return None, "unparsed"
+    try:
+        with os.fdopen(fd, "rb") as f:
+            return json.loads(f.read().decode("utf-8")), "ok"
+    except (ValueError, OSError):
+        return None, "unparsed"
+
+
+def st_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(CLOCK()))
+
+
+def st_tag(value):
+    if value is None:
+        return None
+    if not isinstance(value, bytes):
+        value = str(value).encode("utf-8")
+    return hashlib.sha256(value).hexdigest()[:16]
+
+
+def st_file_tag(path):
+    """(tag or None, readable)."""
+    try:
+        with open(path, "rb") as f:
+            return st_tag(f.read()), True
+    except FileNotFoundError:
+        return None, True
+    except OSError:
+        return None, False
+
+
+def st_rank(role):
+    name = str(role).upper()
+    return ST_ROLE_ORDER.index(name) if name in ST_ROLE_ORDER else ST_ROLE_ORDER.index("VIEWER")
+
+
+def st_days(y, m, d):
+    y -= m <= 2
+    era = (y if y >= 0 else y - 399) // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + d - 1
+    return era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
+
+
+def st_epoch(text):
+    """ISO-8601 to seconds since the epoch, or None."""
+    m = re.match(r"\s*(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?"
+                 r"\s*(Z|[+-]\d{2}:?\d{2})?\s*\Z", str(text or ""))
+    if not m:
+        return None
+    y, mo, d, hh, mm, ss, tz = m.groups()
+    t = st_days(int(y), int(mo), int(d)) * 86400 + int(hh or 0) * 3600 + int(mm or 0) * 60 \
+        + int(ss or 0)
+    if tz and tz != "Z":
+        sign = 1 if tz[0] == "+" else -1
+        t -= sign * (int(tz[1:3]) * 3600 + int(tz[-2:]) * 60)
+    return t
+
+
+def st_lifecycle_name(name):
+    return name.startswith(ST_RESTORE) or name.startswith(ST_REPLACED)
+
+
+def st_match(name, patterns):
+    return any(fnmatch.fnmatchcase(name, p) for p in patterns or ())
+
+
+def st_roots(req):
+    return req["data_dir"], req["secrets_dir"]
+
+
+def st_volume_root(req):
+    v = req.get("volume")
+    key = dict(ST_VOLUMES).get(v)
+    if key is None or not req.get(key):
+        raise StError("unsafe", "unknown volume %r" % (v,))
+    return v, req[key]
+
+
+def st_marked_roots(req):
+    """(volume, root) of every data volume of the request, in marker order
+    (bridge_secrets first, bridge_data last, edge_data between)."""
+    out = [("bridge_secrets", req["secrets_dir"])]
+    if req.get("edge_dir"):
+        out.append(("edge_data", req["edge_dir"]))
+    out.append(("bridge_data", req["data_dir"]))
+    return out
+
+
+def st_rb_id(req):
+    rb = str(req.get("rb_id") or "")
+    if not ST_ID.match(rb):
+        raise StError("unsafe", "not a rollback id: %r" % rb[:40])
+    return rb
+
+
+def st_free(path):
+    s = STATVFS(path)
+    return s.f_bavail * s.f_frsize
+
+
+def st_rmtree(path):
+    """rmtree that also removes trees whose modes forbid it."""
+    def onerror(func, p, exc):
+        try:
+            parent = os.path.dirname(p)
+            os.chmod(parent, 0o700)
+            if os.path.isdir(p) and not os.path.islink(p):
+                os.chmod(p, 0o700)
+            func(p)
+        except OSError:
+            pass
+    if os.path.lexists(path):
+        if os.path.isdir(path) and not os.path.islink(path):
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=onerror)
+            else:
+                shutil.rmtree(path, onerror=onerror)
+        else:
+            os.unlink(path)
+
+
+def st_tree_bytes(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for n in files + dirs:
+            try:
+                total += os.lstat(os.path.join(root, n)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def st_walk(root, skip_top=None):
+    """(rel, path, lstat) in walk order: the tuple of path components,
+    compared as bytes (a directory's whole subtree before its next
+    sibling, so a/... comes before a.b and a-b)."""
+    def rec(d, rel):
+        with os.scandir(d) as it:
+            entries = sorted(it, key=lambda e: os.fsencode(e.name))
+        for e in entries:
+            if not rel and skip_top is not None and skip_top(e.name):
+                continue
+            r = rel + "/" + e.name if rel else e.name
+            st = os.lstat(e.path)
+            yield r, e.path, st
+            if stat.S_ISDIR(st.st_mode):
+                for x in rec(e.path, r):
+                    yield x
+    return rec(root, "")
+
+
+def st_walk_key(rel):
+    return tuple(os.fsencode(c) for c in rel.split("/"))
+
+
+def st_class(rel):
+    top = rel.split("/", 1)[0]
+    if top in (ST_DB, ST_DB + "-wal"):
+        return "db"
+    if top in ST_CAPTURES:
+        return "captures"
+    return "other"
+
+
+# -- lifecycle entries (facts, state) ----------------------------------------------
+
+
+def st_marker_info(root):
+    path = os.path.join(root, ST_MARKER)
+    if not os.path.lexists(path):
+        return None
+    obj, state = st_read_json(path)
+    return obj if state == "ok" and isinstance(obj, dict) else {"unparsed": True}
+
+
+def st_lifecycle(roots):
+    """{replaced: [{volume, id, phase, bytes}], staging: [{volume, id, staged, carried}]}."""
+    out = {"replaced": [], "staging": []}
+    for vol, root in roots:
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(root, n)
+            if n.startswith(ST_REPLACED):
+                ph, state = st_read_json(os.path.join(p, ST_PHASE))
+                phase = ph.get("phase") if state == "ok" and isinstance(ph, dict) else (
+                    "none" if state == "absent" else "unparsed")
+                out["replaced"].append({"volume": vol, "id": n[len(ST_REPLACED):],
+                                        "phase": phase, "bytes": st_tree_bytes(p)})
+            elif n.startswith(ST_RESTORE) and n != ST_MARKER and os.path.isdir(p):
+                staged = os.path.exists(os.path.join(p, ST_STAGED))
+                c, cs = st_read_json(os.path.join(p, ST_CARRIED))
+                out["staging"].append({"volume": vol, "id": n[len(ST_RESTORE):],
+                                       "staged": staged,
+                                       "carried": bool(cs == "ok" and isinstance(c, dict)
+                                                       and c.get("complete")),
+                                       "bytes": st_tree_bytes(p)})
+    return out
+
+
+def st_premigration(data):
+    p = os.path.join(data, ST_DB + ".pre-migration")
+    try:
+        s = os.lstat(p)
+    except OSError:
+        return None
+    if not stat.S_ISREG(s.st_mode):
+        return None
+    return {"bytes": s.st_size, "mtime_ns": s.st_mtime_ns}
+
+
+def st_facts_extra(data_dir, secrets_dir):
+    """The facts additions of phase1b-spec 1.2 (hook 4)."""
+    return {"markers": {"bridge_data": st_marker_info(data_dir),
+                        "bridge_secrets": st_marker_info(secrets_dir)},
+            "lifecycle": st_lifecycle((("bridge_data", data_dir),
+                                       ("bridge_secrets", secrets_dir))),
+            "premigration": st_premigration(data_dir)}
+
+
+# -- canonical encoding, digests ---------------------------------------------------
+
+
+def st_canon(v):
+    if v is None:
+        return "n"
+    if isinstance(v, bool):
+        v = int(v)
+    if isinstance(v, int):
+        return "i%d" % v
+    if isinstance(v, float):
+        return "f" + v.hex()
+    if isinstance(v, str):
+        return "s" + json.dumps(v, ensure_ascii=True)
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return "b" + binascii.hexlify(bytes(v)).decode("ascii")
+    raise TypeError("cannot encode %s" % type(v).__name__)
+
+
+def st_canon_row(row):
+    return "\x1f".join(st_canon(v) for v in row) + "\n"
+
+
+def st_tables(conn):
+    """{name: sql} of every table, sqlite_% included."""
+    return dict((r[0], r[1] or "") for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='table'"))
+
+
+def st_columns(conn, table):
+    return [r[1] for r in conn.execute('PRAGMA table_info("%s")' % table.replace('"', '""'))]
+
+
+def st_q(name):
+    return '"%s"' % name.replace('"', '""')
+
+
+ST_AUDIT_TAG = b"sigrift-audit-chain-v1:"
+
+
+def st_audit_tag(value):
+    """A tag of an audit entry's chain value (its hmac_chain): equal tags,
+    equal chain values. Replies carry the tag, never the value
+    (phase2-notes F-D21). "" for an entry without a chain value."""
+    if not isinstance(value, str) or not value:
+        return ""
+    return hashlib.sha256(ST_AUDIT_TAG + value.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+
+
+def st_audit_chain(conn, at=()):
+    """The head of audit_log (its id and the tag of its chain value) and the
+    tags of the entries AT, for the import's relation test (phase2-notes
+    F-D21). chain: ok | empty | no-table | no-column | unreadable; at maps
+    each id to its tag, "" (an entry without a chain value) or None (no
+    such entry). 1a's facts call this too (one module)."""
+    out = {"chain": "ok", "head_id": None, "head_tag": None, "at": {}}
+    try:
+        names = set(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"))
+        if "audit_log" not in names:
+            out["chain"] = "no-table"
+            return out
+        if "hmac_chain" not in st_columns(conn, "audit_log"):
+            out["chain"] = "no-column"
+            return out
+        row = conn.execute("SELECT id, hmac_chain FROM audit_log ORDER BY id DESC LIMIT 1") \
+            .fetchone()
+        if row is None:
+            out["chain"] = "empty"
+        else:
+            out["head_id"], out["head_tag"] = row[0], st_audit_tag(row[1])
+        for i in at or ():
+            if type(i) is not int:
+                continue
+            r = conn.execute("SELECT hmac_chain FROM audit_log WHERE id = ?", (i,)).fetchone()
+            out["at"][str(i)] = None if r is None else st_audit_tag(r[0])
+    except sqlite3.Error:
+        return {"chain": "unreadable", "head_id": None, "head_tag": None, "at": {}}
+    return out
+
+
+def st_rf(conn, tables, lines=None, exempt=()):
+    """(rf block, rf_rows parts): the RF digest over the three tables.
+    EXEMPT: node ids whose rows are left out (phase2-spec 1.2, compare
+    --exempt-nodes: the in-stack node of a source install, whose edge_data
+    comes back with the restore point)."""
+    h = hashlib.sha256()
+    where, args = "", ()
+    if exempt:
+        where = " WHERE node_id NOT IN (%s)" % ", ".join("?" for _ in exempt)
+        args = tuple(exempt)
+    rows = {}
+    streams, fences = [], []
+    present = True
+    for table, cols, order in ST_RF_TABLES:
+        if table not in tables:
+            h.update(("A%s\n" % table).encode())
+            present = False
+            rows[table] = 0
+            continue
+        h.update(("T%s\n" % table).encode())
+        n = 0
+        for r in conn.execute("SELECT %s FROM %s%s ORDER BY %s" % (cols, table, where, order),
+                              args):
+            h.update(st_canon_row(tuple(r)).encode("ascii"))
+            n += 1
+            if table == "rf_summary_streams":
+                streams.append(hashlib.sha256(st_canon_row(tuple(r)).encode()).hexdigest()[:32])
+            elif table == "rf_summary_generations":
+                fences.append(hashlib.sha256(st_canon_row(tuple(r)[:6]).encode())
+                              .hexdigest()[:32])
+        rows[table] = n
+    block = {"tables": present, "rows": {"streams": rows["rf_summary_streams"],
+                                         "generations": rows["rf_summary_generations"],
+                                         "components": rows["rf_summary_components"]},
+             "digest": "sha256:" + h.hexdigest()}
+    if exempt:
+        block["exempt_nodes"] = sorted(exempt)
+    return block, streams, fences
+
+
+def st_nodes(conn, tables):
+    """[{node_id, last_seen, summary}] (phase2-spec 1.2): the nodes table,
+    summary when the id has an rf_summary_streams row (at most 1000)."""
+    if "nodes" not in tables:
+        return []
+    summary = set()
+    if "rf_summary_streams" in tables:
+        summary = set(r[0] for r in conn.execute("SELECT DISTINCT node_id FROM "
+                                                 "rf_summary_streams"))
+    cols = st_columns(conn, "nodes")
+    seen = "last_seen" if "last_seen" in cols else "NULL"
+    return [{"node_id": r[0], "last_seen": r[1], "summary": r[0] in summary}
+            for r in conn.execute("SELECT node_id, %s FROM nodes ORDER BY node_id LIMIT 1000"
+                                  % seen)]
+
+
+def st_summaries(conn, tables):
+    """(marks.summaries, {tenant\\x1fhour: 16 hex})."""
+    if "detection_summaries_hourly" not in tables:
+        return {"rows": None, "digest": "absent"}, {}
+    h = hashlib.sha256()
+    hours, n = {}, 0
+    cur_key, cur_h = None, None
+    for r in conn.execute("SELECT %s FROM detection_summaries_hourly ORDER BY %s"
+                          % (ST_SUMMARY_COLS, ST_SUMMARY_ORDER)):
+        line = st_canon_row(tuple(r)).encode("ascii")
+        h.update(line)
+        n += 1
+        key = "%s\x1f%s" % (r[0], r[1])
+        if key != cur_key:
+            if cur_key is not None:
+                hours[cur_key] = cur_h.hexdigest()[:16]
+            cur_key, cur_h = key, hashlib.sha256()
+        cur_h.update(line)
+    if cur_key is not None:
+        hours[cur_key] = cur_h.hexdigest()[:16]
+    h.update(("rows:%d\n" % n).encode())
+    return {"rows": n, "digest": "sha256:" + h.hexdigest()}, hours
+
+
+def st_state_files(data):
+    """({name: sha256:... | absent}, readable)."""
+    out, ok = {}, True
+    for name, fname, field in ST_STATE_FILES:
+        obj, state = st_read_json(os.path.join(data, fname))
+        if state == "absent":
+            out[name] = "absent"
+            continue
+        if state != "ok" or not isinstance(obj, dict):
+            out[name] = "unreadable"
+            ok = False
+            continue
+        value = obj.get(field)
+        for k in ST_STATE_VOLATILE.get(name, ()):
+            if isinstance(value, dict):
+                value = dict((i, dict((f, x) for f, x in e.items() if f != k)
+                              if isinstance(e, dict) else e) for i, e in value.items())
+        out[name] = "sha256:" + hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    return out, ok
+
+
+# -- security projection -------------------------------------------------------------
+
+
+def st_keys_file(data):
+    """(keys dict or None, readable): keys.json, else keys.json.bak."""
+    for name in ("keys.json", "keys.json.bak"):
+        obj, state = st_read_json(os.path.join(data, name))
+        if state == "ok" and isinstance(obj, dict) and isinstance(obj.get("keys"), dict):
+            return obj, True
+        if state == "absent" and name == "keys.json":
+            bak, bs = st_read_json(os.path.join(data, "keys.json.bak"))
+            if bs == "ok" and isinstance(bak, dict) and isinstance(bak.get("keys"), dict):
+                return bak, True
+            return ({"keys": {}} if bs == "absent" else None), bs == "absent"
+    return None, False
+
+
+def st_key_status(e):
+    if e.get("revoked") is True:
+        return "revoked"
+    if e.get("enabled") is False:
+        return "disabled"
+    return "active"
+
+
+def st_key_cred(e):
+    return st_tag("%s:%s" % (e.get("hash", ""), e.get("salt", "")))
+
+
+def st_registry(data):
+    obj, state = st_read_json(os.path.join(data, "ca", "registry.json"))
+    if state == "absent":
+        return {}, True
+    if state != "ok" or not isinstance(obj, dict) or not isinstance(obj.get("issued"), dict):
+        return None, False
+    return obj, True
+
+
+def st_webhooks(data):
+    obj, state = st_read_json(os.path.join(data, "webhooks.json"))
+    if state == "absent":
+        return {"webhooks": []}, True
+    if state != "ok" or not isinstance(obj, dict) or not isinstance(obj.get("webhooks"), list):
+        return None, False
+    return obj, True
+
+
+def st_security(data, secrets, conn, db_ok):
+    # created: when each API key, client certificate and protocol key was
+    # made (keys.json created_at, the registry's issued_at, crypto_keys
+    # created_at). These three change without an audit entry, so an import
+    # --replace tells "deleted here" from "made in the archive's copy" by
+    # this time against the last common audit entry's (phase2-notes F-D22).
+    # Not part of any equality test of the projection.
+    sec = {"keys": {}, "registry": {}, "ca": {"cert": None, "key": None}, "users": {},
+           "backup_codes": {}, "webhooks": {}, "crypto_keys": [], "crypto_keys_revoked": [],
+           "tenant_mfa_required": {}, "created": {"keys": {}, "registry": {}, "crypto_keys": {}},
+           "readable": {"keys": True, "registry": True, "ca": True, "webhooks": True,
+                        "db": bool(db_ok), "state_files": True}}
+    keys, ok = st_keys_file(data)
+    sec["readable"]["keys"] = ok
+    for kid, e in sorted(((keys or {}).get("keys") or {}).items()):
+        if isinstance(e, dict):
+            sec["keys"][kid] = {"status": st_key_status(e), "role_rank": st_rank(e.get("role",
+                                                                                     "viewer")),
+                                "cred": st_key_cred(e), "expires_at": e.get("expires_at"),
+                                "node_id": e.get("node_id")}
+            if isinstance(e.get("created_at"), str) and e["created_at"]:
+                sec["created"]["keys"][kid] = e["created_at"][:40]
+    reg, ok = st_registry(data)
+    sec["readable"]["registry"] = ok
+    for serial, e in sorted(((reg or {}).get("issued") or {}).items()):
+        if isinstance(e, dict):
+            sec["registry"][serial] = {"revoked": e.get("revoked") is True}
+            if isinstance(e.get("issued_at"), str) and e["issued_at"]:
+                sec["created"]["registry"][serial] = e["issued_at"][:40]
+    cert, ok1 = st_file_tag(os.path.join(data, "ca", "ca.crt"))
+    key, ok2 = st_file_tag(os.path.join(secrets, "ca", "ca.key"))
+    sec["ca"] = {"cert": cert, "key": key}
+    sec["readable"]["ca"] = ok1 and ok2
+    wh, ok = st_webhooks(data)
+    sec["readable"]["webhooks"] = ok
+    for e in (wh or {}).get("webhooks") or []:
+        if isinstance(e, dict) and e.get("id") is not None:
+            sec["webhooks"][str(e["id"])] = {"enabled": e.get("enabled") is not False,
+                                             "url": st_tag(e.get("url")),
+                                             "secret": st_tag(e.get("signing_secret"))}
+    if conn is not None and db_ok:
+        tables = st_tables(conn)
+        if "users" in tables:
+            cols = set(st_columns(conn, "users"))
+            sel = ", ".join(c if c in cols else "NULL" for c in (
+                "id", "username", "enabled", "role", "password_hash", "salt", "totp_secret",
+                "mfa_enabled"))
+            for r in conn.execute("SELECT %s FROM users ORDER BY id" % sel):
+                sec["users"][str(r[0])] = {
+                    "username": r[1], "enabled": bool(r[2]) if r[2] is not None else True,
+                    "role_rank": st_rank(r[3] or "viewer"),
+                    "pw": st_tag("%s:%s" % (r[4] or "", r[5] or "")),
+                    "totp": st_tag(r[6]) if r[6] else None, "mfa": bool(r[7])}
+        if "mfa_backup_codes" in tables:
+            for r in conn.execute("SELECT id, user_id, code_hash, used FROM mfa_backup_codes "
+                                  "ORDER BY id"):
+                sec["backup_codes"][str(r[0])] = {"user_id": r[1], "code": st_tag(r[2]),
+                                                  "used": bool(r[3])}
+        if "crypto_keys" in tables:
+            made = "created_at" if "created_at" in st_columns(conn, "crypto_keys") else "NULL"
+            for r in conn.execute("SELECT id, revoked_at, %s FROM crypto_keys ORDER BY id"
+                                  % made):
+                sec["crypto_keys"].append(r[0])
+                if r[1]:
+                    sec["crypto_keys_revoked"].append(r[0])
+                if isinstance(r[2], str) and r[2]:
+                    sec["created"]["crypto_keys"][r[0]] = r[2][:40]
+        if "tenant_settings" in tables:
+            for r in conn.execute("SELECT tenant_id, mfa_required FROM tenant_settings "
+                                  "ORDER BY tenant_id"):
+                sec["tenant_mfa_required"][r[0]] = bool(r[1])
+    return sec
+
+
+# -- the evaluate wrapper ------------------------------------------------------------
+
+
+def st_evaluate(values, conn, counts, data_dir):
+    """1a's evaluate; without cryptography (the v0.1.0 image always has it,
+    the scripts tests do not) the MFA check reports unchecked."""
+    try:
+        return evaluate(values, conn, counts, data_dir)  # noqa: F821 - 1a engine
+    except ImportError:
+        c = dict(counts)
+        c["totp_fernet"] = 0
+        out = evaluate(values, conn, c, data_dir)  # noqa: F821
+        out["mfa"] = "unchecked"
+        return out
+
+
+# -- state, quiesce, compare -----------------------------------------------------------
+
+
+def st_db_header(db):
+    try:
+        with open(db, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return None
+    return head
+
+
+def st_open(db, out):
+    conn = open_ro(db)  # noqa: F821 - 1a engine
+    conn.row_factory = None
+
+    def progress():
+        out.step(n=1)
+        return 0
+    conn.set_progress_handler(progress, 1000)
+    return conn
+
+
+def st_marks(conn, tables):
+    marks = {"tables": {}, "without_rowid": [], "absent": [], "derived_skipped": [],
+             "volatile_skipped": [], "queue": [], "updates": {}, "summaries": None,
+             "state_files": {}, "detections_newest_ts": None}
+    for name in ST_VOLATILE + ST_DERIVED + ST_QUEUE + ST_CONTENT:
+        if name not in tables and name not in marks["absent"]:
+            marks["absent"].append(name)
+    for name in sorted(tables):
+        sql = tables[name]
+        if name.startswith("sqlite_") or name in ST_VOLATILE:
+            marks["volatile_skipped"].append(name)
+            continue
+        if name in ST_DERIVED:
+            marks["derived_skipped"].append(name)
+            continue
+        if name in ST_CONTENT:
+            continue
+        if name in ST_QUEUE:
+            marks["queue"].append(name)
+        if re.search(r"\)\s*WITHOUT\s+ROWID\s*;?\s*\Z", sql, re.I):
+            marks["without_rowid"].append(name)
+            marks["tables"][name] = conn.execute("SELECT COUNT(*) FROM %s" % st_q(name)) \
+                .fetchone()[0]
+        else:
+            marks["tables"][name] = conn.execute("SELECT MAX(rowid) FROM %s" % st_q(name)) \
+                .fetchone()[0]
+        if "updated_at" in st_columns(conn, name):
+            marks["updates"]["%s.updated_at" % name] = conn.execute(
+                "SELECT MAX(updated_at) FROM %s" % st_q(name)).fetchone()[0]
+    if "nodes" in tables and "last_seen" in st_columns(conn, "nodes"):
+        marks["updates"]["nodes.last_seen"] = conn.execute(
+            "SELECT MAX(last_seen) FROM nodes").fetchone()[0]
+    if "pending_commands" in tables and "dispatched_at" in st_columns(conn, "pending_commands"):
+        marks["updates"]["pending_commands.dispatched_at"] = conn.execute(
+            "SELECT MAX(dispatched_at) FROM pending_commands").fetchone()[0]
+    if "detections" in tables:
+        r = conn.execute("SELECT COUNT(*), MAX(rowid) FROM detections "
+                         "WHERE signal_class = 'iq_capture'").fetchone()
+        marks["updates"]["detections.iq_stubs"] = r[0]
+        marks["updates"]["detections.iq_stubs_max_rowid"] = r[1]
+        marks["detections_newest_ts"] = conn.execute(
+            "SELECT MAX(timestamp) FROM detections").fetchone()[0]
+    return marks
+
+
+def st_count(conn, tables, name, where=""):
+    if name not in tables:
+        return 0
+    return conn.execute("SELECT COUNT(*) FROM %s %s" % (st_q(name), where)).fetchone()[0]
+
+
+def st_pcap_after(conn, tables):
+    seq = 0
+    if "sqlite_sequence" in tables:
+        r = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='wifi_anomalies'").fetchone()
+        seq = (r[0] if r else 0) or 0
+    mx = 0
+    if "wifi_anomalies" in tables:
+        mx = conn.execute("SELECT MAX(rowid) FROM wifi_anomalies").fetchone()[0] or 0
+    return max(int(seq), int(mx), 0)
+
+
+def st_sizes(data, secrets, excluded_patterns):
+    by_top, classes = {}, {"db": 0, "captures": 0, "other": 0}
+    excluded = {"backups": 0, "exports": 0, "premigration": 0, "forensic": 0}
+    premig = []
+    total = 0
+    try:
+        names = sorted(os.listdir(data))
+    except OSError:
+        names = []
+    for n in names:
+        if st_lifecycle_name(n):
+            continue
+        p = os.path.join(data, n)
+        try:
+            s = os.lstat(p)
+        except OSError:
+            continue
+        size = st_tree_bytes(p) + s.st_size if stat.S_ISDIR(s.st_mode) else s.st_size
+        by_top[n] = size
+        if n in ("backups", "exports"):
+            excluded[n] += size
+            continue
+        if n.startswith(ST_DB + ".pre-migration"):
+            excluded["premigration"] += size
+            if n == ST_DB + ".pre-migration":
+                premig.append({"name": n, "bytes": size, "mtime_ns": s.st_mtime_ns})
+            continue
+        if fnmatch.fnmatchcase(n, "*.failed-migration-*") or fnmatch.fnmatchcase(n, "*.corrupt-*"):
+            excluded["forensic"] += size
+            continue
+        if n == ST_DB + "-shm" or st_match(n, excluded_patterns):
+            continue
+        classes[st_class(n)] += size
+        total += size
+    lc = st_lifecycle((("bridge_data", data),))
+    sec_total = 0
+    for rel, p, s in (st_walk(secrets, st_lifecycle_name) if os.path.isdir(secrets) else ()):
+        sec_total += s.st_size
+    return {"bridge_data": {"total_raw": total, "by_top": by_top, "classes": classes,
+                            "excluded": excluded, "premigration": premig,
+                            "replaced": [{"id": x["id"], "bytes": x["bytes"], "phase": x["phase"]}
+                                         for x in lc["replaced"]],
+                            "staging": [{"id": x["id"], "bytes": x["bytes"]}
+                                        for x in lc["staging"]]},
+            "bridge_secrets": {"total_raw": sec_total}}
+
+
+def st_fs(path):
+    try:
+        s = STATVFS(path)
+    except OSError:
+        return None
+    return {"frsize": s.f_frsize, "blocks": s.f_blocks, "bavail": s.f_bavail, "files": s.f_files}
+
+
+def st_captures(data, tables, conn):
+    out = {"iq_files": 0, "pcap_files": 0, "newest_mtime_ns": 0, "pcap_after": 0}
+    for d, key in (("iq_captures", "iq_files"), ("pcap_captures", "pcap_files")):
+        p = os.path.join(data, d)
+        if not os.path.isdir(p):
+            continue
+        for rel, path, s in st_walk(p):
+            if stat.S_ISREG(s.st_mode):
+                out[key] += 1
+                out["newest_mtime_ns"] = max(out["newest_mtime_ns"], s.st_mtime_ns)
+    if conn is not None:
+        out["pcap_after"] = st_pcap_after(conn, tables)
+    return out
+
+
+def st_state(req, out, lines=None, verify=True):
+    """The state reply (phase1b-spec 4.3); M lines of rf_rows when LINES.
+    VERIFY: run 1a's evaluate on the request's env candidate."""
+    data, secrets = st_roots(req)
+    db = os.path.join(data, ST_DB)
+    out.step(phase="state")
+    reply = {"format": 1, "ok": True, "op": req["op"], "schema": None,
+             "db": {"present": os.path.isfile(db), "encrypted": False, "bytes": 0,
+                    "wal_bytes": 0, "quick_check": None, "error": None},
+             "audit": {"source": "none", "result": "n/a", "entries": None, "head_id": None,
+                       "head_tag": None, "chain": None},
+             "mfa": "n/a", "fingerprints": {"audit": {"source": "none", "fp": None},
+                                            "mfa": None, "keystore": None},
+             "marks": None, "rf": None, "security": None,
+             "counts": {"users": None, "mfa_users": None, "keys": None, "nodes": None,
+                        "detections": None, "crypto_keys": None, "totp_fernet": None,
+                        "sessions": None},
+             "captures": None, "sizes": None, "fs": None, "lifecycle": None, "nodes": None}
+    conn, tables, db_ok = None, {}, False
+    if reply["db"]["present"]:
+        reply["db"]["bytes"] = os.path.getsize(db)
+        try:
+            reply["db"]["wal_bytes"] = os.path.getsize(db + "-wal")
+        except OSError:
+            pass
+        head = st_db_header(db)
+        if head and head != b"SQLite format 3\x00":
+            reply["db"]["encrypted"] = True
+        elif head:
+            try:
+                conn = st_open(db, out)
+                conn.execute("BEGIN")
+                tables = st_tables(conn)
+                db_ok = True
+            except sqlite3.Error as e:
+                reply["db"]["error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+                conn = None
+    try:
+        if conn is not None:
+            try:
+                reply["schema"] = conn.execute("SELECT MAX(version) FROM schema_version") \
+                    .fetchone()[0] if "schema_version" in tables else None
+                marks = st_marks(conn, tables)
+                marks["summaries"], hours = st_summaries(conn, tables)
+                rf, streams, fences = st_rf(conn, tables,
+                                            exempt=tuple(req.get("exempt_nodes") or ()))
+                reply["nodes"] = st_nodes(conn, tables)
+                c = reply["counts"]
+                c["users"] = st_count(conn, tables, "users")
+                c["mfa_users"] = st_count(conn, tables, "users", "WHERE mfa_enabled = 1") \
+                    if "mfa_enabled" in (st_columns(conn, "users") if "users" in tables
+                                         else ()) else 0
+                c["totp_fernet"] = st_count(conn, tables, "users",
+                                            "WHERE totp_secret LIKE 'fernet:%'") \
+                    if "totp_secret" in (st_columns(conn, "users") if "users" in tables
+                                         else ()) else 0
+                c["nodes"] = st_count(conn, tables, "nodes")
+                c["detections"] = st_count(conn, tables, "detections")
+                c["crypto_keys"] = st_count(conn, tables, "crypto_keys")
+                c["sessions"] = sum(st_count(conn, tables, t) for t in ST_SESSION_TABLES)
+                audit_rows = st_count(conn, tables, "audit_log")
+                reply["audit"]["entries"] = audit_rows
+                reply["audit"]["head_id"] = conn.execute(
+                    "SELECT MAX(id) FROM audit_log").fetchone()[0] if "audit_log" in tables \
+                    else None
+                # The chain value of the head (a tag) and of the entries the
+                # request names: the import's relation test (phase2-notes F-D21).
+                chain = st_audit_chain(conn, req.get("audit_at") or ())
+                reply["audit"]["head_tag"] = chain["head_tag"]
+                reply["audit"]["chain"] = chain["chain"]
+                if req.get("audit_at"):
+                    reply["audit"]["at"] = chain["at"]
+            except sqlite3.Error as e:
+                reply["db"]["error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+                db_ok = False
+        if db_ok:
+            reply["marks"] = marks
+            reply["rf"] = rf
+            if lines is not None:
+                lines.add({"tables": rf["tables"]})
+                for s in streams:
+                    lines.add({"s": s})
+                for f in fences:
+                    lines.add({"f": f})
+                for k in sorted(hours):
+                    lines.add({"h": k, "v": hours[k]})
+                lines.flush()
+        sf, sf_ok = st_state_files(data)
+        if reply["marks"] is not None:
+            reply["marks"]["state_files"] = sf
+        reply["state_files"] = sf
+        sec = st_security(data, secrets, conn, db_ok)
+        sec["readable"]["state_files"] = sf_ok
+        reply["security"] = sec
+        reply["counts"]["keys"] = len(sec["keys"])
+        if db_ok and verify:
+            ev_counts = {"users": reply["counts"]["users"], "totp_fernet":
+                         reply["counts"]["totp_fernet"], "audit_rows": reply["audit"]["entries"]}
+            ev = st_evaluate(req.get("env") or {}, conn, ev_counts, data)
+            reply["audit"]["source"] = ev["audit"]["source"]
+            reply["audit"]["result"] = ev["audit"]["result"]
+            reply["mfa"] = ev["mfa"]
+            fps = ev.get("fingerprints") or {}
+            reply["fingerprints"] = {"audit": {"source": ev["audit"]["source"],
+                                               "fp": fps.get("audit")},
+                                     "mfa": fps.get("mfa"), "keystore": fps.get("keystore")}
+        elif not db_ok:
+            reply["audit"]["result"] = "unchecked" if reply["db"]["present"] else "n/a"
+            reply["audit"]["chain"] = "unreadable" if reply["db"]["present"] else "no-db"
+            reply["mfa"] = "unchecked" if reply["db"]["present"] else "n/a"
+        reply["captures"] = st_captures(data, tables, conn if db_ok else None)
+    finally:
+        if conn is not None:
+            conn.close()
+    reply["sizes"] = st_sizes(data, secrets, req.get("excludes") or ())
+    reply["fs"] = {"bridge_data": st_fs(data), "bridge_secrets": st_fs(secrets)}
+    reply["lifecycle"] = st_lifecycle((("bridge_data", data), ("bridge_secrets", secrets)))
+    reply["markers"] = {"bridge_data": st_marker_info(data),
+                        "bridge_secrets": st_marker_info(secrets)}
+    return reply
+
+
+def st_state_root(req):
+    """REQ with its roots moved into a staging (phase2-spec 1.2: root
+    "staging:<rb_id>" reads .sigrift-restore-<rb_id> of each volume)."""
+    root = req.get("root") or "live"
+    if root == "live":
+        return req
+    if not root.startswith("staging:"):
+        raise StError("unsafe", "unknown root")
+    rb = st_rb_id({"rb_id": root[len("staging:"):]})
+    req = dict(req)
+    for _vol, key in ST_VOLUMES:
+        if req.get(key):
+            req[key] = os.path.join(req[key], ST_RESTORE + rb)
+    if not os.path.isdir(req["data_dir"]):
+        raise StError("phase", "there is no staging %s" % rb)
+    if not os.path.isdir(req["secrets_dir"]):
+        req["secrets_dir"] = os.path.join(req["data_dir"], ".sigrift-no-secrets-staging")
+    return req
+
+
+def st_op_state(req, out):
+    req = st_state_root(req)
+    lines = StLines(out) if req.get("rf_rows") else None
+    reply = st_state(req, out, lines)
+    if lines is not None:
+        reply["rf_rows_lines"] = lines.count
+        reply["rf_rows_sha256"] = lines.h.hexdigest()
+    return reply
+
+
+def st_op_quiesce(req, out):
+    data, _ = st_roots(req)
+    db = os.path.join(data, ST_DB)
+    mode = req.get("mode") or "strict"
+    check = None
+    head = st_db_header(db) if os.path.isfile(db) else None
+    if head == b"SQLite format 3\x00":
+        out.step(phase="quick_check")
+        conn = sqlite3.connect(db, timeout=5)
+        try:
+            def progress():
+                out.step(n=1)
+                return 0
+            conn.set_progress_handler(progress, 1000)
+            conn.execute("PRAGMA busy_timeout=5000")
+            msgs = [r[0] for r in conn.execute("PRAGMA quick_check(20)")]
+            check = "ok" if msgs == ["ok"] else "; ".join(str(m) for m in msgs)[:400]
+            if check != "ok" and mode == "strict":
+                raise StError("quick-check", check, "quick_check")
+            if check == "ok":
+                out.step(phase="checkpoint")
+                for attempt in range(4):
+                    busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+                    if not busy:
+                        break
+                    if attempt == 3:
+                        raise StError("busy", "the database is still in use "
+                                              "(wal_checkpoint busy)", "checkpoint")
+                    SLEEP(2)
+        finally:
+            conn.close()
+    reply = st_state(req, out)
+    reply["db"]["quick_check"] = check
+    return reply
+
+
+def st_cmp_gt(a, b):
+    """a > b for watermark values (None is the lowest)."""
+    if a is None:
+        return False
+    if b is None:
+        return True
+    try:
+        return a > b
+    except TypeError:
+        return str(a) > str(b)
+
+
+def st_file_uri(path):
+    """A file: URI of PATH (its real path, percent-encoded), for ATTACH."""
+    safe = "/-._~" + "".join(chr(c) for c in range(0x30, 0x3a)) + "".join(
+        chr(c) for c in range(0x41, 0x5b)) + "".join(chr(c) for c in range(0x61, 0x7b))
+    return "file:" + "".join(ch if ch in safe else "".join("%%%02X" % b for b in ch.encode(
+        "utf-8", "surrogateescape")) for ch in os.path.realpath(path))
+
+
+def st_rows_vs_staged(db, sdb, lm, out):
+    """{table: n} of the live database DB against an import's staged copy
+    SDB: the rows of each table the live marks count (LM) that the staged
+    copy lacks or holds differently (no row with the same key, the declared
+    primary key or else the rowid, whose common columns are all equal). A
+    table the staged copy lacks counts every row."""
+    conn = open_ro(db)  # noqa: F821 - 1a engine
+    conn.row_factory = None
+
+    def progress():
+        out.step(n=1)
+        return 0
+    conn.set_progress_handler(progress, 1000)
+    try:
+        conn.execute("ATTACH DATABASE ? AS staged", (st_file_uri(sdb) + "?mode=ro&immutable=1",))
+        have = set(r[0] for r in conn.execute(
+            "SELECT name FROM staged.sqlite_master WHERE type = 'table'"))
+        rows = {}
+        for t in sorted(lm.get("tables") or {}):
+            if t not in have:
+                n = conn.execute("SELECT COUNT(*) FROM main.%s" % st_q(t)).fetchone()[0]
+            else:
+                info = conn.execute("PRAGMA main.table_info(%s)" % st_q(t)).fetchall()
+                theirs = set(r[1] for r in conn.execute("PRAGMA staged.table_info(%s)"
+                                                        % st_q(t)))
+                cols = [r[1] for r in info if r[1] in theirs]
+                # The declared primary key (a VACUUM may renumber the
+                # rowids of a table without an INTEGER PRIMARY KEY), else
+                # the rowid.
+                pk = [r[1] for r in sorted(info, key=lambda r: r[5]) if r[5]]
+                if pk and all(c in theirs for c in pk):
+                    key = " AND ".join("s.%s = l.%s" % (st_q(c), st_q(c)) for c in pk)
+                elif t in (lm.get("without_rowid") or []):
+                    key = "1"
+                else:
+                    key = "s.rowid = l.rowid"
+                eq = "".join(" AND s.%s IS l.%s" % (st_q(c), st_q(c)) for c in cols)
+                n = conn.execute("SELECT COUNT(*) FROM main.%s AS l WHERE NOT EXISTS (SELECT 1 "
+                                 "FROM staged.%s AS s WHERE %s%s)" % (st_q(t), st_q(t), key, eq)
+                                 ).fetchone()[0]
+            if n:
+                rows[t] = n
+        return rows
+    finally:
+        conn.close()
+
+
+def st_captures_vs_staged(data, staged):
+    """The capture files of DATA that STAGED lacks (by relative path and size)."""
+    n = 0
+    for d in ST_CAPTURES:
+        p = os.path.join(data, d)
+        if not os.path.isdir(p):
+            continue
+        for rel, path, s in st_walk(p):
+            if not stat.S_ISREG(s.st_mode):
+                continue
+            try:
+                o = os.lstat(os.path.join(staged, d, rel))
+            except OSError:
+                o = None
+            if o is None or not stat.S_ISREG(o.st_mode) or o.st_size != s.st_size:
+                n += 1
+    return n
+
+
+def st_op_compare(req, out):
+    """The live state against a restore point's (phase1b-spec 4.3). For an
+    import --replace (phase2-notes F-D22): with common_head (an audit entry
+    id both copies hold), unrecorded.after names the API keys, client
+    certificates and protocol keys the point holds and the live data lacks
+    that were made after that entry (or with no creation time); with
+    staged_rb, rows and captures are matched against the staged copy."""
+    rp = req.get("rp") or {}
+    rf_rows = json.loads(st_read_section(out).decode("utf-8") or "{}") if req.get(
+        "rf_rows_section") else {}
+    live = st_state({"op": "state", "data_dir": req["data_dir"], "secrets_dir": req["secrets_dir"],
+                     "env": {}, "exempt_nodes": req.get("exempt_nodes") or []}, out,
+                    verify=False)
+    data = req["data_dir"]
+    marks = rp.get("marks") or {}
+    sec_rp, sec = rp.get("security") or {}, live["security"] or {}
+    why = []
+    if live["db"]["encrypted"] or (rp.get("db") or {}).get("encrypted"):
+        why.append("the database is encrypted")
+    if not live["db"]["present"] and (rp.get("db") or {}).get("present"):
+        why.append("the live database is missing")
+    if live["db"]["error"]:
+        why.append("the live database cannot be read (%s)" % live["db"]["error"])
+    for k, ok in sorted((sec.get("readable") or {}).items()):
+        if not ok:
+            why.append("%s cannot be read" % k)
+    for k, ok in sorted((sec_rp.get("readable") or {}).items()):
+        if not ok:
+            why.append("the restore point's %s could not be read" % k)
+    lm = live.get("marks") or {}
+    for t in sorted(marks.get("tables") or {}):
+        if t not in (lm.get("tables") or {}):
+            why.append("table %s is missing" % t)
+    disc = {"since": rp.get("created_at"), "rows": {}, "new_tables": {}, "updated": {},
+            "summaries_changed_hours": 0, "state_files_changed": [], "api_keys_created": [],
+            "users_created": [], "client_certs_issued": 0, "crypto_keys_imported": [],
+            "webhooks_created": 0, "captures_added": 0, "rf": "cannot", "old_ca_certs": 0}
+    carries = {"api_keys_removed": [], "api_keys_revoked": [], "api_keys_disabled": [],
+               "api_keys_role_lowered": [], "api_keys_expiry_earlier": [], "api_keys_bound": [],
+               "api_keys_rotated": [], "ca_serials_revoked": [], "ca_replaced": False,
+               "users_disabled": [], "users_role_lowered": [], "backup_codes_invalidated": {},
+               "crypto_keys_deleted": [], "webhooks_removed": [], "webhooks_disabled": [],
+               "mfa_required_on": [], "sessions": (rp.get("counts") or {}).get("sessions") or 0}
+    creds = {"passwords_changed": [], "totp_changed": [], "mfa_changed": [],
+             "webhook_urls_changed": [], "webhook_secrets_changed": [], "keys_rotated_back": []}
+    settings = {"roles_raised": [], "key_roles_raised": []}
+    db = os.path.join(data, ST_DB)
+    conn = None
+    common = req.get("common_head")
+    common_ts = None
+    staged = None
+    if req.get("staged_rb"):
+        staged = os.path.join(data, ST_RESTORE + st_rb_id({"rb_id": req["staged_rb"]}))
+        sdb = os.path.join(staged, ST_DB)
+        if not os.path.isfile(sdb) or st_db_header(sdb) != b"SQLite format 3\x00":
+            why.append("the staged database cannot be compared")
+    if not why and live["db"]["present"]:
+        conn = st_open(db, out)
+    try:
+        if conn is not None:
+            conn.execute("BEGIN")
+            tables = st_tables(conn)
+            if type(common) is int and "audit_log" in tables:
+                r = conn.execute("SELECT timestamp FROM audit_log WHERE id = ?",
+                                 (common,)).fetchone()
+                common_ts = r[0] if r and isinstance(r[0], str) else None
+            for t, mark in sorted((marks.get("tables") or {}).items()):
+                now = lm["tables"].get(t)
+                if t in (marks.get("without_rowid") or []):
+                    if (now or 0) > (mark or 0):
+                        disc["rows"][t] = (now or 0) - (mark or 0)
+                elif st_cmp_gt(now, mark):
+                    col = "id" if t == "audit_log" else "rowid"
+                    disc["rows"][t] = conn.execute(
+                        "SELECT COUNT(*) FROM %s WHERE %s > ?" % (st_q(t), col),
+                        (mark or 0,)).fetchone()[0]
+            for t in sorted(lm.get("tables") or {}):
+                if t not in (marks.get("tables") or {}):
+                    n = st_count(conn, tables, t)
+                    if n:
+                        disc["new_tables"][t] = n
+            ups = marks.get("updates") or {}
+            for k, mark in sorted(ups.items()):
+                if k.endswith(".updated_at"):
+                    t = k[:-len(".updated_at")]
+                    if t in tables and st_cmp_gt((lm.get("updates") or {}).get(k), mark):
+                        lim = (marks.get("tables") or {}).get(t)
+                        if t in (marks.get("without_rowid") or []):
+                            disc["updated"][t] = conn.execute(
+                                "SELECT COUNT(*) FROM %s WHERE updated_at > ?" % st_q(t),
+                                (mark if mark is not None else "",)).fetchone()[0]
+                        else:
+                            disc["updated"][t] = conn.execute(
+                                "SELECT COUNT(*) FROM %s WHERE updated_at > ? AND rowid <= ?"
+                                % st_q(t), (mark if mark is not None else "", lim or 0)
+                            ).fetchone()[0]
+            if "nodes.last_seen" in ups and "nodes" in tables:
+                mark = ups["nodes.last_seen"]
+                disc["updated"]["nodes"] = conn.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE last_seen > ?" if mark is not None else
+                    "SELECT COUNT(*) FROM nodes WHERE last_seen IS NOT NULL",
+                    (mark,) if mark is not None else ()).fetchone()[0]
+            if "pending_commands.dispatched_at" in ups and "pending_commands" in tables:
+                mark = ups["pending_commands.dispatched_at"]
+                disc["updated"]["pending_commands_dispatched"] = conn.execute(
+                    "SELECT COUNT(*) FROM pending_commands WHERE dispatched_at > ?"
+                    if mark is not None else
+                    "SELECT COUNT(*) FROM pending_commands WHERE dispatched_at IS NOT NULL",
+                    (mark,) if mark is not None else ()).fetchone()[0]
+            if "detections.iq_stubs" in ups and "detections" in tables:
+                lim = (marks.get("tables") or {}).get("detections") or 0
+                still = conn.execute("SELECT COUNT(*) FROM detections WHERE signal_class = "
+                                     "'iq_capture' AND rowid <= ?", (lim,)).fetchone()[0]
+                disc["updated"]["iq_stubs_completed"] = max(0, (ups["detections.iq_stubs"] or 0)
+                                                            - still)
+            s_rp, s_live = marks.get("summaries") or {}, lm.get("summaries") or {}
+            if s_rp.get("digest") != s_live.get("digest"):
+                _, hours = st_summaries(conn, tables)
+                old = rf_rows.get("summary_hours") or {}
+                disc["summaries_changed_hours"] = max(1, len(
+                    [k for k in set(old) | set(hours) if old.get(k) != hours.get(k)]))
+            new_ids = [k for k in sec.get("crypto_keys") or [] if k not in
+                       (sec_rp.get("crypto_keys") or [])]
+            for kid in new_ids:
+                r = conn.execute("SELECT protocol, key_name FROM crypto_keys WHERE id = ?",
+                                 (kid,)).fetchone()
+                disc["crypto_keys_imported"].append({"protocol": r[0] if r else None,
+                                                     "label": r[1] if r else None})
+            if "rf_summary_streams" in tables:
+                carries_nodes = sorted(set(r[0] for r in conn.execute(
+                    "SELECT node_id FROM rf_summary_streams")))
+            else:
+                carries_nodes = []
+            if staged is not None:
+                # An import's staged copy is not an ancestor of the current
+                # data (both may have written rows after they parted), so the
+                # rows above the export point's mark are not all it lacks
+                # (phase2-notes F-D22): every counted row is matched against
+                # the staged copy instead.
+                try:
+                    disc["rows"] = st_rows_vs_staged(db, os.path.join(staged, ST_DB), lm, out)
+                except sqlite3.Error as e:
+                    why.append("the staged database cannot be compared (%s)" % str(e)[:100])
+                disc["new_tables"], disc["updated"] = {}, {}
+                disc["rows_basis"] = "staged"
+        else:
+            carries_nodes = []
+    finally:
+        if conn is not None:
+            conn.close()
+    sf_rp, sf_live = marks.get("state_files") or {}, (live.get("state_files") or {})
+    disc["state_files_changed"] = sorted(k for k in set(sf_rp) | set(sf_live)
+                                         if sf_rp.get(k) != sf_live.get(k))
+    rf_rp, rf_live = rp.get("rf_summary") or {}, live.get("rf") or {}
+    if sorted(rf_rp.get("exempt_nodes") or []) != sorted(req.get("exempt_nodes") or []):
+        # Digests over different node sets say nothing about each other.
+        rf_rp = {}
+    if not rf_live or not rf_rp:
+        disc["rf"] = "cannot"
+    elif not rf_live.get("tables") and rf_rp.get("tables"):
+        disc["rf"] = "absent-live"
+    elif rf_live.get("tables") and not rf_rp.get("tables"):
+        disc["rf"] = "absent-rp" if any((rf_live.get("rows") or {}).values()) else "same"
+    else:
+        disc["rf"] = "same" if rf_live.get("digest") == rf_rp.get("digest") else "changed"
+    # The security projection: what was created since is discarded, what
+    # takes access away since is carried, credentials are listed.
+    k_rp, k_live = sec_rp.get("keys") or {}, sec.get("keys") or {}
+    keep_master = req.get("keep_current_master", True)
+    disc["api_keys_created"] = sorted(k for k in k_live if k not in k_rp)
+    for kid in sorted(k_rp):
+        a, b = k_rp[kid], k_live.get(kid)
+        if b is None:
+            carries["api_keys_removed"].append(kid)
+            continue
+        if b["status"] == "revoked" and a["status"] != "revoked":
+            carries["api_keys_revoked"].append(kid)
+        elif b["status"] == "disabled" and a["status"] == "active":
+            carries["api_keys_disabled"].append(kid)
+        if b["role_rank"] < a["role_rank"]:
+            carries["api_keys_role_lowered"].append(kid)
+        elif b["role_rank"] > a["role_rank"]:
+            settings["key_roles_raised"].append(kid)
+        if b.get("expires_at") and b.get("expires_at") != a.get("expires_at"):
+            ea, eb = st_epoch(a.get("expires_at")), st_epoch(b.get("expires_at"))
+            if a.get("expires_at") is None or ea is None or eb is None or eb < ea:
+                carries["api_keys_expiry_earlier"].append(kid)
+        if b.get("node_id") and b.get("node_id") != a.get("node_id"):
+            # Bound since, or moved to another node (which unbinds the old
+            # one): the live binding is carried.
+            carries["api_keys_bound"].append(kid)
+        if b.get("cred") != a.get("cred"):
+            if kid == "master" and not keep_master:
+                creds["keys_rotated_back"].append(kid)
+            else:
+                carries["api_keys_rotated"].append(kid)
+    r_rp, r_live = sec_rp.get("registry") or {}, sec.get("registry") or {}
+    disc["client_certs_issued"] = len([s for s in r_live if s not in r_rp])
+    ca_rp, ca_live = sec_rp.get("ca") or {}, sec.get("ca") or {}
+    carries["ca_replaced"] = (ca_rp.get("cert"), ca_rp.get("key")) != (ca_live.get("cert"),
+                                                                       ca_live.get("key"))
+    for serial in sorted(r_rp, key=lambda s: (len(s), s)):
+        if carries["ca_replaced"]:
+            if not r_rp[serial].get("revoked"):
+                carries["ca_serials_revoked"].append(serial)
+        elif serial not in r_live or (r_live[serial].get("revoked") and
+                                      not r_rp[serial].get("revoked")):
+            carries["ca_serials_revoked"].append(serial)
+    if carries["ca_replaced"]:
+        disc["old_ca_certs"] = len([s for s in r_rp if not r_rp[s].get("revoked")])
+    u_rp, u_live = sec_rp.get("users") or {}, sec.get("users") or {}
+    live_names = set(u["username"] for u in u_live.values())
+    rp_names = set(u["username"] for u in u_rp.values())
+    disc["users_created"] = sorted(n for n in live_names if n not in rp_names)
+    for uid in sorted(u_rp, key=lambda x: (len(x), x)):
+        a, b = u_rp[uid], u_live.get(uid)
+        if b is None or b["username"] != a["username"]:
+            if a.get("enabled"):
+                carries["users_disabled"].append(a["username"])
+            continue
+        if a.get("enabled") and not b.get("enabled"):
+            carries["users_disabled"].append(a["username"])
+        if b["role_rank"] < a["role_rank"]:
+            carries["users_role_lowered"].append(a["username"])
+        elif b["role_rank"] > a["role_rank"]:
+            settings["roles_raised"].append(a["username"])
+        if b.get("pw") != a.get("pw"):
+            creds["passwords_changed"].append(a["username"])
+        if b.get("totp") != a.get("totp"):
+            creds["totp_changed"].append(a["username"])
+        if bool(b.get("mfa")) != bool(a.get("mfa")):
+            creds["mfa_changed"].append(a["username"])
+    names = dict((uid, u["username"]) for uid, u in u_rp.items())
+    c_rp, c_live = sec_rp.get("backup_codes") or {}, sec.get("backup_codes") or {}
+    for cid, a in sorted(c_rp.items()):
+        b = c_live.get(cid)
+        if a.get("used"):
+            continue
+        if b is None or b.get("used") or b.get("code") != a.get("code") or \
+                b.get("user_id") != a.get("user_id"):
+            who = names.get(str(a.get("user_id")), str(a.get("user_id")))
+            carries["backup_codes_invalidated"][who] = \
+                carries["backup_codes_invalidated"].get(who, 0) + 1
+    carries["crypto_keys_deleted"] = sorted(k for k in sec_rp.get("crypto_keys") or []
+                                            if k not in (sec.get("crypto_keys") or []))
+    w_rp, w_live = sec_rp.get("webhooks") or {}, sec.get("webhooks") or {}
+    disc["webhooks_created"] = len([w for w in w_live if w not in w_rp])
+    for wid, a in sorted(w_rp.items()):
+        b = w_live.get(wid)
+        if b is None:
+            carries["webhooks_removed"].append(wid)
+            continue
+        if a.get("enabled") and not b.get("enabled"):
+            carries["webhooks_disabled"].append(wid)
+        if b.get("url") != a.get("url"):
+            creds["webhook_urls_changed"].append(wid)
+        if b.get("secret") != a.get("secret"):
+            creds["webhook_secrets_changed"].append(wid)
+    t_rp, t_live = sec_rp.get("tenant_mfa_required") or {}, sec.get("tenant_mfa_required") or {}
+    carries["mfa_required_on"] = sorted(t for t, on in t_live.items() if on and not t_rp.get(t))
+    created = st_epoch(rp.get("created_at"))
+    cap = live.get("captures") or {}
+    rp_cap = rp.get("captures") or {}
+    # Newer than the restore point's newest capture (exact), else than the
+    # second after it was taken.
+    limit = rp_cap.get("newest_mtime_ns") if rp_cap.get("newest_mtime_ns") else (
+        (created + 1) * 10 ** 9 if created is not None else None)
+    if limit is not None:
+        for d in ST_CAPTURES:
+            p = os.path.join(data, d)
+            if os.path.isdir(p):
+                for rel, path, s in st_walk(p):
+                    if stat.S_ISREG(s.st_mode) and s.st_mtime_ns > limit:
+                        disc["captures_added"] += 1
+    disc["captures_added"] = max(disc["captures_added"], max(
+        0, (cap.get("iq_files") or 0) + (cap.get("pcap_files") or 0)
+        - (rp_cap.get("iq_files") or 0) - (rp_cap.get("pcap_files") or 0)))
+    if staged is not None:
+        disc["captures_added"] = st_captures_vs_staged(data, staged)
+    unrecorded = None
+    if "common_head" in req:
+        made = sec_rp.get("created") or {}
+        limit = st_epoch(common_ts)
+
+        def after(kind, ids):
+            out_ = []
+            for i in ids:
+                t = st_epoch((made.get(kind) or {}).get(i))
+                if limit is None or t is None or t > limit:
+                    out_.append(i)
+            return sorted(out_, key=lambda s: (len(str(s)), str(s)))
+        unrecorded = {"common_head": common if type(common) is int else None,
+                      "common_ts": common_ts,
+                      "after": {"api_keys": after("keys", carries["api_keys_removed"]),
+                                "certs": after("registry", [s for s in r_rp if s not in r_live]),
+                                "crypto_keys": after("crypto_keys",
+                                                     carries["crypto_keys_deleted"])}}
+    checkable = not why
+    audit_same = (rp.get("audit") or {}).get("head_id") == live["audit"]["head_id"]
+    sec_same = all(json.dumps(sec_rp.get(k), sort_keys=True) == json.dumps(sec.get(k),
+                                                                             sort_keys=True)
+                   for k in ("keys", "registry", "ca", "users", "backup_codes", "webhooks",
+                             "crypto_keys", "crypto_keys_revoked", "tenant_mfa_required"))
+    nothing_new = (checkable and not disc["rows"] and not disc["new_tables"]
+                   and not any(disc["updated"].values()) and not disc["summaries_changed_hours"]
+                   and not disc["state_files_changed"] and audit_same and disc["rf"] == "same"
+                   and sec_same and disc["captures_added"] == 0)
+    reply = {"format": 1, "ok": True, "op": "compare", "checkable": checkable,
+             "nothing_new": bool(nothing_new), "why_not_checkable": "; ".join(why) or None,
+             "discards": disc, "carries": carries,
+             "not_carried": {"credentials": creds, "settings": settings},
+             "summary_nodes": carries_nodes, "audit_head_id": live["audit"]["head_id"],
+             "live_schema": live["schema"]}
+    if unrecorded is not None:
+        reply["unrecorded"] = unrecorded
+    return reply
+
+
+def st_read_section(out):
+    sec = StSection(st_stdin(), out)
+    data = sec.read()
+    sec.drain()
+    return data
+
+
+def st_op_rf_check(req, out):
+    rows = json.loads(st_read_section(out).decode("utf-8") or "{}")
+    data = req["data_dir"]
+    conn = st_open(os.path.join(data, ST_DB), out)
+    try:
+        conn.execute("BEGIN")
+        _, streams, fences = st_rf(conn, st_tables(conn),
+                                   exempt=tuple(req.get("exempt_nodes") or ()))
+    finally:
+        conn.close()
+    s, f = set(streams), set(fences)
+    sm = [x for x in rows.get("streams") or [] if x not in s]
+    fm = [x for x in rows.get("fences") or [] if x not in f]
+    return {"format": 1, "ok": True, "op": "rf-check", "streams_missing": len(sm),
+            "fences_missing": len(fm), "missing": len(sm) + len(fm)}
+
+
+def st_op_export_audit(req, out):
+    data = req["data_dir"]
+    after = int(req.get("after") or 0)
+    rb = str(req.get("rb_id") or "")
+    w = StData(out)
+    conn = st_open(os.path.join(data, ST_DB), out)
+    rows, first, last, last_hmac = 0, None, None, None
+    try:
+        conn.execute("BEGIN")
+        cur = conn.execute("SELECT * FROM audit_log WHERE id > ? ORDER BY id", (after,))
+        cols = [d[0] for d in cur.description]
+        for r in cur:
+            obj = dict(zip(cols, [binascii.hexlify(v).decode() if isinstance(v, bytes) else v
+                                  for v in r]))
+            if rb:
+                obj["rb_id"] = rb
+            w.write((json.dumps(obj, sort_keys=True) + "\n").encode())
+            rows += 1
+            first = obj.get("id") if first is None else first
+            last = obj.get("id")
+            last_hmac = obj.get("hmac_chain")
+    finally:
+        conn.close()
+    w.close()
+    return {"format": 1, "ok": True, "op": "export-audit", "rows": rows, "first_id": first,
+            "last_id": last, "last_hmac": last_hmac, "sha256": w.h.hexdigest(),
+            "bytes": w.total}
+
+
+# -- snapshot-volume -----------------------------------------------------------------
+
+
+class StHashReader(object):
+    def __init__(self, f, out, size):
+        self.f, self.out, self.left = f, out, size
+        self.h = hashlib.sha256()
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = self.left
+        b = self.f.read(min(n, self.left, ST_FRAME_MAX))
+        self.left -= len(b)
+        self.h.update(b)
+        self.out.step(nbytes=len(b))
+        return b
+
+
+def st_member_line(rel, s, h=None, link=None, owner=False):
+    m = {"p": rel, "m": "%04o" % stat.S_IMODE(s.st_mode), "mt": s.st_mtime_ns}
+    if owner:
+        m["o"] = "%d:%d" % (s.st_uid, s.st_gid)
+    if stat.S_ISDIR(s.st_mode):
+        m["t"] = "d"
+    elif stat.S_ISLNK(s.st_mode):
+        m["t"], m["l"] = "l", link
+    else:
+        m["t"], m["s"], m["h"] = "f", s.st_size, h
+    return m
+
+
+def st_op_snapshot_volume(req, out):
+    vol, root = st_volume_root(req)
+    excludes = list(req.get("excludes") or [])
+    owners = vol == ST_PKI
+
+    def skip(name):
+        return st_lifecycle_name(name) or name == ST_MARKER or st_match(name, excludes)
+    out.step(phase="archive")
+    data = StData(out)
+    lines = StLines(out)
+    gz = gzip.GzipFile(fileobj=data, mode="wb", compresslevel=1, mtime=0)
+    tar = tarfile.open(fileobj=gz, mode="w|", format=tarfile.PAX_FORMAT)
+    raw, skipped, ids = 0, [], set()
+    classes = {"db": 0, "captures": 0, "other": 0}
+    gz_by = {"db": 0, "captures": 0, "other": 0}
+    for rel, path, s in st_walk(root, skip):
+        mode = s.st_mode
+        if stat.S_ISSOCK(mode):
+            skipped.append(rel)
+            continue
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            raise StError("unsafe", "%s is a FIFO or a device" % rel, "archive")
+        ids.add("%d:%d" % (s.st_uid, s.st_gid))
+        ti = tarfile.TarInfo(rel)
+        ti.mode = stat.S_IMODE(mode)
+        ti.mtime = s.st_mtime_ns // 10 ** 9
+        ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, "", ""
+        cls = st_class(rel)
+        before = data.total
+        if stat.S_ISDIR(mode):
+            ti.type = tarfile.DIRTYPE
+            tar.addfile(ti)
+            lines.add(st_member_line(rel, s, owner=owners))
+        elif stat.S_ISLNK(mode):
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = os.readlink(path)
+            tar.addfile(ti)
+            lines.add(st_member_line(rel, s, link=ti.linkname, owner=owners))
+        else:
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError as e:
+                raise StError("unreadable", "%s: %s" % (rel, e.strerror), "archive")
+            with os.fdopen(fd, "rb") as f:
+                st1 = os.fstat(f.fileno())
+                if st1.st_size != s.st_size or st1.st_mtime_ns != s.st_mtime_ns:
+                    raise StError("changed", "%s changed while it was copied: something still "
+                                             "writes this volume" % rel, "archive")
+                ti.type = tarfile.REGTYPE
+                ti.size = s.st_size
+                reader = StHashReader(f, out, s.st_size)
+                try:
+                    tar.addfile(ti, reader)
+                except OSError as e:
+                    if "unexpected end of data" in str(e):
+                        raise StError("changed", "%s changed while it was copied: something "
+                                                 "still writes this volume" % rel, "archive")
+                    raise StError("unreadable", "%s: %s" % (rel, e), "archive")
+                st2 = os.fstat(f.fileno())
+                if st2.st_size != s.st_size or st2.st_mtime_ns != s.st_mtime_ns:
+                    raise StError("changed", "%s changed while it was copied: something still "
+                                             "writes this volume" % rel, "archive")
+            raw += s.st_size
+            classes[cls] += s.st_size
+            lines.add(st_member_line(rel, s, h=reader.h.hexdigest(), owner=owners))
+        gz_by[cls] += data.total - before
+        out.step(members=1)
+    tar.close()
+    before = data.total
+    gz.close()
+    gz_by["other"] += data.total - before
+    data.close()
+    lines.flush()
+    # A ratio measured on a small class says more about tar headers than
+    # about the data: the space plan uses 1.0 for it (None here).
+    ratio = dict((k, round(gz_by[k] / float(classes[k]), 4) if classes[k] >= ST_RATIO_MIN
+                  else None) for k in classes)
+    return {"format": 1, "ok": True, "op": "snapshot-volume", "volume": vol,
+            "members": lines.count, "members_sha256": lines.h.hexdigest(), "bytes_raw": raw,
+            "archive_bytes": data.total, "archive_sha256": data.h.hexdigest(),
+            "classes": classes, "ratio": ratio, "skipped": skipped,
+            "uid_gid_seen": sorted(ids)}
+
+
+# -- stage, verify-staged ------------------------------------------------------------------
+
+
+def st_members(blob):
+    """The members file as a list, checked to be in strict walk order."""
+    out, prev = [], None
+    for line in blob.decode("utf-8").splitlines():
+        if not line:
+            continue
+        m = json.loads(line)
+        k = st_walk_key(m["p"])
+        if prev is not None and k <= prev:
+            raise StError("integrity", "the members file is not in walk order at %s" % m["p"])
+        prev = k
+        out.append(m)
+    return out
+
+
+def st_safe_rel(rel, keep_back, excludes):
+    parts = rel.split("/")
+    if not rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts) or \
+            "\x00" in rel:
+        return False
+    top = parts[0]
+    if st_lifecycle_name(top) or top == ST_MARKER or st_match(top, keep_back) or \
+            st_match(top, excludes):
+        return False
+    return True
+
+
+class StDirs(object):
+    """Directory fds along the current path (walk order is depth first)."""
+
+    def __init__(self, root_fd):
+        self.stack = [("", root_fd)]
+
+    def parent_fd(self, rel):
+        parts = rel.split("/")[:-1]
+        # stack[i] (i >= 1) is the directory "/".join(parts[:i]); pop what
+        # is not an ancestor of REL, then open down to its parent.
+        while len(self.stack) > 1:
+            depth = len(self.stack) - 1
+            if depth <= len(parts) and self.stack[-1][0] == "/".join(parts[:depth]):
+                break
+            os.close(self.stack.pop()[1])
+        while len(self.stack) - 1 < len(parts):
+            i = len(self.stack) - 1
+            fd = os.open(parts[i], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                         dir_fd=self.stack[-1][1])
+            self.stack.append(("/".join(parts[:i + 1]), fd))
+        return self.stack[-1][1]
+
+    def close(self):
+        while len(self.stack) > 1:
+            os.close(self.stack.pop()[1])
+
+
+def st_open_parent(root, rel):
+    """(fd of REL's parent under ROOT, never through a symlink, name)."""
+    parts = rel.split("/")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for p in parts[:-1]:
+            nfd = os.open(p, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, parts[-1]
+
+
+def st_staged_ok(S, req):
+    info, state = st_read_json(os.path.join(S, ST_STAGED))
+    return state == "ok" and isinstance(info, dict) and \
+        info.get("restore_point") == req.get("restore_point") and \
+        info.get("members_file_sha256") == req.get("members_file_sha256")
+
+
+def st_op_stage(req, out):
+    vol, root = st_volume_root(req)
+    rb = st_rb_id(req)
+    S = os.path.join(root, ST_RESTORE + rb)
+    if st_staged_ok(S, req):
+        return {"format": 1, "ok": True, "op": "stage", "already": True, "volume": vol}
+    stdin = st_stdin()
+    r = st_stage_volume(root, rb, StSection(stdin, out), StSection(stdin, out), req,
+                        int(req.get("reserve_bytes") or 0), out, owners=vol == ST_PKI)
+    r.update({"format": 1, "ok": True, "op": "stage", "volume": vol})
+    return r
+
+
+def st_stage_volume(root, rb_id, members_reader, archive_reader, expect, reserve, out,
+                    owners=False):
+    """1b stage's rules for one part (phase2-spec 1.2): the members file
+    (MEMBERS_READER.read(), checked against EXPECT's members_file_sha256),
+    then the tar.gz (ARCHIVE_READER.read(n); .drain() -> (sha256, bytes),
+    checked against archive_sha256 and archive_bytes) into
+    ROOT/.sigrift-restore-RB_ID: walk order, tar safety, O_EXCL|O_NOFOLLOW,
+    a symlink's target equal to its members line's l, the reserve every
+    64 MiB, modes (setuid, setgid and sticky stripped), .sigrift-staged
+    last. OWNERS (the pki part): no symlink, every owner from
+    ST_PKI_OWNERS, restored. Any failure removes the staging."""
+    S = os.path.join(root, ST_RESTORE + rb_id)
+    keep_back = list(expect.get("keep_back") or [])
+    excludes = list(expect.get("excludes") or [])
+    st_rmtree(S)
+    os.mkdir(S, 0o700)
+    root_fd = os.open(S, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    dirs = StDirs(root_fd)
+    try:
+        out.step(phase="members")
+        blob = members_reader.read()
+        members_reader.drain()
+        if hashlib.sha256(blob).hexdigest() != expect.get("members_file_sha256"):
+            raise StError("integrity", "the members file does not match its sha256", "members")
+        members = st_members(blob)
+        if owners:
+            for m in members:
+                if m.get("t") == "l":
+                    raise StError("unsafe", "the pki part holds a symlink", "members")
+                if m.get("o") not in ST_PKI_OWNERS:
+                    raise StError("unsafe", "the pki part holds an owner it may not restore",
+                                  "members")
+        out.total = len(members)
+        out.step(phase="stage")
+        if reserve and st_free(S) < reserve:
+            raise StError("no-space", "free space is below the reserve", "stage")
+        tar = tarfile.open(fileobj=archive_reader, mode="r|gz")
+        i, written, next_check = 0, 0, ST_SPACE_STEP
+        made = set([""])
+        for ti in tar:
+            if i >= len(members):
+                raise StError("integrity", "the archive has more members than its members file")
+            m = members[i]
+            i += 1
+            rel = ti.name
+            if ti.isdir() and rel.endswith("/"):
+                rel = rel.rstrip("/")
+            if rel != m["p"]:
+                raise StError("integrity", "member %s is not the next one (%s)"
+                              % (rel[:200], m["p"][:200]))
+            if not st_safe_rel(rel, keep_back, excludes):
+                raise StError("unsafe", "member %s may not be restored" % rel[:200])
+            if "%04o" % ti.mode != m["m"]:
+                raise StError("integrity", "member %s has another mode" % rel)
+            if (rel.rsplit("/", 1)[0] if "/" in rel else "") not in made:
+                raise StError("unsafe", "the parent of %s is not a directory of this archive"
+                              % rel[:200])
+            pfd = dirs.parent_fd(rel)
+            name = rel.rsplit("/", 1)[-1]
+            if ti.isdir():
+                if m["t"] != "d":
+                    raise StError("integrity", "member %s has another type" % rel)
+                os.mkdir(name, 0o700, dir_fd=pfd)
+                made.add(rel)
+            elif ti.issym():
+                if owners:
+                    raise StError("unsafe", "the pki part holds a symlink")
+                if m["t"] != "l" or ti.linkname != m.get("l"):
+                    raise StError("integrity", "member %s has another type or target" % rel)
+                os.symlink(ti.linkname, name, dir_fd=pfd)
+            elif ti.isreg() and ti.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                if m["t"] != "f" or ti.size != m.get("s"):
+                    raise StError("integrity", "member %s has another type or size" % rel)
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                             dir_fd=pfd)
+                h = hashlib.sha256()
+                src = tar.extractfile(ti)
+                n = 0
+                with os.fdopen(fd, "wb") as f:
+                    while True:
+                        b = src.read(ST_FRAME_MAX)
+                        if not b:
+                            break
+                        h.update(b)
+                        f.write(b)
+                        n += len(b)
+                        written += len(b)
+                        if written >= next_check:
+                            next_check += ST_SPACE_STEP
+                            if reserve and st_free(S) < reserve:
+                                raise StError("no-space", "free space fell below the reserve "
+                                                          "while staging", "stage")
+                if n != m.get("s") or h.hexdigest() != m.get("h"):
+                    raise StError("integrity", "member %s does not match its sha256" % rel)
+            else:
+                raise StError("unsafe", "member %s is a hard link, a device or a FIFO" % rel)
+            out.step(members=1)
+        tar.close()
+        digest, length = archive_reader.drain()
+        if i != len(members):
+            raise StError("integrity", "the archive lacks %d members of its members file"
+                          % (len(members) - i))
+        if digest != expect.get("archive_sha256") or length != expect.get("archive_bytes"):
+            raise StError("integrity", "the archive does not match its sha256 or size")
+        dirs.close()
+        out.step(phase="modes")
+        for m in members:
+            if m["t"] == "f":
+                st_set_meta(S, m, owners)
+        for m in sorted((x for x in members if x["t"] != "f"),
+                        key=lambda x: -len(x["p"].split("/"))):
+            st_set_meta(S, m, owners)
+        out.step(phase="sync")
+        SYNC()
+        for m in members:
+            if m["t"] == "d":
+                st_fsync_dir(os.path.join(S, m["p"]))
+        st_fsync_dir(S)
+        st_atomic_json(os.path.join(S, ST_STAGED), {
+            "format": 1, "restore_point": expect.get("restore_point"),
+            "volume": expect.get("volume"),
+            "members_file_sha256": expect.get("members_file_sha256"),
+            "archive_sha256": expect.get("archive_sha256"), "at": st_now()})
+        return {"members": i, "bytes": written}
+    except BaseException:
+        dirs.close()
+        try:
+            os.close(root_fd)
+        except OSError:
+            pass
+        root_fd = None
+        st_rmtree(S)
+        raise
+    finally:
+        if root_fd is not None:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
+
+
+def st_set_meta(S, m, owners=False):
+    """Mode (masked to 0o777, never through a link), owner (OWNERS: the pki
+    part, from its members line) and mtime of member M."""
+    pfd, name = st_open_parent(S, m["p"])
+    try:
+        if owners:
+            uid, gid = (int(x) for x in m["o"].split(":"))
+            CHOWN(name, uid, gid, dir_fd=pfd, follow_symlinks=False)
+        if m["t"] != "l":
+            flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if m["t"] == "d" else 0)
+            fd = os.open(name, flags, dir_fd=pfd)
+            try:
+                os.fchmod(fd, int(m["m"], 8) & 0o777)
+            finally:
+                os.close(fd)
+        os.utime(name, ns=(m["mt"], m["mt"]), dir_fd=pfd, follow_symlinks=False)
+    finally:
+        os.close(pfd)
+
+
+def st_op_verify_staged(req, out):
+    vol, root = st_volume_root(req)
+    rb = st_rb_id(req)
+    S = os.path.join(root, ST_RESTORE + rb)
+    blob = st_read_section(out)
+    if hashlib.sha256(blob).hexdigest() != req.get("members_file_sha256"):
+        raise StError("integrity", "the members file does not match its sha256")
+    want = dict((m["p"], m) for m in st_members(blob))
+    bad = []
+    seen = set()
+    if not os.path.isdir(S):
+        return {"format": 1, "ok": True, "op": "verify-staged", "volume": vol,
+                "ok_staged": False, "mismatches": ["(no staging)"]}
+    # Before rb-carry the staging root holds only the staged tree and its
+    # own .sigrift-staged (for this restore point): a .sigrift-carried
+    # there was written by something else, and carry would trust it.
+    if os.path.lexists(os.path.join(S, ST_CARRIED)):
+        bad.append(ST_CARRIED)
+    if req.get("restore_point") and not st_staged_ok(S, req):
+        bad.append(ST_STAGED)
+    for rel, path, s in st_walk(S, lambda n: n in (ST_STAGED, ST_CARRIED)):
+        seen.add(rel)
+        m = want.get(rel)
+        if m is None:
+            bad.append(rel)
+            continue
+        t = "d" if stat.S_ISDIR(s.st_mode) else "l" if stat.S_ISLNK(s.st_mode) else \
+            "f" if stat.S_ISREG(s.st_mode) else "?"
+        if t != m["t"]:
+            bad.append(rel)
+            continue
+        if t == "l":
+            if os.readlink(path) != m.get("l"):
+                bad.append(rel)
+            continue
+        if stat.S_IMODE(s.st_mode) != int(m["m"], 8) & 0o777:
+            bad.append(rel)
+            continue
+        if t == "f":
+            if s.st_size != m.get("s"):
+                bad.append(rel)
+                continue
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for b in iter(lambda: f.read(ST_FRAME_MAX), b""):
+                    h.update(b)
+                    out.step(nbytes=len(b))
+            if h.hexdigest() != m.get("h"):
+                bad.append(rel)
+        out.step(members=1)
+    bad += sorted(p for p in want if p not in seen)
+    return {"format": 1, "ok": True, "op": "verify-staged", "volume": vol,
+            "ok_staged": not bad, "mismatches": bad[:20], "count": len(bad)}
+
+
+# -- carry -----------------------------------------------------------------------
+
+
+def st_write_json_like(path, obj, default_mode=0o600):
+    try:
+        mode = stat.S_IMODE(os.lstat(path).st_mode)
+    except OSError:
+        mode = default_mode
+    st_atomic_bytes(path, (json.dumps(obj, indent=2, sort_keys=True) + "\n").encode(), mode)
+
+
+def st_copy_file(src, dst, default_mode=0o600):
+    with open(src, "rb") as f:
+        data = f.read()
+    try:
+        mode = stat.S_IMODE(os.lstat(dst).st_mode)
+    except OSError:
+        mode = stat.S_IMODE(os.lstat(src).st_mode) or default_mode
+    parent = os.path.dirname(dst)
+    if not os.path.isdir(parent):
+        os.mkdir(parent, 0o700)
+    st_atomic_bytes(dst, data, mode)
+
+
+def st_carry_keys(R, L, rep, keep_master, apply):
+    lk, ok = st_keys_file(L)
+    rk, rok = st_keys_file(R)
+    if not ok or not rok:
+        raise StError("unreadable", "keys.json and keys.json.bak cannot be read", "carry")
+    lkeys = lk.get("keys") or {}
+    rkeys = rk.get("keys") or {}
+    changed = False
+    for kid in sorted(list(rkeys)):
+        a = rkeys[kid]
+        b = lkeys.get(kid)
+        if not isinstance(a, dict):
+            continue
+        if not isinstance(b, dict):
+            del rkeys[kid]
+            rep["api_keys_removed"].append(kid)
+            changed = True
+            continue
+        if b.get("revoked") is True and a.get("revoked") is not True:
+            a["revoked"] = True
+            for f in ("revoked_at", "revoked_by"):
+                if f in b:
+                    a[f] = b[f]
+            rep["api_keys_revoked"].append(kid)
+            changed = True
+        if b.get("enabled") is False and a.get("enabled") is not False:
+            a["enabled"] = False
+            rep["api_keys_disabled"].append(kid)
+            changed = True
+        if st_rank(b.get("role", "viewer")) < st_rank(a.get("role", "viewer")):
+            a["role"] = b.get("role", "viewer")
+            rep["api_keys_role_lowered"].append(kid)
+            changed = True
+        eb, ea = b.get("expires_at"), a.get("expires_at")
+        if eb and eb != ea:
+            tb, ta = st_epoch(eb), st_epoch(ea)
+            if ea is None or tb is None or ta is None or tb < ta:
+                a["expires_at"] = eb
+                rep["api_keys_expiry_earlier"].append(kid)
+                changed = True
+        if b.get("node_id") and b.get("node_id") != a.get("node_id"):
+            a["node_id"] = b["node_id"]
+            rep["api_keys_bound"].append(kid)
+            changed = True
+        if any(a.get(f) != b.get(f) for f in ("hash", "salt", "lookup_hash")):
+            if kid == "master" and not keep_master:
+                rep["not_carried"]["credentials"]["keys_rotated_back"].append(kid)
+            else:
+                for f in ("hash", "salt", "lookup_hash"):
+                    if f in b:
+                        a[f] = b[f]
+                    else:
+                        a.pop(f, None)
+                rep["api_keys_rotated"].append(kid)
+                rep["expect"]["cred"][kid] = st_key_cred(b)
+                changed = True
+    if not apply:
+        return
+    rk["keys"] = rkeys
+    bak, bs = st_read_json(os.path.join(R, "keys.json.bak"))
+    if changed:
+        st_write_json_like(os.path.join(R, "keys.json"), rk)
+    # keys.json.bak, when the staged copy has one, is rewritten identically
+    # (also when a crash came between the two writes of an earlier run);
+    # carry adds no file of its own to the staged tree.
+    if bs != "absent" and bak != rk:
+        st_write_json_like(os.path.join(R, "keys.json.bak"), rk)
+
+
+def st_carry_ca(R, RS, L, LS, rep, apply):
+    lreg, ok = st_registry(L)
+    rreg, rok = st_registry(R)
+    lcert, ok1 = st_file_tag(os.path.join(L, "ca", "ca.crt"))
+    lkey, ok2 = st_file_tag(os.path.join(LS, "ca", "ca.key"))
+    rcert, ok3 = st_file_tag(os.path.join(R, "ca", "ca.crt"))
+    rkey, ok4 = st_file_tag(os.path.join(RS, "ca", "ca.key"))
+    if not (ok and rok):
+        raise StError("unreadable", "ca/registry.json cannot be read", "carry")
+    if not (ok1 and ok2 and ok3 and ok4):
+        raise StError("unreadable", "the CA files cannot be read", "carry")
+    replaced = (lcert, lkey) != (rcert, rkey)
+    issued = (rreg or {}).get("issued") or {}
+    litems = (lreg or {}).get("issued") or {}
+    now = st_now()
+    changed = False
+    for serial in sorted(issued, key=lambda s: (len(s), s)):
+        e = issued[serial]
+        if not isinstance(e, dict) or e.get("revoked") is True:
+            continue
+        le = litems.get(serial)
+        if replaced:
+            e["revoked"], e["revoked_at"] = True, now
+        elif not isinstance(le, dict):
+            e["revoked"], e["revoked_at"] = True, now
+        elif le.get("revoked") is True:
+            e["revoked"], e["revoked_at"] = True, le.get("revoked_at") or now
+        else:
+            continue
+        rep["ca_serials_revoked"].append(serial)
+        changed = True
+    if changed and apply:
+        rreg["issued"] = issued
+        st_write_json_like(os.path.join(R, "ca", "registry.json"), rreg)
+    if replaced:
+        rep["ca_replaced"] = True
+        rep["expect"]["ca"] = {"cert": lcert, "key": lkey}
+    if replaced and apply:
+        for src, dst, tag in ((os.path.join(L, "ca", "ca.crt"), os.path.join(R, "ca", "ca.crt"),
+                               lcert),
+                              (os.path.join(LS, "ca", "ca.key"), os.path.join(RS, "ca", "ca.key"),
+                               lkey)):
+            if tag is None:
+                st_rmtree(dst)
+            elif st_file_tag(dst)[0] != tag:
+                st_copy_file(src, dst)
+    return replaced
+
+
+def st_carry_webhooks(R, L, rep, apply):
+    lw, ok = st_webhooks(L)
+    rw, rok = st_webhooks(R)
+    if not ok or not rok:
+        raise StError("unreadable", "webhooks.json cannot be read", "carry")
+    live = dict((str(e.get("id")), e) for e in lw.get("webhooks") or [] if isinstance(e, dict))
+    keep, changed = [], False
+    for e in rw.get("webhooks") or []:
+        if not isinstance(e, dict):
+            keep.append(e)
+            continue
+        b = live.get(str(e.get("id")))
+        if b is None:
+            rep["webhooks_removed"].append(str(e.get("id")))
+            changed = True
+            continue
+        if b.get("enabled") is False and e.get("enabled") is not False:
+            e["enabled"] = False
+            if "delivery_revision" in b:
+                e["delivery_revision"] = b["delivery_revision"]
+            rep["webhooks_disabled"].append(str(e.get("id")))
+            changed = True
+        if b.get("url") != e.get("url"):
+            rep["not_carried"]["credentials"]["webhook_urls_changed"].append(str(e.get("id")))
+        if b.get("signing_secret") != e.get("signing_secret"):
+            rep["not_carried"]["credentials"]["webhook_secrets_changed"].append(str(e.get("id")))
+        keep.append(e)
+    if changed and apply:
+        rw["webhooks"] = keep
+        st_write_json_like(os.path.join(R, "webhooks.json"), rw)
+
+
+def st_carry_db(rconn, lconn, rep):
+    """Rules 3, 4, 6, 7 (users, backup codes, crypto_keys, tenant MFA)."""
+    rt, lt = st_tables(rconn), st_tables(lconn)
+    if "users" in rt:
+        lcols = set(st_columns(lconn, "users")) if "users" in lt else set()
+        live = {}
+        if "users" in lt:
+            sel = ", ".join(c if c in lcols else "NULL" for c in (
+                "id", "username", "enabled", "role", "password_hash", "salt", "totp_secret",
+                "mfa_enabled"))
+            for r in lconn.execute("SELECT %s FROM users" % sel):
+                live[(r[0], r[1])] = r
+        rcols = set(st_columns(rconn, "users"))
+        sel = ", ".join(c if c in rcols else "NULL" for c in (
+            "id", "username", "enabled", "role", "password_hash", "salt", "totp_secret",
+            "mfa_enabled"))
+        for r in rconn.execute("SELECT %s FROM users ORDER BY id" % sel).fetchall():
+            b = live.get((r[0], r[1]))
+            if (b is None or not b[2]) and (r[2] is None or r[2]):
+                rconn.execute("UPDATE users SET enabled = 0 WHERE id = ?", (r[0],))
+                rep["users_disabled"].append(r[1])
+            if b is None:
+                continue
+            if st_rank(b[3] or "viewer") < st_rank(r[3] or "viewer"):
+                rconn.execute("UPDATE users SET role = ? WHERE id = ?", (b[3], r[0]))
+                rep["users_role_lowered"].append(r[1])
+            cred = rep["not_carried"]["credentials"]
+            if (b[4], b[5]) != (r[4], r[5]):
+                cred["passwords_changed"].append(r[1])
+            if b[6] != r[6]:
+                cred["totp_changed"].append(r[1])
+            if bool(b[7]) != bool(r[7]):
+                cred["mfa_changed"].append(r[1])
+    if "mfa_backup_codes" in rt:
+        live = {}
+        if "mfa_backup_codes" in lt:
+            for r in lconn.execute("SELECT id, user_id, code_hash, used FROM mfa_backup_codes"):
+                live[(r[0], r[1], r[2])] = r[3]
+        names = dict(rconn.execute("SELECT id, username FROM users").fetchall()) \
+            if "users" in rt else {}
+        for r in rconn.execute("SELECT id, user_id, code_hash, used FROM mfa_backup_codes "
+                               "WHERE used = 0 ORDER BY id").fetchall():
+            used = live.get((r[0], r[1], r[2]))
+            if used is None or used:
+                rconn.execute("UPDATE mfa_backup_codes SET used = 1 WHERE id = ?", (r[0],))
+                who = names.get(r[1], str(r[1]))
+                rep["backup_codes_invalidated"][who] = \
+                    rep["backup_codes_invalidated"].get(who, 0) + 1
+    if "crypto_keys" in rt:
+        live = dict(lconn.execute("SELECT id, revoked_at FROM crypto_keys").fetchall()) \
+            if "crypto_keys" in lt else {}
+        for kid, rev in rconn.execute("SELECT id, revoked_at FROM crypto_keys "
+                                      "ORDER BY id").fetchall():
+            if kid not in live:
+                rconn.execute("DELETE FROM crypto_keys WHERE id = ?", (kid,))
+                rep["crypto_keys_deleted"].append(kid)
+            elif live[kid] and live[kid] != rev:
+                rconn.execute("UPDATE crypto_keys SET revoked_at = ? WHERE id = ?",
+                              (live[kid], kid))
+                rep["crypto_keys_revoked"].append(kid)
+    if "tenant_settings" in lt:
+        for tenant, on in lconn.execute("SELECT tenant_id, mfa_required FROM tenant_settings "
+                                        "WHERE mfa_required = 1").fetchall():
+            if "tenant_settings" not in rt:
+                break
+            r = rconn.execute("SELECT mfa_required FROM tenant_settings WHERE tenant_id = ?",
+                              (tenant,)).fetchone()
+            if r is None:
+                rconn.execute("INSERT INTO tenant_settings (tenant_id, mfa_required) "
+                              "VALUES (?, 1)", (tenant,))
+            elif not r[0]:
+                rconn.execute("UPDATE tenant_settings SET mfa_required = 1 WHERE tenant_id = ?",
+                              (tenant,))
+            else:
+                continue
+            rep["mfa_required_on"].append(tenant)
+
+
+def st_carry_report(no_carry):
+    return {"format": 1, "no_carry": bool(no_carry), "api_keys_removed": [],
+            "api_keys_revoked": [], "api_keys_disabled": [], "api_keys_role_lowered": [],
+            "api_keys_expiry_earlier": [], "api_keys_bound": [], "api_keys_rotated": [],
+            "ca_serials_revoked": [], "ca_replaced": False, "users_disabled": [],
+            "users_role_lowered": [], "backup_codes_invalidated": {},
+            "crypto_keys_deleted": [], "crypto_keys_revoked": [], "webhooks_removed": [],
+            "webhooks_disabled": [], "mfa_required_on": [], "sessions": {"ended": 0},
+            "db": "done", "not_carried": {"credentials": {
+                "passwords_changed": [], "totp_changed": [], "mfa_changed": [],
+                "webhook_urls_changed": [], "webhook_secrets_changed": [],
+                "keys_rotated_back": []}, "settings": {}},
+            "expect": {"cred": {}, "ca": None}}
+
+
+def st_carry_pass(R, RS, L, LS, no_carry, keep_master, apply):
+    """One pass of rules 1-10 over the staged copy; -> the report. With
+    APPLY false nothing is written (the database work is rolled back)."""
+    rep = st_carry_report(no_carry)
+    if not no_carry:
+        st_carry_keys(R, L, rep, keep_master, apply)
+        st_carry_ca(R, RS, L, LS, rep, apply)
+        st_carry_webhooks(R, L, rep, apply)
+    rdb, ldb = os.path.join(R, ST_DB), os.path.join(L, ST_DB)
+    renc = st_db_header(rdb) not in (None, b"", b"SQLite format 3\x00")
+    lenc = os.path.isfile(ldb) and st_db_header(ldb) not in (None, b"", b"SQLite format 3\x00")
+    if renc or (lenc and not no_carry):
+        rep["db"] = "not done (the database is encrypted)"
+    if not os.path.isfile(rdb) or renc:
+        return rep
+    rconn = sqlite3.connect(rdb, timeout=5, isolation_level=None)
+    try:
+        rconn.execute("BEGIN IMMEDIATE")
+        try:
+            if not no_carry and not lenc and os.path.isfile(ldb):
+                try:
+                    lconn = open_ro(ldb)  # noqa: F821 - 1a engine
+                    lconn.row_factory = None
+                    lconn.execute("BEGIN")
+                except sqlite3.Error as e:
+                    raise StError("unreadable", "the current database cannot be read (%s)"
+                                  % str(e)[:100], "carry")
+                try:
+                    st_carry_db(rconn, lconn, rep)
+                finally:
+                    lconn.close()
+            ended = 0
+            rt = st_tables(rconn)
+            for t in ST_SESSION_TABLES:
+                if t in rt:
+                    ended += rconn.execute("DELETE FROM %s" % t).rowcount
+            rep["sessions"] = {"ended": ended}
+        except BaseException:
+            rconn.execute("ROLLBACK")
+            raise
+        rconn.execute("COMMIT" if apply else "ROLLBACK")
+        if apply:
+            rconn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        rconn.close()
+    return rep
+
+
+def st_op_carry(req, out):
+    L, LS = st_roots(req)
+    rb = st_rb_id(req)
+    R, RS = os.path.join(L, ST_RESTORE + rb), os.path.join(LS, ST_RESTORE + rb)
+    no_carry = bool(req.get("no_carry"))
+    keep_master = bool(req.get("keep_current_master", True))
+    if not os.path.exists(os.path.join(R, ST_STAGED)) or \
+            not os.path.exists(os.path.join(RS, ST_STAGED)):
+        raise StError("phase", "the restore point is not staged", "carry")
+    prev, state = st_read_json(os.path.join(R, ST_CARRIED))
+    rep = None
+    if state == "ok" and isinstance(prev, dict) and prev.get("no_carry") == no_carry \
+            and isinstance(prev.get("report"), dict):
+        if prev.get("complete"):
+            return dict(prev["report"], already=True)
+        rep = prev["report"]
+    out.step(phase="carry")
+    if rep is None:
+        if not no_carry:
+            for name, check in (("keys.json and keys.json.bak", st_keys_file),
+                                ("ca/registry.json", st_registry),
+                                ("webhooks.json", st_webhooks)):
+                if not check(L)[1]:
+                    raise StError("unreadable", "the current %s cannot be read" % name, "carry")
+            for p in (os.path.join(L, "ca", "ca.crt"), os.path.join(LS, "ca", "ca.key")):
+                if not st_file_tag(p)[1]:
+                    raise StError("unreadable", "the current CA files cannot be read", "carry")
+        # The report of the first, complete comparison is kept before
+        # anything is written: a re-run after a crash applies the same
+        # (idempotent) rules and reports what this one found.
+        rep = st_carry_pass(R, RS, L, LS, no_carry, keep_master, False)
+        st_atomic_json(os.path.join(R, ST_CARRIED), {
+            "format": 1, "no_carry": no_carry, "at": st_now(), "report": rep,
+            "ca_carried": bool(rep.get("ca_replaced")), "complete": False})
+    st_carry_pass(R, RS, L, LS, no_carry, keep_master, True)
+    SYNC()
+    for d in (R, os.path.join(R, "ca"), RS, os.path.join(RS, "ca")):
+        if os.path.isdir(d):
+            st_fsync_dir(d)
+    st_atomic_json(os.path.join(R, ST_CARRIED), {
+        "format": 1, "no_carry": no_carry, "at": st_now(), "report": rep,
+        "ca_carried": bool(rep.get("ca_replaced")), "complete": True})
+    return rep
+
+
+def st_op_verify_carry(req, out):
+    """Every item of the carry report (stdin) holds in the live state."""
+    rep = json.loads(st_read_section(out).decode("utf-8") or "{}")
+    L, LS = st_roots(req)
+    conn = None
+    db = os.path.join(L, ST_DB)
+    if os.path.isfile(db) and st_db_header(db) == b"SQLite format 3\x00":
+        conn = st_open(db, out)
+    try:
+        sec = st_security(L, LS, conn, conn is not None)
+    finally:
+        if conn is not None:
+            conn.close()
+    bad = []
+    keys = sec["keys"]
+    for kid in rep.get("api_keys_removed") or []:
+        if kid in keys:
+            bad.append("key %s is back" % kid)
+    for kid in rep.get("api_keys_revoked") or []:
+        if kid in keys and keys[kid]["status"] != "revoked":
+            bad.append("key %s is not revoked" % kid)
+    for kid in rep.get("api_keys_disabled") or []:
+        if kid in keys and keys[kid]["status"] == "active":
+            bad.append("key %s is enabled" % kid)
+    for kid, cred in sorted(((rep.get("expect") or {}).get("cred") or {}).items()):
+        if kid in keys and keys[kid]["cred"] != cred:
+            bad.append("key %s has its old secret" % kid)
+    reg = sec["registry"]
+    for serial in rep.get("ca_serials_revoked") or []:
+        if serial in reg and not reg[serial]["revoked"]:
+            bad.append("certificate %s is not revoked" % serial)
+    ca = (rep.get("expect") or {}).get("ca")
+    if ca and (sec["ca"]["cert"], sec["ca"]["key"]) != (ca.get("cert"), ca.get("key")):
+        bad.append("the CA is not the current one")
+    users = dict((u["username"], u) for u in sec["users"].values())
+    for name in rep.get("users_disabled") or []:
+        if name in users and users[name]["enabled"]:
+            bad.append("user %s is enabled" % name)
+    for kid in rep.get("crypto_keys_deleted") or []:
+        if kid in sec["crypto_keys"]:
+            bad.append("protocol key %s is back" % kid)
+    for wid in rep.get("webhooks_removed") or []:
+        if wid in sec["webhooks"]:
+            bad.append("webhook %s is back" % wid)
+    for wid in rep.get("webhooks_disabled") or []:
+        if wid in sec["webhooks"] and sec["webhooks"][wid]["enabled"]:
+            bad.append("webhook %s is enabled" % wid)
+    for t in rep.get("mfa_required_on") or []:
+        if not sec["tenant_mfa_required"].get(t):
+            bad.append("tenant %s does not require MFA" % t)
+    return {"format": 1, "ok": True, "op": "verify-carry", "carry_ok": not bad,
+            "mismatches": bad[:20]}
+
+
+# -- audit-append ---------------------------------------------------------------
+
+
+class StAuditTxn(object):
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        self.conn.execute("BEGIN IMMEDIATE")
+        return self.conn
+
+    def __exit__(self, kind, value, tb):
+        if kind is None:
+            self.conn.execute("COMMIT")
+        else:
+            self.conn.execute("ROLLBACK")
+        return False
+
+
+class StNoCache(object):
+    def invalidate_prefix(self, *a, **k):
+        pass
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+class StAuditCtx(object):
+    """The part of the bridge's SharedContext that AuditStore.log_audit uses."""
+    tenant_id = "default"
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.cache = StNoCache()
+        self.write_lock = threading.Lock()
+        self._write_lock = self.write_lock
+
+    def get_conn(self):
+        return self._conn
+
+    def write_transaction(self, immediate=False):
+        return StAuditTxn(self._conn)
+
+    def transaction(self, immediate=False):
+        return StAuditTxn(self._conn)
+
+    def tenant_filter(self, *a, **k):
+        return "", []
+
+
+ST_AUDIT_ACTIONS = ("installer_rollback", "installer_import")
+
+
+def st_op_audit_append(req, out):
+    """The installer's entry in the staged copy's audit chain: a rollback
+    (installer_rollback, 1b), or an import --replace that carried changes
+    from the current data (installer_import, phase2-notes F-D22). Its target
+    is the rb id; a head entry of the same action and target is this run's."""
+    data, _ = st_roots(req)
+    rb = st_rb_id(req)
+    action = req.get("action") or "installer_rollback"
+    if action not in ST_AUDIT_ACTIONS:
+        raise StError("unsafe", "unknown audit action")
+    R = os.path.join(data, ST_RESTORE + rb)
+    db = os.path.join(R, ST_DB)
+    if not os.path.isfile(db):
+        return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                "why": "the restore point holds no database"}
+    if st_db_header(db) != b"SQLite format 3\x00":
+        return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                "why": "the database is encrypted"}
+    conn = sqlite3.connect(db, timeout=5, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        if "audit_log" not in st_tables(conn):
+            return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                    "why": "the restored database has no audit_log"}
+        head = conn.execute("SELECT id, action, target_id FROM audit_log ORDER BY id DESC "
+                            "LIMIT 1").fetchone()
+        if head is not None and head["action"] == action and head["target_id"] == rb:
+            return {"format": 1, "ok": True, "op": "audit-append", "already": True,
+                    "written": True, "id": head["id"]}
+        values = dict((k, v) for k, v in (req.get("env") or {}).items() if v)
+        source, secret = audit_secret(values, R)  # noqa: F821 - 1a engine
+        if secret is None:
+            return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                    "why": "the restore point's .env sets no audit key"}
+        try:
+            from sigrift.bridge.storage import audit
+        except Exception as e:
+            return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                    "why": "the restored bridge's audit code cannot be imported (%s)"
+                           % type(e).__name__}
+        operator = "install-release.sh"
+        if action == "installer_import":
+            given = req.get("details") if isinstance(req.get("details"), dict) else {}
+            details = dict((k, given.get(k)) for k in ("import_id", "archive_id", "relation",
+                                                       "carried"))
+            if req.get("operator") in ("install-release.sh", "quickstart.sh"):
+                operator = req["operator"]
+        else:
+            details = dict((k, req.get(k)) for k in ("restore_point", "from_version",
+                                                     "to_version"))
+            details["rb_id"] = rb
+            details["discarded"] = req.get("discarded") or {}
+        original = audit._get_audit_secret
+        audit._get_audit_secret = lambda: secret
+        try:
+            audit.AuditStore(StAuditCtx(conn)).log_audit(
+                action, rb, operator=operator, details=details)
+        except Exception as e:
+            return {"format": 1, "ok": True, "op": "audit-append", "written": False,
+                    "why": "the restored bridge's audit writer failed (%s)" % type(e).__name__}
+        finally:
+            audit._get_audit_secret = original
+        new = conn.execute("SELECT MAX(id) FROM audit_log").fetchone()[0]
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    SYNC()
+    return {"format": 1, "ok": True, "op": "audit-append", "written": True, "id": new}
+
+
+# -- mark, unmark ------------------------------------------------------------------
+
+
+def st_mark_id(req):
+    """(marker op, marker id): a rollback's rb_id, or (phase2-spec 6.1,
+    6.2) op move with the archive id or op import with the import's id."""
+    op = req.get("marker_op") or "rollback"
+    if op not in ST_MARK_OPS:
+        raise StError("unsafe", "unknown marker op")
+    mid = str(req.get("marker_id") or req.get("rb_id") or "")
+    if not ST_MARK_ID.match(mid):
+        raise StError("unsafe", "not a marker id: %r" % mid[:40])
+    return op, mid
+
+
+def st_op_mark(req, out):
+    op, rb = st_mark_id(req)
+    content = {"format": 1, "op": op, "id": rb, "restore_point": req.get("restore_point"),
+               "created_at": req.get("created_at") or st_now()}
+    written = []
+    for vol, root in st_marked_roots(req):
+        cur = st_marker_info(root)
+        if cur is not None:
+            if cur.get("id") != rb:
+                raise StError("phase", "%s holds the marker of another restore (%s)"
+                              % (vol, cur.get("id") or "unparsed"), "mark")
+            continue
+        st_atomic_json(os.path.join(root, ST_MARKER), content)
+        st_fsync_dir(root)
+        written.append(vol)
+    return {"format": 1, "ok": True, "op": "mark", "written": written}
+
+
+def st_op_unmark(req, out):
+    _op, rb = st_mark_id(req)
+    removed = []
+    for vol, root in st_marked_roots(req):
+        path = os.path.join(root, ST_MARKER)
+        if not os.path.lexists(path):
+            continue
+        cur = st_marker_info(root)
+        if cur.get("id") not in (rb, None) and not cur.get("unparsed"):
+            raise StError("phase", "%s holds the marker of another restore (%s)"
+                          % (vol, cur.get("id")), "unmark")
+        if cur.get("unparsed"):
+            raise StError("phase", "the marker in %s cannot be read" % vol, "unmark")
+        os.unlink(path)
+        st_fsync_dir(root)
+        removed.append(vol)
+    return {"format": 1, "ok": True, "op": "unmark", "removed": removed}
+
+
+# -- swap, unswap, discard-staging, finish, reclaim ----------------------------------
+
+
+def st_phase(P):
+    info, state = st_read_json(os.path.join(P, ST_PHASE))
+    if state == "absent":
+        return "none", None
+    if state != "ok" or not isinstance(info, dict) or info.get("phase") not in ST_PHASES:
+        raise StError("phase", "the phase file of %s cannot be read" % os.path.basename(P))
+    return info["phase"], info
+
+
+def st_set_phase(P, req, vol, phase, info=None, **extra):
+    now = st_now()
+    obj = {"format": 1, "rb_id": req.get("rb_id"), "restore_point": req.get("restore_point"),
+           "from_version": req.get("from_version"), "volume": vol, "phase": phase,
+           "created_at": (info or {}).get("created_at") or now, "updated_at": now}
+    for k in ("pcap_mtime_ns",):
+        if k in (info or {}):
+            obj[k] = info[k]
+    obj.update(extra)
+    st_atomic_json(os.path.join(P, ST_PHASE), obj)
+    return obj
+
+
+def st_entries(d, skip=()):
+    try:
+        return sorted(n for n in os.listdir(d) if n not in skip)
+    except FileNotFoundError:
+        return []
+
+
+def st_keep_back(req):
+    """The root-level names moved back from the replaced copy: the
+    manifest's keep_back (which lists the capture dirs the restore point
+    left out); pcap_captures whenever the pcap rule applies."""
+    kb = list(req.get("keep_back") or [])
+    if req.get("captures_excluded") and "pcap_captures" not in kb:
+        kb.append("pcap_captures")
+    return kb
+
+
+def st_op_swap(req, out):
+    vol, V = st_volume_root(req)
+    rb = st_rb_id(req)
+    P, S = os.path.join(V, ST_REPLACED + rb), os.path.join(V, ST_RESTORE + rb)
+    keep_back = st_keep_back(req)
+    moved = {"out": 0, "in": 0, "kept": 0, "pcap_after": 0}
+    phase, info = st_phase(P) if os.path.isdir(P) else ("none", None)
+    if phase.startswith("undo-"):
+        raise StError("phase", "an --abort owns %s (phase %s)" % (os.path.basename(P), phase))
+    out.step(phase="swap")
+    if phase == "none":
+        if not os.path.isfile(os.path.join(S, ST_STAGED)):
+            raise StError("phase", "the restore point is not staged in %s" % vol)
+        if vol == "bridge_data":
+            c, cs = st_read_json(os.path.join(S, ST_CARRIED))
+            if cs != "ok" or not c.get("complete"):
+                raise StError("phase", "the carry-forward is not complete")
+        if st_free(V) < (1 << 20):
+            raise StError("no-space", "%s has less than 1 MiB free for the swap" % vol)
+        if not os.path.isdir(P):
+            os.mkdir(P, 0o700)
+        info = st_set_phase(P, req, vol, "out")
+        st_fsync_dir(V)
+        phase = "out"
+    if phase == "out":
+        for e in st_entries(V):
+            if st_lifecycle_name(e) or e == ST_MARKER:
+                continue
+            if os.path.lexists(os.path.join(P, e)):
+                raise StError("phase", "%s is both live and in the replaced copy" % e)
+            RENAME(os.path.join(V, e), os.path.join(P, e))
+            moved["out"] += 1
+            out.step(members=1)
+        st_fsync_dir(V)
+        st_fsync_dir(P)
+        info = st_set_phase(P, req, vol, "out-done", info)
+        phase = "out-done"
+    if phase == "out-done":
+        if not os.path.isfile(os.path.join(S, ST_STAGED)):
+            raise StError("phase", "the staging of %s is gone" % vol)
+        for e in st_entries(S, (ST_STAGED, ST_CARRIED)):
+            if os.path.lexists(os.path.join(V, e)):
+                raise StError("phase", "%s exists live and in the staging" % e)
+            RENAME(os.path.join(S, e), os.path.join(V, e))
+            moved["in"] += 1
+            out.step(members=1)
+        st_fsync_dir(S)
+        st_fsync_dir(V)
+        info = st_set_phase(P, req, vol, "in-done", info)
+        phase = "in-done"
+    if phase == "in-done":
+        for e in st_entries(P, (ST_PHASE, ST_PCAP_AFTER)):
+            if st_match(e, keep_back) and not os.path.lexists(os.path.join(V, e)):
+                RENAME(os.path.join(P, e), os.path.join(V, e))
+                moved["kept"] += 1
+        if req.get("captures_excluded"):
+            after = int(req.get("pcap_after") or 0)
+            pc = os.path.join(V, "pcap_captures")
+            dest = os.path.join(P, ST_PCAP_AFTER)
+            if os.path.isdir(pc) and "pcap_mtime_ns" not in (info or {}):
+                # The directory's mtime before the move, for an --abort.
+                info = st_set_phase(P, req, vol, "in-done", info,
+                                    pcap_mtime_ns=os.lstat(pc).st_mtime_ns)
+            for e in st_entries(pc):
+                m = ST_PCAP.match(e)
+                if m and int(m.group(1)) > after:
+                    if not os.path.isdir(dest):
+                        os.mkdir(dest, 0o700)
+                    RENAME(os.path.join(pc, e), os.path.join(dest, e))
+                    moved["pcap_after"] += 1
+            if os.path.isdir(dest):
+                st_fsync_dir(dest)
+            if os.path.isdir(pc):
+                st_fsync_dir(pc)
+        st_fsync_dir(V)
+        st_fsync_dir(P)
+        info = st_set_phase(P, req, vol, "kept-done", info)
+        phase = "kept-done"
+    if phase == "kept-done":
+        st_rmtree(S)
+        st_fsync_dir(V)
+        info = st_set_phase(P, req, vol, "done", info)
+        phase = "done"
+    return {"format": 1, "ok": True, "op": "swap", "volume": vol, "phase": phase,
+            "moved": moved}
+
+
+def st_op_unswap(req, out):
+    vol, V = st_volume_root(req)
+    rb = st_rb_id(req)
+    P, S = os.path.join(V, ST_REPLACED + rb), os.path.join(V, ST_RESTORE + rb)
+    keep_back = st_keep_back(req)
+    moved = {"back": 0, "kept": 0, "in": 0, "out": 0}
+    out.step(phase="unswap")
+    if not os.path.isdir(P):
+        st_rmtree(S)
+        return {"format": 1, "ok": True, "op": "unswap", "volume": vol, "phase": "gone",
+                "moved": moved}
+    phase, info = st_phase(P)
+    if phase in ("none", "out"):
+        # The move-out may be partial: V holds only original entries.
+        for e in st_entries(P, (ST_PHASE,)):
+            if os.path.lexists(os.path.join(V, e)):
+                raise StError("phase", "%s is both live and in the replaced copy" % e)
+            RENAME(os.path.join(P, e), os.path.join(V, e))
+            moved["back"] += 1
+        st_fsync_dir(V)
+        st_rmtree(S)
+        st_rmtree(P)
+        st_fsync_dir(V)
+        return {"format": 1, "ok": True, "op": "unswap", "volume": vol, "phase": "gone",
+                "moved": moved}
+    if phase in ("out-done", "in-done", "kept-done", "done"):
+        # u0: the pcap files the keep phase set aside, then the kept-back entries.
+        pa = os.path.join(P, ST_PCAP_AFTER)
+        pc = os.path.join(V, "pcap_captures")
+        if phase == "done" and req.get("captures_excluded") and os.path.isdir(pc) and \
+                not os.path.lexists(os.path.join(P, "pcap_captures")) and \
+                not (info or {}).get("pcap_new_out"):
+            # E19 in the undo direction: the restored bridge handed out the
+            # anomaly ids above pcap_after again; its N.pcap.gz for those ids
+            # (but the ones set aside, which come back below) belong to rows
+            # the undo discards, so they go with them (to the staging). Only
+            # from phase done: before it the keep step may have stopped half
+            # way, and a live N above pcap_after is still an original. Done
+            # once (pcap_new_out), before any set-aside file comes back.
+            after = int(req.get("pcap_after") or 0)
+            aside = set(st_entries(pa))
+            junk = os.path.join(S, ".sigrift-pcap-new")
+            for e in st_entries(pc):
+                m = ST_PCAP.match(e)
+                if m and int(m.group(1)) > after and e not in aside:
+                    for x in (S, junk):
+                        if not os.path.isdir(x):
+                            os.mkdir(x, 0o700)
+                    RENAME(os.path.join(pc, e), os.path.join(junk, e))
+            if os.path.isdir(junk):
+                st_fsync_dir(junk)
+            st_fsync_dir(pc)
+            info = st_set_phase(P, req, vol, phase, info, pcap_new_out=True)
+        if os.path.isdir(pa):
+            target = os.path.join(V, "pcap_captures") if (
+                os.path.isdir(os.path.join(V, "pcap_captures")) and
+                not os.path.lexists(os.path.join(P, "pcap_captures"))) else \
+                os.path.join(P, "pcap_captures")
+            if not os.path.isdir(target):
+                os.mkdir(target, 0o700)
+            for e in st_entries(pa):
+                RENAME(os.path.join(pa, e), os.path.join(target, e))
+            st_fsync_dir(target)
+            os.rmdir(pa)
+            if (info or {}).get("pcap_mtime_ns"):
+                mt = info["pcap_mtime_ns"]
+                os.utime(target, ns=(mt, mt), follow_symlinks=False)
+        for e in st_entries(V):
+            if st_lifecycle_name(e) or e == ST_MARKER:
+                continue
+            if st_match(e, keep_back) and not os.path.lexists(os.path.join(P, e)):
+                RENAME(os.path.join(V, e), os.path.join(P, e))
+                moved["kept"] += 1
+        st_fsync_dir(V)
+        st_fsync_dir(P)
+        info = st_set_phase(P, req, vol, "undo-kept", info)
+        phase = "undo-kept"
+    if phase == "undo-kept":
+        # u1 (the u1 guard: only reached once the move-out was recorded complete).
+        if not os.path.isdir(S):
+            os.mkdir(S, 0o700)
+        for e in st_entries(V):
+            if st_lifecycle_name(e) or e == ST_MARKER:
+                continue
+            if os.path.lexists(os.path.join(S, e)):
+                raise StError("phase", "%s is both live and in the staging" % e)
+            RENAME(os.path.join(V, e), os.path.join(S, e))
+            moved["in"] += 1
+        st_fsync_dir(V)
+        st_fsync_dir(S)
+        info = st_set_phase(P, req, vol, "undo-in", info)
+        phase = "undo-in"
+    if phase == "undo-in":
+        for e in st_entries(P, (ST_PHASE,)):
+            if os.path.lexists(os.path.join(V, e)):
+                raise StError("phase", "%s is live and in the replaced copy" % e)
+            RENAME(os.path.join(P, e), os.path.join(V, e))
+            moved["out"] += 1
+        st_fsync_dir(V)
+        st_fsync_dir(P)
+        info = st_set_phase(P, req, vol, "undo-out", info)
+        phase = "undo-out"
+    if phase == "undo-out":
+        st_rmtree(S)
+        os.unlink(os.path.join(P, ST_PHASE))
+        os.rmdir(P)
+        st_fsync_dir(V)
+    return {"format": 1, "ok": True, "op": "unswap", "volume": vol, "phase": "gone",
+            "moved": moved}
+
+
+def st_op_discard_staging(req, out):
+    vol, V = st_volume_root(req)
+    rb = st_rb_id(req)
+    if os.path.lexists(os.path.join(V, ST_REPLACED + rb)):
+        raise StError("phase", "a swap of this rollback has started in %s" % vol)
+    S = os.path.join(V, ST_RESTORE + rb)
+    removed = os.path.lexists(S)
+    st_rmtree(S)
+    st_fsync_dir(V)
+    return {"format": 1, "ok": True, "op": "discard-staging", "volume": vol, "removed": removed}
+
+
+def st_op_finish(req, out):
+    vol, V = st_volume_root(req)
+    ids = req.get("ids")
+    if ids is None:
+        ids = [n[len(ST_REPLACED):] for n in st_entries(V) if n.startswith(ST_REPLACED)]
+    freed, removed = 0, []
+    for rid in ids:
+        if not ST_ID.match(str(rid)):
+            raise StError("unsafe", "not a rollback id: %r" % str(rid)[:40])
+        P = os.path.join(V, ST_REPLACED + rid)
+        if not os.path.isdir(P):
+            continue
+        phase, _ = st_phase(P)
+        if phase not in ("done", "none") or (phase == "none" and os.path.lexists(
+                os.path.join(P, ST_PHASE))):
+            raise StError("phase", "%s is in phase %s" % (os.path.basename(P), phase))
+        freed += st_tree_bytes(P)
+        for e in st_entries(P, (ST_PHASE,)):
+            st_rmtree(os.path.join(P, e))
+        st_rmtree(P)
+        removed.append(rid)
+        out.step(members=1)
+    st_fsync_dir(V)
+    return {"format": 1, "ok": True, "op": "finish", "volume": vol, "freed_bytes": freed,
+            "removed": removed}
+
+
+def st_op_reclaim(req, out):
+    data, _ = st_roots(req)
+    name = req.get("name")
+    if name != ST_DB + ".pre-migration":
+        raise StError("unsafe", "only detections.db.pre-migration can be reclaimed")
+    p = os.path.join(data, name)
+    try:
+        s = os.lstat(p)
+    except FileNotFoundError:
+        return {"format": 1, "ok": True, "op": "reclaim", "removed": False, "freed_bytes": 0}
+    if not stat.S_ISREG(s.st_mode) or s.st_size != req.get("bytes") or \
+            s.st_mtime_ns != req.get("mtime_ns"):
+        return {"format": 1, "ok": True, "op": "reclaim", "removed": False, "freed_bytes": 0,
+                "why": "the copy changed since it was measured"}
+    os.unlink(p)
+    st_fsync_dir(data)
+    return {"format": 1, "ok": True, "op": "reclaim", "removed": True, "freed_bytes": s.st_size}
+
+
+STATE_OPS = dict((name, st_framed(fn)) for name, fn in (
+    ("state", st_op_state), ("quiesce", st_op_quiesce),
+    ("snapshot-volume", st_op_snapshot_volume), ("stage", st_op_stage),
+    ("verify-staged", st_op_verify_staged), ("carry", st_op_carry),
+    ("audit-append", st_op_audit_append), ("mark", st_op_mark), ("unmark", st_op_unmark),
+    ("swap", st_op_swap), ("unswap", st_op_unswap), ("discard-staging", st_op_discard_staging),
+    ("finish", st_op_finish), ("reclaim", st_op_reclaim), ("compare", st_op_compare),
+    ("export-audit", st_op_export_audit), ("verify-carry", st_op_verify_carry),
+    ("rf-check", st_op_rf_check)))
+PY
+}
+# <<< shared: state-engine
+
+# >>> shared: restore (keep byte-identical in scripts/quickstart.sh and
+#     scripts/install-release.sh; scripts/tests/test_install_scripts.py checks)
+#
+# Phase 1b: full restore points and rollback. Every release upgrade takes a
+# full restore point (both data volumes and the install files) once the
+# stack is stopped and held; `--rollback` puts one back (staged beside the
+# live data, checked, the revocations made since carried onto it, then
+# swapped in by renames), `--snapshot` takes one by hand, `--rollback
+# --finish` removes the copies a rollback keeps, and an upgrade whose new
+# version never became healthy and took no data rolls back by itself.
+# The data work is lc_state_tool's (state-tool block); this block runs the
+# steps and their journal (lifecycle block). Quickstart carries it and
+# calls none of it (LC_SNAPSHOTS=0; source restore points are Phase 2).
+
+LC_ROLLBACK_STEPS="snapshot rb-stage stop hold rb-guard rb-carry rb-audit rb-mark rb-swap rb-files rb-images rb-unmark rb-start-bridge rb-start-rest rb-verify rb-record"
+LC_AUTO_ROLLBACK_STEPS="snapshot stop hold rb-guard rb-stage rb-carry rb-audit rb-mark rb-swap rb-files rb-images rb-unmark rb-start-bridge rb-start-rest rb-verify rb-record"
+LC_ABORT_ROLLBACK_STEPS="ab-stop ab-hold ab-mark ab-unswap ab-files ab-unmark ab-unhold ab-start ab-record"
+LC_SNAPSHOT_STEPS="snapshot stop hold prechecks restore-point unhold start-bridge start-rest snap-record"
+LC_FINISH_STEPS="finish-delete finish-record"
+LC_ENGINE_STALL_SECONDS=${LC_ENGINE_STALL_SECONDS:-600}
+LC_ST_JSON='{}'
+LC_ST_ERR=""
+
+# lc_st SUB ARGS... — lc_state_tool with the engine source on fd 3; its
+# result JSON lands in LC_ST_JSON. With LC_ST_QUIET=1 its stderr goes to
+# LC_ST_ERR instead of the terminal. Inside a critical section the tool's
+# "Nothing was changed." line is dropped (the caller says where it
+# stopped). Returns the tool's exit code (0, 1, 3, 7).
+lc_st() {
+    local f e rc=0 logs="${LC_STATE_DIRNAME}/logs"
+    if [ -d "$logs" ] && [ -w "$logs" ]; then
+        f=$(mktemp "${logs}/.st-result.XXXXXX")
+    else
+        f=$(mktemp "${TMPDIR:-/tmp}/sigrift-st.XXXXXX")
+    fi
+    e=$(mktemp "${TMPDIR:-/tmp}/sigrift-st-err.XXXXXX")
+    lc_state_tool "$@" --result "$f" 2>"$e" < <(lc_engine_source 2>/dev/null) || rc=$?
+    LC_ST_ERR=$(cat -- "$e" 2>/dev/null) || LC_ST_ERR=""
+    rm -f -- "$e"
+    if [ "${LC_ST_QUIET:-0}" != 1 ] && [ -n "$LC_ST_ERR" ]; then
+        if [ "${LC_CRITICAL:-0}" = 1 ]; then
+            grep -v '^Nothing was changed\.$' <<<"$LC_ST_ERR" >&2 || true
+        else
+            printf '%s\n' "$LC_ST_ERR" >&2
+        fi
+    fi
+    LC_ST_JSON=$(cat -- "$f" 2>/dev/null) || LC_ST_JSON=""
+    [ -n "$LC_ST_JSON" ] || LC_ST_JSON='{}'
+    rm -f -- "$f"
+    return "$rc"
+}
+
+# lc_st_step SUB ARGS... — lc_st for a step of a critical section: a
+# refusal (3) stops the step where it is (exit 4, the journal keeps it).
+lc_st_step() {
+    local rc=0
+    lc_st "$@" || rc=$?
+    if [ "$rc" -eq 3 ] && [ "${LC_CRITICAL:-0}" = 1 ]; then
+        lc_crit_stop
+    fi
+    return "$rc"
+}
+
+lc_crit_stop() {
+    local what=${LC_OP_WHAT:-the upgrade}
+    printf '  %s stopped at step %s and changed nothing more; fix this, then resume it (%s) or undo it (%s).\n' \
+        "T${what#t}" "${LC_STEP:-?}" "$(lc_here_cmd --resume)" "$(lc_here_cmd --abort)" >&2
+    exit "$LC_EXIT_STOPPED"
+}
+
+# lc_compose_canon FILE — "TEMPLATE SHA256" of a compose file (4.9.1);
+# "custom -" when it cannot be read.
+lc_compose_canon() {
+    local f t s
+    f=$(mktemp "${TMPDIR:-/tmp}/sigrift-canon.XXXXXX")
+    lc_state_tool compose-canon "$1" --result "$f" </dev/null >/dev/null 2>&1 || true
+    t=$(lc_tool json-get template <"$f" 2>/dev/null) || t=""
+    s=$(lc_tool json-get sha256 <"$f" 2>/dev/null) || s=""
+    rm -f -- "$f"
+    printf '%s %s\n' "${t:-custom}" "${s:--}"
+}
+
+# lc_rp_list_into FILE — every restore point of this install (no
+# container), as rp-list's result, for --status.
+lc_rp_list_into() {
+    LC_FACTS_JSON='{}' lc_state_tool rp-list --dir . --result "$1" </dev/null >/dev/null 2>&1 || true
+}
+
+lc_st_get() {
+    lc_tool json-get "$1" <<<"$LC_ST_JSON"
+}
+
+lc_jget() {
+    lc_tool journal-get . "$1" </dev/null
+}
+
+lc_jset_json() {
+    printf '%s' "$2" | lc_tool journal-set . --json "$1"
+}
+
+lc_json_str() {
+    python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+lc_image_id() {
+    [ -n "$1" ] || return 0
+    docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || true
+}
+
+lc_save_json() {
+    # lc_save_json FILE JSON — a 0600 copy of a result.
+    (umask 077 && printf '%s\n' "$2" >"$1")
+}
+
+# lc_op_progress TEXT — a numbered line by this step's place in the
+# journal's steps (rollback, snapshot, undo).
+lc_op_progress() {
+    local n=0 s
+    for s in ${LC_STEPS_LIST:-}; do
+        n=$((n + 1))
+        [ "$s" != "${LC_STEP:-}" ] || break
+    done
+    lc_progress "$n" "$1"
+}
+
+# lc_check_installer_release — E26: an in-place upgrade to a newer minor
+# release than this installer's is refused (its compose template and
+# config migrations are unknown here); a checkout's installer notes it.
+lc_check_installer_release() {
+    if [ "${INSTALLER_RELEASE:-dev}" = dev ]; then
+        if [[ "${VERSION:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            lc_note "this installer comes from a checkout (INSTALLER_RELEASE=dev), not from a release."
+        fi
+        return 0
+    fi
+    if lc_state_tool minor-newer "$VERSION" "$INSTALLER_RELEASE" </dev/null >/dev/null 2>&1; then
+        lc_refuse "tar xzf sigrift-${VERSION}.tar.gz && cd sigrift-${VERSION} && bash install-release.sh" \
+            "this installer is from ${INSTALLER_RELEASE}, and ${VERSION} is a newer minor release whose compose template and config migrations it does not know."
+    fi
+}
+
+# lc_rb_cmd — the rollback command as the operator typed it, without
+# --confirm and --dry-run (for Next: lines).
+lc_rb_cmd() {
+    local cmd="bash install-release.sh --rollback"
+    [ -z "${LC_RB_ID:-}" ] || cmd+=" ${LC_RB_ID}"
+    [ "${LC_ACCEPT_SUMMARY_RESET:-0}" = 0 ] || cmd+=" --accept-summary-reset"
+    [ "${LC_NO_CARRY:-0}" = 0 ] || cmd+=" --no-carry-revocations"
+    [ "${LC_ACCEPT_UNVERIFIED:-0}" = 0 ] || cmd+=" --accept-unverified"
+    [ "${LC_REVERT_CREDENTIALS:-0}" = 0 ] || cmd+=" --revert-credentials"
+    lc_in_here "$cmd"
+}
+
+lc_rb_flag_args() {
+    LC_RB_FLAG_ARGS=()
+    [ "${LC_ACCEPT_SUMMARY_RESET:-0}" = 0 ] || LC_RB_FLAG_ARGS+=(--accept-summary-reset)
+    [ "${LC_NO_CARRY:-0}" = 0 ] || LC_RB_FLAG_ARGS+=(--no-carry-revocations)
+    [ "${LC_ACCEPT_UNVERIFIED:-0}" = 0 ] || LC_RB_FLAG_ARGS+=(--accept-unverified)
+    [ "${LC_REVERT_CREDENTIALS:-0}" = 0 ] || LC_RB_FLAG_ARGS+=(--revert-credentials)
+}
+
+# lc_confirm VERSION WHAT CMD — E16, in the parent, before anything
+# changes: --confirm must name VERSION; else a terminal asks for it; else
+# M-CONFIRM-NEEDED (exit 3) with CMD --confirm VERSION as its Next.
+# LC_CONFIRM_TEXT is the error line without a terminal. LC_CONFIRMED=1
+# only once the version was given or typed right (never from --confirm
+# alone: a wrong one is refused here, M-CONFIRM-WRONG).
+lc_confirm() {
+    local v="$1" what="$2" cmd="$3" answer="" fd="${LC_CONFIRM_FD:-0}"
+    LC_CONFIRMED=0
+    if [ -n "${LC_CONFIRM:-}" ]; then
+        if [ "$LC_CONFIRM" != "$v" ]; then
+            lc_refuse "${cmd} --confirm ${v}" \
+                "--confirm ${LC_CONFIRM} does not name the ${LC_CONFIRM_NOUN:-version} this ${LC_CONFIRM_WHAT:-rollback restores} (${v})."
+        fi
+        LC_CONFIRMED=1
+        return 0
+    fi
+    # Inside --import fd 0 is /dev/null and the operator's stdin is fd 4
+    # (2.4, 1.2): LC_CONFIRM_FD=4.
+    if [ -t "$fd" ] && [ -t 1 ]; then
+        read -r -u "$fd" -p "Type ${v} to ${what} (anything else cancels): " answer || answer=""
+        if [ "$answer" != "$v" ]; then
+            echo "${LC_CONFIRM_DECLINED:-Not rolled back: you did not type ${v}. Nothing was changed.}" >&2
+            exit "$LC_EXIT_REFUSED"
+        fi
+        LC_CONFIRMED=1
+        return 0
+    fi
+    lc_refuse "${cmd} --confirm ${v}" "${LC_CONFIRM_TEXT:-this ${LC_CONFIRM_WHAT:-rollback} needs the ${LC_CONFIRM_NOUN:-version} ${v} typed, and there is no terminal to ask you to type it.}" \
+        "${LC_CONFIRM_DETAIL:-See everything it would do: ${cmd} --dry-run}"
+}
+
+# lc_downgrade_refusal — M-DOWNGRADE (E29): never an older release over
+# newer data; the way back is a rollback to a restore point at that
+# version.
+lc_downgrade_refusal() {
+    local f points next
+    f=$(mktemp "${TMPDIR:-/tmp}/sigrift-rplist.XXXXXX")
+    lc_rp_list_into "$f"
+    read -r points next <<<"$(python3 -I -c 'import json, sys
+try:
+    rps = json.load(open(sys.argv[1])).get("restore_points") or []
+except (OSError, ValueError):
+    rps = []
+at = [p for p in rps if p.get("kind") == "full" and p.get("complete") and p.get("from_version") == sys.argv[2]]
+ids = ",".join(p["id"] for p in at) or "none"
+if any(p.get("default_target") for p in at):
+    nxt = "--rollback"
+elif at:
+    nxt = "--rollback " + at[0]["id"]
+else:
+    nxt = "--list-snapshots"
+print(ids, nxt.replace(" ", "+"))' "$f" "${VERSION:-}")"
+    rm -f -- "$f"
+    next=${next//+/ }
+    if [ "$next" = --rollback ]; then
+        next=$LC_DOWNGRADE_NEXT
+    else
+        next="bash install-release.sh ${next:---list-snapshots}"
+    fi
+    lc_refuse "$next" \
+        "${VERSION} is older than the installed ${LC_FROM_VERSION}; newer releases can change the data one way, so the installer never installs an older release over it." \
+        "Full restore points at ${VERSION}: ${points//,/, }"
+}
+
+# ── the upgrade's two 1b steps (6.1) ──────────────────────────────────
+
+# lc_prechecks_image — the image that wrote the data reads it (E7): the
+# old bridge's, else the held compose's when local, else the target's
+# (state ops need only python3).
+lc_prechecks_image() {
+    local img
+    img=$(lc_jget rp_images.bridge.id)
+    [ -n "$img" ] || img=$(lc_jget previous_images.bridge)
+    [ -n "$img" ] || img=$(lc_image_id "$(lc_jget rp_images.bridge.ref)")
+    [ -n "$img" ] || img=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${VERSION}")
+    printf '%s' "$img"
+}
+
+lc_target_image() {
+    [ "${LC_INSTALLER:-release}" = release ] || return 0
+    lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${VERSION}"
+}
+
+# lc_step_prechecks — upgrade and snapshot: leftover engine containers
+# removed, the volume owners set (the engine runs as 1500), then the
+# database checked and checkpointed with the stack stopped (quiesce
+# strict); its reply is the journal's pre_state (1a's flat pre keys are
+# refilled from it). A failed integrity check or a database still open
+# undoes the operation (lc_rp_failed).
+lc_step_prechecks() {
+    local img rc=0 code msg audit entries out f pre
+    lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    fix_volume_ownership
+    f=$(mktemp "${LC_STATE_DIRNAME}/logs/.rp-images.XXXXXX")
+    lc_tool rp-images . --out "$f" </dev/null
+    lc_jset_json rp_images "$(cat -- "$f")"
+    rm -f -- "$f"
+    # Quickstart (8.2, 1.2 rp-create): the images its decision recorded,
+    # {service: {ref, id, prev_tag}}.
+    if [ "${LC_INSTALLER:-release}" = quickstart ] && [ -n "$(lc_jget images)" ]; then
+        lc_jset_json rp_images "$(lc_jget images)"
+    fi
+    img=$(lc_prechecks_image)
+    pre=$(lc_jget pre)
+    LC_ST_QUIET=1 lc_st quiesce --project "$LC_PROJECT" --image "$img" --env-file .env \
+        --mode strict --journal-key pre_state --dir . --fallback-image "$(lc_target_image)" || rc=$?
+    [ -z "$pre" ] || printf '%s' "$pre" | lc_tool pre-keep-known . || true
+    if [ "$rc" -ne 0 ]; then
+        code=$(lc_st_get code)
+        msg=$(grep -v '^kind=' <<<"$LC_ST_ERR" | head -1)
+        case "$code" in
+            quick-check) lc_rp_failed quick-check "${msg:-PRAGMA quick_check failed}" ;;
+            busy) lc_rp_failed busy "the database is still open (wal_checkpoint busy)" ;;
+        esac
+        printf '%s\n' "$LC_ST_ERR" >&2
+        [ "$rc" -ne 3 ] || lc_crit_stop
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_tool journal-set . prechecks_at=@now </dev/null
+    audit=$(lc_st_get audit.result)
+    entries=$(lc_st_get audit.entries)
+    case "$audit" in
+        ok) out="valid, ${entries:-0} entries" ;;
+        n/a|"") out="empty" ;;
+        unchecked) out="not checked here (the bridge's audit code could not be loaded)" ;;
+        *) if [ "${entries:-0}" = 0 ]; then out="empty"; else out="did not verify before either (${audit})"; fi ;;
+    esac
+    lc_op_line "$((5 + LC_STEP_OFFSET))" "database checked (quick_check ok, checkpointed); audit chain ${out}"
+    if [ "$(lc_jget op)" = upgrade ] && [ "$(lc_jget flags.no_snapshot)" = 1 ]; then
+        lc_op_line "$((6 + LC_STEP_OFFSET))" "NO restore point (--no-snapshot, SIGRIFT_I_HAVE_A_BACKUP=1)"
+    fi
+}
+
+# lc_op_line N TEXT — the upgrade's numbered lines; other ops number by
+# step.
+lc_op_line() {
+    if [ "$(lc_jget op)" = upgrade ]; then
+        lc_progress "$1" "$2"
+    else
+        lc_op_progress "$2"
+    fi
+}
+
+# lc_step_restore_point — the full restore point (3.2): a partial one an
+# interrupted run left is deleted first; a COMPLETE one the journal names
+# is kept (the step was done). The space remedies the plan chose run
+# first. Its failure undoes the operation (lc_rp_failed).
+lc_step_restore_point() {
+    local rp partial img rc=0 op reason="upgrade" to="${VERSION}" imgf args kind excl
+    op=$(lc_jget op)
+    rp=$(lc_jget restore_point)
+    partial=$(lc_jget rp_partial.id)
+    if [ -n "$rp" ] && lc_st rp-verify --dir . --id "$rp" >/dev/null 2>&1; then
+        lc_op_line "$((6 + LC_STEP_OFFSET))" "restore point ${rp} (COMPLETE; taken before this run stopped)"
+        return 0
+    fi
+    if [ -n "$partial" ]; then
+        lc_st rp-delete-partial --dir . --id "$partial" >/dev/null || true
+    fi
+    img=$(lc_prechecks_image)
+    lc_st rp-apply-remedies --dir . --project "$LC_PROJECT" --image "$img" || true
+    if [ "$op" = snapshot ]; then
+        reason=manual
+        to=-
+    fi
+    # Phase 2: an export's point (reason export), a --replace import's
+    # (pre-import); a source install's adds edge_data and the pki part (G11).
+    case "$op" in
+        export) reason="export"; to="-" ;;
+        import) reason="pre-import"; to="-" ;;
+    esac
+    imgf=$(mktemp "${LC_STATE_DIRNAME}/logs/.rp-images.XXXXXX")
+    lc_tool journal-get . rp_images </dev/null >"$imgf"
+    args=(rp-create --dir . --project "$LC_PROJECT" --image "$img" --journal-id "$(lc_jget id)"
+        --files-snapshot "$(lc_jget snapshot)" --reason "$reason" --from "$(lc_jget from_version)"
+        --to "$to" --install-id "$(lc_jget install_id)" --images-file "$imgf"
+        --prechecks-from-journal --installer-release "${INSTALLER_RELEASE:-dev}")
+    excl=$(lc_jget flags.exclude)
+    [ -z "$excl" ] || args+=(--exclude "$excl")
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        lc_qs_rp_args
+        args+=("${LC_QS_RP_ARGS[@]}")
+    fi
+    LC_ST_QUIET=1 lc_st "${args[@]}" || rc=$?
+    rm -f -- "$imgf"
+    if [ "$rc" -ne 0 ]; then
+        kind=$(lc_st_get kind)
+        if [ "$rc" -eq 7 ] || [ "$kind" = space ]; then
+            lc_rp_failed restore-point "free space on $(lc_st_get root) fell below the reserve while it was written" space
+        fi
+        lc_rp_failed restore-point "$(grep -v '^Nothing was changed\.$' <<<"$LC_ST_ERR" | sed 's/^kind=[a-z]*: //' | head -1)"
+    fi
+    rp=$(lc_st_get id)
+    lc_op_line "$((6 + LC_STEP_OFFSET))" "restore point ${rp} ($(lc_tool json-get bytes <<<"$LC_ST_JSON" | lc_human), files sha256-verified, fsynced, COMPLETE)"
+}
+
+lc_human() {
+    python3 -I -c 'import sys
+n = float(sys.stdin.read().strip() or 0)
+for u in ("B", "KB", "MB", "GB"):
+    if n < 1024 or u == "GB":
+        print(("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u)))
+        break
+    n /= 1024.0'
+}
+
+# lc_rp_failed KIND REASON [space] — 6.1: the restore point (or its
+# database check) failed, so the operation is undone: the partial point
+# deleted, every file of the files-only restore point back, the old stack
+# started again; exit 1. When the files cannot all be put back, nothing
+# is started: the stack stays stopped and held and the journal keeps the
+# step (exit 4), so --abort can put them back or --resume go on.
+lc_rp_failed() {
+    local kind="$1" reason="$2" space="${3:-}" partial op snap from rc=0 next err
+    op=$(lc_jget op)
+    # Phase 2 (Appendix C, D): an export's key goes on every final path.
+    if [ "$op" = export ]; then
+        lc_st ar-forget --dir . --jid "$(lc_jget id)" >/dev/null 2>&1 || true
+    fi
+    partial=$(lc_jget rp_partial.id)
+    if [ -n "$partial" ] && [ "$partial" != "$(lc_jget restore_point)" ]; then
+        lc_st rp-delete-partial --dir . --id "$partial" >/dev/null 2>&1 || true
+    fi
+    snap=$(lc_jget snapshot)
+    from=$(lc_jget from_version)
+    # Phase 2: a --replace import's pre-import point (or its prechecks)
+    # failed after im-stage: the undo of im-stage (6.2: the staging, the
+    # folder's files, the key and the decrypted payload; a moved folder
+    # stays moved), never a bare unhold.
+    if [ "$op" = import ]; then
+        lc_mv_import_undo "$reason"
+        echo "" >&2
+        if [ "$kind" = quick-check ]; then
+            echo "The import did not go on: PRAGMA quick_check found problems in the current detections.db (${reason})." >&2
+        else
+            echo "The import did not go on: the pre-import restore point could not be taken (${reason})." >&2
+        fi
+        echo "  $(lc_mv_undone_text)" >&2
+        if [ "$space" = space ]; then next="df -h"; else next=$(lc_here_cmd --status); fi
+        echo "Next: ${next}" >&2
+        LC_MSG_DONE=1
+        exit "$LC_EXIT_FAILED"
+    fi
+    # An export from a moved folder keeps the move stub (6.1: it stays moved).
+    if [ "$op" != export ] || [ "$(lc_mv_bool moved_folder)" = 0 ]; then
+        lc_unhold
+    fi
+    if [ "$op" = upgrade ]; then
+        if ! err=$(lc_tool snapshot-restore . "$snap" </dev/null 2>&1 >/dev/null); then
+            lc_hold
+            err=$(sed -n 's/^Error: //p' <<<"$err" | head -1)
+            LC_JOURNAL_KEEP=1
+            lc_journal_state failed "${LC_STEP:-?}: ${reason}; the files of restore point ${snap} could not be put back (${err:-snapshot-restore failed})"
+            echo "" >&2
+            if [ "$kind" = quick-check ]; then
+                echo "The upgrade did not go on: PRAGMA quick_check found problems in detections.db (${reason})." >&2
+            else
+                echo "The upgrade did not go on: the restore point could not be taken (${reason})." >&2
+            fi
+            echo "  The partial restore point was deleted, but the files of restore point ${snap} could not be put back (${err:-snapshot-restore failed}); the stack stays stopped and held, and the journal keeps step ${LC_STEP:-?}." >&2
+            echo "Next: $(lc_here_cmd --abort)" >&2
+            exit "$LC_EXIT_STOPPED"
+        fi
+        if [ -e tls/cert.pem ] && [ -e tls/key.pem ]; then
+            secure_tls_files tls/cert.pem tls/key.pem
+        fi
+    fi
+    lc_journal_state aborted "${LC_STEP:-?}: ${reason}"
+    if [ -e "${LC_STATE_DIRNAME}/install.json" ]; then
+        # The version is the one that runs again (the files are back).
+        lc_tool write-host-record --dir . --op "$op" --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+            --from "$from" --to "$from" --result aborted \
+            --snapshot "$snap" </dev/null >/dev/null 2>&1 || true
+    fi
+    if [ "$(lc_jget was_running)" = 1 ]; then
+        docker compose up -d --pull never ${LC_UP_EXTRA[@]+"${LC_UP_EXTRA[@]}"} --no-recreate --remove-orphans >/dev/null 2>&1 || rc=2
+    fi
+    echo "" >&2
+    if [ "$kind" = quick-check ]; then
+        echo "The upgrade did not go on: PRAGMA quick_check found problems in detections.db (${reason}). Every file is back as it was and ${from} runs again. Repair the database first (TROUBLESHOOTING.md, \"The database fails its integrity check\")." >&2
+        echo "Next: $(lc_in_here docker compose logs --tail=50 bridge)" >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    if [ "$op" = upgrade ]; then
+        echo "The upgrade did not go on: the restore point could not be taken (${reason})." >&2
+        echo "  The partial restore point was deleted, every file is back as it was (restore point ${snap}), and ${from} was started again." >&2
+    elif [ "$op" = export ] && [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        echo "The restore point was not taken: it could not be taken (${reason})." >&2
+        echo "  The partial restore point was deleted; the folder stays moved (stopped and held)." >&2
+    else
+        echo "The restore point was not taken: it could not be taken (${reason})." >&2
+        echo "  The partial restore point was deleted and ${from} was started again." >&2
+    fi
+    if [ "$rc" = 2 ]; then
+        echo "  Starting it again failed: $(lc_in_here docker compose up -d)" >&2
+    fi
+    if [ "$space" = space ]; then next="df -h"; else next=$(lc_here_cmd --status); fi
+    echo "Next: ${next}" >&2
+    exit "$LC_EXIT_FAILED"
+}
+
+# lc_upgrade_record_1b — the record step's 1b work (6.1 record), after
+# 1a's records: the copies a rollback kept are removed now that an
+# upgrade succeeded (E22), then retention (E21). An upgrade whose checks
+# failed and were accepted (--resume --accept) did not succeed: the copies
+# stay (finish_pending kept) until --rollback --finish or a successful one.
+lc_upgrade_record_1b() {
+    local pending="" id bytes total=0 img rp
+    [ "${LC_RECORD_RESULT:-ok}" != ok ] || pending=$(lc_tool json-get finish_pending <<<"$(cat "${LC_STATE_DIRNAME}/install.json" 2>/dev/null || echo '{}')" \
+        | python3 -I -c 'import json, sys
+t = sys.stdin.read().strip()
+print(" ".join(x.get("id", "") for x in (json.loads(t) if t else []) if isinstance(x, dict)))')
+    img=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${VERSION:-main}")
+    [ -n "$img" ] || img=$(docker inspect --format '{{.Image}}' "$(lc_tool project-bridge "$LC_PROJECT" </dev/null)" 2>/dev/null) || img=""
+    for id in $pending; do
+        if LC_ST_QUIET=1 lc_st finish --dir . --project "$LC_PROJECT" --image "$img" --id "$id"; then
+            bytes=$(lc_st_get freed_bytes)
+            total=$((total + ${bytes:-0}))
+            lc_tool write-host-record --dir . --op finish --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+                --from "${VERSION:-${LC_QS_HEAD:-}}" --to "${VERSION:-${LC_QS_HEAD:-}}" --cause implied --replaced "$id" \
+                --finish-pending-clear "$id" </dev/null >/dev/null || true
+            echo "==> Removed the copy kept by the rollback of ${id} ($(lc_human <<<"${bytes:-0}")): this upgrade replaces it."
+        else
+            echo "WARNING: could not remove the copy kept by the rollback of ${id}; bash install-release.sh --rollback --finish removes it." >&2
+        fi
+    done
+    rp=$(lc_jget restore_point)
+    lc_st rp-prune --dir . --protect "${rp}" >/dev/null || true
+}
+
+# ── automatic rollback (6.2) ─────────────────────────────────────────
+
+lc_auto_stage() {
+    lc_jset_json auto_rollback.stage "\"$1\""
+}
+
+# lc_auto_not DECISION REASON [COMPARE_FILE] — not rolled back: the
+# journal says why, M-NOT-ROLLED-BACK, exit 4; the failed version stays as
+# it was found.
+lc_auto_not() {
+    local f="${3:-}"
+    lc_jset_json auto_rollback.decision "\"$1\""
+    lc_jset_json auto_rollback.reason "$(lc_json_str "$2")"
+    if [ -n "$f" ] && [ -s "$f" ]; then
+        python3 -I -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+def n(v):
+    if isinstance(v, bool): return int(v)
+    if isinstance(v, (int, float)): return int(v)
+    if isinstance(v, (list, dict)): return len(v)
+    return 0
+d = dict((k, n(v)) for k, v in (c.get("discards") or {}).items() if k not in ("since", "rf"))
+print(json.dumps({"discards": d, "checkable": c.get("checkable"), "nothing_new": c.get("nothing_new")}))' "$f" \
+            | lc_tool journal-set . --json auto_rollback.details || true
+    fi
+    lc_tool msg not-rolled-back . ${f:+--compare "$f"} </dev/null
+    rm -f -- "${f:-/nonexistent}" 2>/dev/null || true
+    exit "$LC_EXIT_STOPPED"
+}
+
+# lc_failed_evidence JID — what the failed start left: compose ps, logs,
+# health logs (3.9). Errors are only logged.
+lc_failed_evidence() {
+    local dir="${LC_STATE_DIRNAME}/logs/failed-$1" svc cid
+    (umask 077 && mkdir -p "$dir") || return 0
+    (umask 077 && docker compose ps --all --format json >"$dir/compose-ps.json" 2>/dev/null) || true
+    (umask 077 && docker compose logs --no-color --timestamps --tail 5000 bridge gateway >"$dir/compose.log" 2>&1) || true
+    for svc in bridge gateway; do
+        cid=$(docker ps -aq --filter "label=com.docker.compose.project=${LC_PROJECT}" \
+            --filter "label=com.docker.compose.service=${svc}" 2>/dev/null | head -1) || cid=""
+        [ -n "$cid" ] || continue
+        (umask 077 && docker inspect --format '{{json .State.Health}}' "$cid" >"$dir/health-${svc}.json" 2>/dev/null) || true
+    done
+    (umask 077 && printf '%s\n' "${LC_FACTS_JSON:-{\}}" >"$dir/facts.json") || true
+}
+
+# lc_auto_gateway_check — (a): the new gateway never became healthy, and
+# it did not run while no installer watched it (6.2). A gateway container
+# of another image (the old one, stopped) satisfies (a).
+lc_auto_gateway_check() {
+    local cid img new answer since child
+    if [ "$(lc_jget gateway_healthy_seen)" = 1 ]; then
+        lc_auto_not kept "the gateway reported healthy at $(lc_jget gateway_healthy_at)"
+    fi
+    cid=$(docker ps -aq --filter "label=com.docker.compose.project=${LC_PROJECT}" \
+        --filter "label=com.docker.compose.service=gateway" 2>/dev/null | head -1) || cid=""
+    [ -n "$cid" ] || return 0
+    img=$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null) || img=""
+    new=$(lc_image_id "ghcr.io/${OWNER}/sigrift-gateway:${VERSION}")
+    [ -n "$img" ] && [ -n "$new" ] && [ "$img" = "$new" ] || return 0
+    since=$(lc_jget bridge_started_at)
+    child=$(lc_jget child_started_at)
+    lc_st gateway-ever-healthy --container "$cid" --since "${since:-1970-01-01T00:00:00Z}" \
+        --child-start "${child:-1970-01-01T00:00:00Z}" </dev/null || true
+    answer=$(lc_st_get answer)
+    case "$answer" in
+        unwatched)
+            lc_auto_not cannot-check "the gateway ran while no installer watched it (since $(lc_st_get started_at)), so whether it was healthy is unknown" ;;
+        yes)
+            lc_auto_not kept "the gateway reported healthy at $(lc_st_get at)" ;;
+    esac
+}
+
+# lc_auto_compare KEY — (b): compare the live data with the restore point
+# (KEY: auto_rollback.b_live or b_quiesced); 0 when nothing is new. The
+# full result stays in LC_AUTO_CMP (a 0600 file).
+lc_auto_compare() {
+    local key="$1" rp img rc=0
+    rp=$(lc_jget restore_point)
+    img=$(lc_target_image)
+    LC_AUTO_CMP=$(mktemp "${LC_STATE_DIRNAME}/logs/.compare.XXXXXX")
+    LC_ST_QUIET=1 lc_st compare --project "$LC_PROJECT" --image "$img" --rp "$rp" --dir . \
+        --journal-key "$key" || rc=$?
+    lc_save_json "$LC_AUTO_CMP" "$LC_ST_JSON"
+    lc_tool json-get discards <<<"$LC_ST_JSON" >/dev/null || true
+    (umask 077 && python3 -I -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+def n(v):
+    if isinstance(v, bool): return int(v)
+    if isinstance(v, (int, float)): return int(v)
+    if isinstance(v, (list, dict)): return len(v)
+    return 0
+print(json.dumps({"checkable": c.get("checkable"), "nothing_new": c.get("nothing_new"),
+                  "discards": dict((k, n(v)) for k, v in (c.get("discards") or {}).items()
+                                   if k not in ("since", "rf")),
+                  "rf": (c.get("discards") or {}).get("rf")}, indent=1))' "$LC_AUTO_CMP" \
+        >"${LC_STATE_DIRNAME}/logs/failed-$(lc_jget id)/${2:-b-live}.json" 2>/dev/null) || true
+    [ "$rc" -eq 0 ] || return 2
+    [ "$(lc_st_get checkable)" = 1 ] && [ "$(lc_st_get nothing_new)" = 1 ] || return 1
+    # What the engine does not see (.env, the compose files) and every
+    # other NOT CARRIED item: a rollback by itself never brings back
+    # anything changed since the restore point (E16); 3 names it.
+    LC_AUTO_NC=$(lc_tool msg-summary --compare "$LC_AUTO_CMP" --not-carried </dev/null) || LC_AUTO_NC="unknown"
+    [ -z "$LC_AUTO_NC" ] || return 3
+}
+
+# lc_auto_compare_not RC WHEN — not rolled back for compare result RC
+# (1 data arrived, 2 cannot compare, 3 something would come back).
+lc_auto_compare_not() {
+    case "$1" in
+        2) lc_auto_not cannot-check "the installer could not compare the data with the restore point" "$LC_AUTO_CMP" ;;
+        3) lc_auto_not kept "a rollback would bring back what was changed since the restore point (${LC_AUTO_NC})" "$LC_AUTO_CMP" ;;
+        *) lc_auto_not kept "data arrived $2: $(lc_tool msg-summary --compare "$LC_AUTO_CMP" </dev/null)" "$LC_AUTO_CMP" ;;
+    esac
+}
+
+# lc_after_start_failure SERVICE [--resume] — 6.2, in the upgrade child:
+# start-bridge or start-rest failed. Rolls back by itself only when the
+# new version never became healthy and took no data, checked live and
+# again on the stopped data; every check that can fail runs before the
+# stack is stopped. Never returns: exit 5 (rolled back) or 4.
+lc_after_start_failure() {
+    local svc="$1" mode="${2:-}" jid rp stage decision fprime rc why since img
+    jid=$(lc_jget id)
+    if [ "$mode" != --resume ]; then
+        lc_jset_json start_failed "{\"service\": \"${svc}\", \"why\": \"${LC_WAIT_FAIL:-timeout}\", \"waited\": ${LC_WAITED:-0}, \"at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+        lc_jset_json auto_rollback '{"stage": "evidence"}'
+        lc_failed_evidence "$jid"
+    fi
+    decision=$(lc_jget auto_rollback.decision)
+    if [ "$decision" = rollback ]; then
+        # A crash between the decision and the hand-off: go on only while
+        # nothing can have written since the decision.
+        since=$(lc_jget auto_rollback.evaluated_at)
+        if [ -n "$since" ] && lc_is_held && ! lc_tool started-since --project "$LC_PROJECT" --since "$since" </dev/null; then
+            lc_auto_handoff
+        fi
+        lc_jset_json auto_rollback '{"stage": "evidence"}'
+    elif [ -n "$decision" ]; then
+        lc_jset_json auto_rollback '{"stage": "evidence"}'
+    fi
+    rp=$(lc_jget restore_point)
+    stage=$(lc_jget auto_rollback.stage)
+    case "$stage" in
+        ""|evidence|eligible|checked-live)
+            # Eligibility, in order (6.2 step 2).
+            if [ "$(lc_jget flags.no_auto_rollback)" = 1 ]; then
+                why="--no-auto-rollback was given"
+                [ -z "$(lc_jget aborted_rollback.rb_id)" ] || why="its automatic rollback was aborted"
+                lc_auto_not skipped "$why"
+            fi
+            [ -n "$rp" ] || lc_auto_not cannot-check "this upgrade took no restore point (--no-snapshot)"
+            if ! LC_ST_QUIET=1 lc_st rp-verify --dir . --id "$rp"; then
+                why=$(sed -n 's/^Error: //p' <<<"$LC_ST_ERR" | head -1)
+                lc_auto_not cannot-check "restore point ${rp} is damaged (${why%%, so it is not used.})"
+            fi
+            if [ "$(lc_jget pre_state.db.encrypted)" = 1 ]; then
+                lc_auto_not cannot-check "the database is encrypted, so the installer cannot tell whether data arrived"
+            fi
+            if ! LC_ST_QUIET=1 lc_st images-ensure --rp "$rp" --dir . --check; then
+                lc_auto_not cannot-check "the $(lc_jget from_version) images are not on this host"
+            fi
+            img=$(lc_target_image)
+            if ! LC_ST_QUIET=1 lc_st space-plan --dir . --project "$LC_PROJECT" --image "$img" \
+                    --kind rollback --rp "$rp"; then
+                lc_auto_not cannot-check "there is not enough room to stage restore point ${rp} ($(lc_st_get st | lc_human) needed on the Docker volume filesystem, $(lc_st_get docker_free | lc_human) free)"
+            fi
+            # The staging keeps the plan's reserve free, as a manual one does.
+            why=$(lc_st_get docker_reserve)
+            lc_jset_json auto_rollback.reserve "${why:-0}"
+            lc_auto_gateway_check
+            lc_auto_stage eligible
+            rc=0
+            lc_auto_compare auto_rollback.b_live b-live || rc=$?
+            [ "$rc" -eq 0 ] || lc_auto_compare_not "$rc" "after the restore point"
+            rm -f -- "$LC_AUTO_CMP"
+            lc_auto_stage checked-live
+            # Step 4: F', the files as they are (the logical view), journaled
+            # before anything stops, then the stop and the hold.
+            if ! lc_snapshot_files auto-rollback >/dev/null; then
+                lc_auto_not cannot-check "could not save a restore point of this folder's files"
+            fi
+            lc_jset_json auto_rollback.files_snapshot "\"${LC_SNAPSHOT_ID}\""
+            lc_auto_stage snapshot-taken
+            stage=snapshot-taken
+            ;;
+    esac
+    if [ "$stage" = snapshot-taken ]; then
+        lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+        lc_stop_stack
+        lc_hold
+        lc_auto_stage held
+    fi
+    # Step 5: (b) again, on the stopped data.
+    img=$(lc_target_image)
+    LC_ST_QUIET=1 lc_st quiesce --project "$LC_PROJECT" --image "$img" --mode report --dir . || true
+    rc=0
+    lc_auto_compare auto_rollback.b_quiesced b-quiesced || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        lc_unhold
+        docker compose up -d --pull never --remove-orphans >/dev/null 2>&1 || true
+        lc_auto_compare_not "$rc" "while it was being checked"
+    fi
+    rm -f -- "$LC_AUTO_CMP"
+    # Step 6: the decision, durable first, then the hand-off.
+    lc_jset_json auto_rollback.evaluated_at '"@now"'
+    lc_jset_json auto_rollback.decision '"rollback"'
+    lc_auto_handoff
+}
+
+# lc_auto_handoff — 6.2 steps 6-8: the rollback journal replaces the
+# upgrade journal (one atomic write), and the rollback runs in this same
+# process (same lock, log and .rc file).
+lc_auto_handoff() {
+    local rp fprime extra rpimg engine keep reserve
+    rp=$(lc_jget restore_point)
+    fprime=$(lc_jget auto_rollback.files_snapshot)
+    engine=$(lc_target_image)
+    rpimg=$(lc_jget rp_images.bridge.id)
+    reserve=$(lc_jget auto_rollback.reserve)
+    keep=$(lc_tool rp-env-has-audit-key . --rp "$rp" </dev/null) || keep=0
+    extra=$(python3 -I -c 'import json, sys
+print(json.dumps({"engine_image": sys.argv[1], "rp_image": sys.argv[2], "confirmed": False,
+                  "plan": None, "keep_current_master": sys.argv[3] == "1",
+                  "flags": {"accept_summary_reset": False, "no_carry": False,
+                            "accept_unverified": False, "revert_credentials": False},
+                  "reserve": int(sys.argv[4]) if sys.argv[4].isdigit() else 0,
+                  "rb_cmd": "bash install-release.sh --rollback"}))' "$engine" "$rpimg" "$keep" "$reserve")
+    lc_tool journal-handoff . --op rollback --cause auto --restore-point "$rp" \
+        --files-snapshot "$fprime" --steps "${LC_AUTO_ROLLBACK_STEPS// /,}" \
+        --done snapshot,stop,hold,rb-guard --extra "$extra" </dev/null >/dev/null
+    lc_tool msg auto-rb-start . </dev/null
+    lc_run_journal
+    lc_tool msg rolled-back . </dev/null
+    exit "$LC_EXIT_ROLLED_BACK"
+}
+
+# ── the rollback's steps (6.3) ───────────────────────────────────────
+
+lc_rb_engine() {
+    lc_jget engine_image
+}
+
+lc_rb_rp() {
+    lc_jget restore_point
+}
+
+# lc_rb_swapped — the forward steps after the swap run only while both
+# volumes hold this rollback's replaced copy in phase done (the swap's
+# own reply, journaled; an undo rewrites it).
+lc_rb_swapped() {
+    if [ "$(lc_jget swap_phases.bridge_data)" != "done" ] || [ "$(lc_jget swap_phases.bridge_secrets)" != "done" ] \
+            || [ "$(lc_jget state)" = aborting ]; then
+        lc_refuse "$(lc_here_cmd --status)" "the swap of this rollback is not complete (an abort may have undone it)."
+    fi
+}
+
+lc_step_rb_stage() {
+    local rc=0 reserve
+    lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    reserve=$(lc_jget reserve)
+    if [ "${reserve:-0}" = 0 ]; then
+        # A journal without the plan's reserve: the space plan's, now.
+        LC_ST_QUIET=1 lc_st space-plan --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+            --kind rollback --rp "$(lc_rb_rp)" || true
+        reserve=$(lc_st_get docker_reserve)
+    fi
+    LC_ST_QUIET=1 lc_st stage --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+        --rp "$(lc_rb_rp)" --rb-id "$(lc_jget rb_id)" --reserve "${reserve:-0}" || rc=$?
+    if [ "$rc" -eq 7 ] || [ "$(lc_st_get kind)" = space ]; then
+        if [ "$(lc_jget cause)" = manual ]; then
+            lc_journal_state aborted "rb-stage: free space fell below the reserve"
+            echo "" >&2
+            echo "Error: free space in the Docker volume filesystem fell below the $(lc_human <<<"${reserve:-0}") reserve while the restore point was staged, so the rollback did not go on; the staged copy was removed." >&2
+            echo "  $(lc_jget current_version) kept serving." >&2
+            echo "Next: df -h" >&2
+            echo "Nothing was changed." >&2
+            exit "$LC_EXIT_REFUSED"
+        fi
+        LC_AUTO_FAIL_REASON="free space fell below the reserve while the restore point was staged"
+        exit "$LC_EXIT_STOPPED"
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$LC_ST_ERR" | grep -v '^Nothing was changed\.$' >&2 || true
+        [ "$rc" -ne 3 ] || lc_crit_stop
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_op_progress "restore point $(lc_rb_rp) staged beside the live data (every member checked)"
+}
+
+# lc_rb_late_refuse CODE ERROR NEXT — 8.2: after the stop, a reason not to
+# go on: the staging is discarded, the same version starts again, and
+# nothing changed (exit 3).
+lc_rb_late_refuse() {
+    local code="$1" err="$2" next="$3" cur cause rp fsnap
+    cur=$(lc_jget current_version)
+    cause=$(lc_jget cause)
+    rp=$(lc_rb_rp)
+    fsnap=$(lc_jget files_snapshot)
+    lc_st discard-staging --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+        --rb-id "$(lc_jget rb_id)" >/dev/null 2>&1 || true
+    lc_unhold
+    LC_JOURNAL_KEEP=1
+    if [ "$cause" = interrupted-upgrade ]; then
+        # The upgrade it took over is still in progress: its journal is
+        # journal.json again (state failed), for --status, --resume and
+        # another --rollback.
+        lc_tool journal-abort-end . --late "rb-guard: ${code}" </dev/null >/dev/null
+    else
+        lc_journal_state aborted "rb-guard: ${code}"
+    fi
+    # Nothing changed: the version is the current one, and an entry that is
+    # not ok never hides the upgrade's restore point (E23).
+    lc_tool write-host-record --dir . --op rollback --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+        --from "$cur" --to "$cur" --result aborted --cause "$cause" \
+        --restore-point "$rp" --snapshot "$fsnap" </dev/null >/dev/null 2>&1 || true
+    if [ "$(lc_jget was_running)" = 1 ]; then
+        LC_START_FAIL_NEXT=$(lc_in_here docker compose up -d)
+        lc_start_two_stage >/dev/null
+    fi
+    echo "" >&2
+    echo "Error: ${err}" >&2
+    if [ "$(lc_jget was_running)" = 1 ]; then
+        echo "  ${cur} was stopped for this check and started again; its files and data are as they were." >&2
+    else
+        echo "  ${cur} was not running and was left stopped; its files and data are as they were." >&2
+    fi
+    echo "Next: ${next}" >&2
+    echo "Nothing was changed." >&2
+    exit "$LC_EXIT_REFUSED"
+}
+
+lc_step_rb_guard() {
+    local rb rp f res code err next after
+    rb=$(lc_jget rb_id)
+    rp=$(lc_rb_rp)
+    LC_ST_QUIET=1 lc_st quiesce --project "$LC_PROJECT" --image "$(lc_rb_engine)" --mode report --dir . || true
+    if [ "$(lc_jget cause)" = manual ] || [ "$(lc_jget cause)" = interrupted-upgrade ]; then
+        if ! LC_ST_QUIET=1 lc_st verify-staged --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+                --rp "$rp" --rb-id "$rb" || [ "$(lc_st_get ok)" != 1 ]; then
+            lc_rb_late_refuse M-RB-STAGING-CHANGED \
+                "the staged copy of restore point ${rp} changed while $(lc_jget current_version) kept serving ($(lc_st_get mismatches)); something in the running stack wrote into it, so it was removed and the rollback did not go on." \
+                "$(lc_in_here bash install-release.sh --rollback --dry-run)"
+        fi
+    fi
+    if ! LC_ST_QUIET=1 lc_st compare --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rp "$rp" --dir .; then
+        printf '%s\n' "$LC_ST_ERR" >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    f="${LC_STATE_DIRNAME}/logs/rollback-${rb}"
+    (umask 077 && mkdir -p "$f")
+    lc_save_json "$f/final.json" "$LC_ST_JSON"
+    res=$(lc_tool rb-guard-check . --compare "$f/final.json" </dev/null)
+    if [ "$res" != ok ]; then
+        code=$(lc_tool json-get code <<<"$res")
+        err=$(lc_tool json-get error <<<"$res")
+        next=$(lc_tool json-get next <<<"$res")
+        lc_rb_late_refuse "$code" "$err" "$next"
+    fi
+    after=$(lc_tool json-get audit.head_id < "$(lc_rb_manifest_path)")
+    if ! LC_ST_QUIET=1 lc_st export-audit --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+            --after "${after:-0}" --rb-id "$rb" --out "$f/discarded-audit.jsonl"; then
+        printf '%s\n' "$LC_ST_ERR" >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_save_json "$f/export.json" "$LC_ST_JSON"
+    lc_op_progress "stack stopped; the staged copy checked again; the plan still holds ($(lc_tool json-get rows <<<"$LC_ST_JSON") discarded audit entries saved)"
+}
+
+lc_rb_manifest_path() {
+    local root
+    root=$(lc_jget rp_root)
+    [ -n "$root" ] || root="${LC_STATE_DIRNAME}/snapshots"
+    printf '%s/%s/manifest.json' "$root" "$(lc_rb_rp)"
+}
+
+lc_step_rb_carry() {
+    local args
+    args=(carry --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)"
+        --keep-current-master "$([ "$(lc_jget keep_current_master)" = 1 ] && echo 1 || echo 0)")
+    [ "$(lc_jget flags.no_carry)" != 1 ] || args+=(--no-carry)
+    if ! lc_st_step "${args[@]}"; then
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_op_progress "revocations, rotations and disabled accounts since the restore point carried onto the staged copy; every session ended"
+}
+
+lc_step_rb_audit() {
+    local rb f args written id why
+    rb=$(lc_jget rb_id)
+    f="${LC_STATE_DIRNAME}/logs/rollback-${rb}/export.json"
+    args=(audit-append --dir . --project "$LC_PROJECT" --rp-image "$(lc_jget rp_image)" --rp "$(lc_rb_rp)"
+        --rb-id "$rb" --from "$(lc_jget current_version)")
+    [ ! -s "$f" ] || args+=(--export "$f")
+    if ! LC_ST_QUIET=1 lc_st "${args[@]}"; then
+        why=$(grep -v '^Nothing was changed\.$' <<<"$LC_ST_ERR" | sed 's/^kind=[a-z]*: //' | head -1)
+        LC_ST_JSON="{\"written\": false, \"why\": $(lc_json_str "${why:-the restored version could not write it}")}"
+    fi
+    written=$(lc_st_get written)
+    id=$(lc_st_get id)
+    if [ "$(lc_st_get already)" = 1 ]; then
+        written=1
+    fi
+    if [ "$written" = 1 ]; then
+        lc_jset_json audit_entry "{\"written\": true, \"id\": ${id:-null}}"
+        lc_op_progress "the rollback recorded in the restored audit chain (entry ${id})"
+    else
+        why=$(lc_st_get why)
+        lc_jset_json audit_entry "{\"written\": false, \"why\": $(lc_json_str "${why:-unknown}")}"
+        lc_note "the rollback could not be recorded in the restored audit chain (${why:-unknown}); the host record keeps it."
+        lc_op_progress "audit entry not written (${why:-unknown})"
+    fi
+}
+
+lc_step_rb_mark() {
+    lc_st_step mark --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+        --rp "$(lc_rb_rp)" >/dev/null || exit "$LC_EXIT_FAILED"
+    # --status reads the markers from here while the rollback runs (E37).
+    lc_rb_cache_facts
+    lc_op_progress "restore marker written in both volumes"
+}
+
+lc_step_rb_swap() {
+    if ! lc_st_step swap --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+            --rp "$(lc_rb_rp)"; then
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_jset_json swap_phases "{\"bridge_data\": \"$(lc_st_get bridge_data.phase)\", \"bridge_secrets\": \"$(lc_st_get bridge_secrets.phase)\"}"
+    lc_rb_cache_facts
+    lc_rb_swapped
+    lc_op_progress "restored data swapped in; the state before the rollback is in .sigrift-replaced-$(lc_jget rb_id) in each volume"
+}
+
+lc_step_rb_files() {
+    lc_rb_swapped
+    if ! lc_st_step restore-files --dir . --rp "$(lc_rb_rp)"; then
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_save_json "${LC_STATE_DIRNAME}/logs/rollback-$(lc_jget rb_id)/files.json" "$LC_ST_JSON"
+    lc_tool rb-compose-check . </dev/null >/dev/null
+    lc_op_progress ".env, compose (held until the start), VERSION restored: $(lc_st_get restored | tr -d '[]"')"
+}
+
+# lc_step_rb_qs_images — quickstart's rb-images (8.3): the kept images get
+# their compose tags back, so `up --no-build` starts them.
+lc_step_rb_qs_images() {
+    lc_rb_swapped
+    lc_qs_retag_images
+    lc_op_progress "the restore point's images are tagged again"
+}
+
+lc_step_rb_images() {
+    lc_rb_swapped
+    lc_st_step images-ensure --rp "$(lc_rb_rp)" --dir . >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "the restore point's images are tagged: bridge $(lc_st_get bridge), gateway $(lc_st_get gateway)"
+}
+
+lc_step_rb_unmark() {
+    lc_rb_swapped
+    lc_st_step unmark --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+        >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "restore marker removed from both volumes"
+}
+
+# lc_rb_start_failed SERVICE — M-RB-START-FAILED; exit 4.
+lc_rb_start_failed() {
+    echo "" >&2
+    if [ "${LC_WAIT_FAIL:-}" = exited ]; then
+        echo "The $1 of $(lc_jget to_version) did not become healthy after the rollback: it exited; the journal keeps where it stands." >&2
+    else
+        echo "The $1 of $(lc_jget to_version) did not become healthy after the rollback within ${LC_WAITED:-?} s; the journal keeps where it stands." >&2
+    fi
+    echo "  Check logs: $(lc_in_here docker compose logs --tail=50 "$1")" >&2
+    echo "Next: $(lc_here_cmd --resume)" >&2
+    LC_AUTO_FAIL_REASON="the $1 of $(lc_jget to_version) did not become healthy"
+    exit "$LC_EXIT_STOPPED"
+}
+
+lc_step_rb_start_bridge() {
+    local secs bytes
+    lc_rb_swapped
+    [ -n "$(lc_jget bridge_started_at)" ] || lc_tool journal-set . bridge_started_at=@now </dev/null
+    lc_unhold
+    echo "==> Starting the $(lc_jget to_version) bridge"
+    docker compose up -d --pull never ${LC_UP_EXTRA[@]+"${LC_UP_EXTRA[@]}"} --remove-orphans --force-recreate bridge
+    bytes=$(lc_tool json-get db.bytes < "$(lc_rb_manifest_path)")
+    secs=$(lc_tool bridge-deadline "${bytes:-0}" </dev/null)
+    if ! lc_wait_service_healthy bridge "$secs"; then
+        lc_rb_start_failed bridge
+    fi
+    lc_op_progress "$(lc_jget to_version) bridge healthy after ${LC_WAITED:-?} s"
+}
+
+lc_step_rb_start_rest() {
+    lc_rb_swapped
+    docker compose up -d --pull never ${LC_UP_EXTRA[@]+"${LC_UP_EXTRA[@]}"} --remove-orphans --force-recreate
+    fix_volume_ownership
+    if ! lc_wait_service_healthy gateway 180; then
+        lc_rb_start_failed gateway
+    fi
+    lc_op_progress "gateway healthy after ${LC_WAITED:-?} s"
+}
+
+lc_step_rb_verify() {
+    local out rc=0 f
+    lc_rb_swapped
+    f=$(mktemp "${LC_STATE_DIRNAME}/logs/.rb-state.XXXXXX")
+    if ! LC_ST_QUIET=1 lc_st state --project "$LC_PROJECT" --image "$(lc_jget rp_image)" --env-file .env \
+            --dir . --fallback-image "$(lc_rb_engine)"; then
+        rm -f -- "$f"
+        lc_rb_verify_failed "the installer could not read the restored data ($(grep -v '^Nothing' <<<"$LC_ST_ERR" | head -1))"
+    fi
+    lc_save_json "$f" "$LC_ST_JSON"
+    out=$(lc_tool rb-verify . --state "$f" </dev/null) || rc=$?
+    rm -f -- "$f"
+    [ "$rc" -eq 0 ] || lc_rb_verify_failed "$out"
+    if ! LC_ST_QUIET=1 lc_st verify-carry --dir . --project "$LC_PROJECT" --image "$(lc_jget rp_image)" \
+            --rb-id "$(lc_jget rb_id)"; then
+        lc_rb_verify_failed "a carried revocation is not in the restored data ($(lc_st_get mismatches))"
+    fi
+    lc_op_progress "restored data checked: ${out}; the carry-forward holds"
+}
+
+lc_rb_verify_failed() {
+    lc_journal_state verify_failed "$1"
+    echo "" >&2
+    echo "$(lc_jget to_version) is up again, but a check failed: $1. The journal records it; nothing else was changed." >&2
+    echo "Next: $(lc_here_cmd --status)" >&2
+    LC_AUTO_FAIL_REASON="a check of the restored data failed: $1"
+    exit "$LC_EXIT_STOPPED"
+}
+
+lc_step_rb_record() {
+    local rb rp cause v cur volrec tmpl sha bytes export_sha auto=0 up=()
+    rb=$(lc_jget rb_id)
+    rp=$(lc_rb_rp)
+    cause=$(lc_jget cause)
+    v=$(lc_jget to_version)
+    cur=$(lc_jget current_version)
+    [ "$cause" != auto ] || auto=1
+    case "$cause" in auto|interrupted-upgrade) up=(--upgrade-entry) ;; esac
+    read -r tmpl sha <<<"$(lc_compose_canon docker-compose.yml)"
+    [ "$sha" != - ] || sha=""
+    bytes=$(lc_replaced_bytes "$rb")
+    export_sha=""
+    if [ -s "${LC_STATE_DIRNAME}/logs/rollback-${rb}/export.json" ]; then
+        export_sha=$(lc_tool json-get sha256 <"${LC_STATE_DIRNAME}/logs/rollback-${rb}/export.json") || export_sha=""
+    fi
+    volrec=$(mktemp "${TMPDIR:-/tmp}/sigrift-record.XXXXXX")
+    # A rollback to a pre-import point restores the identity (1.2 rp-resolve).
+    lc_mv_rb_identity_args
+    lc_tool write-host-record --dir . --op rollback --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+        "${LC_MV_RB_ARGS[@]}" \
+        --from "$cur" --to "$v" --installer "${LC_RUN_SCRIPT:-$(pwd -P)/install-release.sh}" \
+        --installer-version "${INSTALLER_RELEASE:-dev}" --snapshot "$(lc_jget files_snapshot)" \
+        --with-journal "${up[@]}" --cause "$cause" --restore-point "$rp" --replaced "$rb" \
+        --automatic "$auto" --compose-template "${tmpl:-custom}" ${sha:+--compose-template-sha256 "$sha"} \
+        --compose-files-now ${export_sha:+--audit-export-sha256 "$export_sha"} \
+        --finish-pending-add "${rb}:${bytes:-0}:${cur}" --last-op rollback --restored-from "$rp" \
+        --schema "$(lc_tool json-get schema_version < "$(lc_rb_manifest_path)")" \
+        --volume-record "$volrec" </dev/null >/dev/null
+    if ! lc_engine_source | lc_tool engine-run --image "$(lc_jget rp_image)" --project "$LC_PROJECT" \
+            --op write-record --env-file .env --record-file "$volrec" >/dev/null; then
+        echo "WARNING: could not write the volume record (${LC_PROJECT}'s bridge_data/.sigrift-install.json); the next run checks this install again from its labels and data." >&2
+    fi
+    rm -f -- "$volrec"
+    lc_tool prune-snapshots . --keep 10 --protect "$(lc_jget files_snapshot)" </dev/null >/dev/null || true
+    lc_op_progress "records written (rollback ${cur} -> ${v}, restore point ${rp})"
+}
+
+# lc_rb_cache_facts — the facts of the volumes now (the replaced copies and
+# their sizes), cached for --status while the operation runs (E37).
+lc_rb_cache_facts() {
+    LC_FACTS_JSON=$(lc_engine "$(lc_rb_engine)" "$LC_PROJECT" facts 2>/dev/null) || LC_FACTS_JSON='{}'
+    [ -n "$LC_FACTS_JSON" ] || LC_FACTS_JSON='{}'
+    lc_tool cache-facts . </dev/null || true
+}
+
+lc_replaced_bytes() {
+    lc_rb_cache_facts
+    python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[2] or "{}")
+except ValueError:
+    f = {}
+print(sum(x.get("bytes") or 0 for x in (f.get("lifecycle") or {}).get("replaced") or []
+          if x.get("id") == sys.argv[1]))' "$1" "$LC_FACTS_JSON" 2>/dev/null || echo 0
+}
+
+# ── the undo of a rollback (6.7), journaled ──────────────────────────
+
+lc_step_ab_stop() {
+    lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    lc_stop_stack
+    lc_op_progress "stack stopped"
+}
+
+lc_step_ab_hold() {
+    lc_hold
+    lc_op_progress "stack held"
+}
+
+# lc_rb_has_replaced — 0 when a volume holds this rollback's replaced copy,
+# 1 when none does, 2 when the volumes could not be read (never "none").
+lc_rb_has_replaced() {
+    local f
+    f=$(lc_engine_source | lc_tool engine-run --image "$(lc_rb_engine)" --project "$LC_PROJECT" --op facts 2>/dev/null) || return 2
+    python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[1] or "{}")
+except ValueError:
+    sys.exit(2)
+if not isinstance(f, dict) or not isinstance(f.get("lifecycle"), dict):
+    sys.exit(2)
+sys.exit(0 if any(x.get("id") == sys.argv[2] for x in f["lifecycle"].get("replaced") or []) else 1)' "$f" "$(lc_jget rb_id)"
+}
+
+# lc_step_ab_mark — the marker goes into both volumes whenever the
+# rollback got as far as its own marker (its swap may have begun): decided
+# from the journal, never from a probe that may fail (7.5: markers from
+# ab-mark to ab-unmark). mark is idempotent.
+lc_step_ab_mark() {
+    case "$(lc_jget abort.forward_done)" in
+        *'"rb-mark"'*)
+            lc_st_step mark --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+                --rp "$(lc_rb_rp)" >/dev/null || exit "$LC_EXIT_FAILED"
+            lc_op_progress "restore marker written in both volumes for the undo"
+            ;;
+        *) lc_op_progress "nothing swapped yet: no marker needed" ;;
+    esac
+}
+
+lc_step_ab_unswap() {
+    local rc=0
+    lc_rb_has_replaced || rc=$?
+    if [ "$rc" -eq 2 ]; then
+        echo "Error: the volumes could not be read (a facts run in $(lc_rb_engine) failed), so the undo cannot tell whether the swap began; nothing was moved." >&2
+        echo "Next: $(lc_here_cmd --resume)" >&2
+        exit "$LC_EXIT_STOPPED"
+    fi
+    if [ "$rc" -eq 0 ]; then
+        lc_st_step unswap --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+            --rp "$(lc_rb_rp)" >/dev/null || exit "$LC_EXIT_FAILED"
+        lc_jset_json swap_phases '{"bridge_data": "gone", "bridge_secrets": "gone"}'
+        lc_op_progress "the data before the rollback is back in place in both volumes"
+    else
+        lc_st_step discard-staging --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" \
+            --rb-id "$(lc_jget rb_id)" >/dev/null || exit "$LC_EXIT_FAILED"
+        lc_jset_json swap_phases '{"bridge_data": "gone", "bridge_secrets": "gone"}'
+        lc_op_progress "the staged copy removed"
+    fi
+}
+
+lc_step_ab_files() {
+    lc_st_step restore-files --dir . --files-snapshot "$(lc_jget files_snapshot)" --all >/dev/null \
+        || exit "$LC_EXIT_FAILED"
+    if [ -e tls/cert.pem ] && [ -e tls/key.pem ]; then
+        secure_tls_files tls/cert.pem tls/key.pem
+    fi
+    lc_op_progress "every file of restore point $(lc_jget files_snapshot) back"
+}
+
+lc_step_ab_unmark() {
+    lc_st_step unmark --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --rb-id "$(lc_jget rb_id)" \
+        >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "restore marker removed"
+}
+
+lc_step_ab_unhold() {
+    lc_unhold
+    lc_op_progress "the real compose file is back"
+}
+
+lc_step_ab_start() {
+    echo "==> Starting $(lc_jget from_version) again"
+    if [ "$(lc_jget cause)" = auto ]; then
+        docker compose up -d --pull never --force-recreate --remove-orphans >/dev/null 2>&1 \
+            || echo "WARNING: docker compose up failed; the failed version is left as it was." >&2
+    elif ! docker compose up -d --pull never --force-recreate --remove-orphans bridge \
+            || ! docker compose up -d --pull never --force-recreate --remove-orphans; then
+        echo "WARNING: $(lc_jget from_version) did not start; $(lc_in_here docker compose up -d) starts it." >&2
+    fi
+    fix_volume_ownership
+    lc_op_progress "$(lc_jget from_version) started"
+}
+
+lc_step_ab_record() {
+    local cur v cause
+    cur=$(lc_jget from_version)
+    v=$(lc_jget to_version)
+    cause=$(lc_jget cause)
+    if [ -e "${LC_STATE_DIRNAME}/install.json" ]; then
+        lc_tool write-host-record --dir . --op abort --project "$LC_PROJECT" --install-type release \
+            --from "$v" --to "$cur" --result aborted --cause "$cause" --restore-point "$(lc_rb_rp)" \
+            --snapshot "$(lc_jget files_snapshot)" </dev/null >/dev/null 2>&1 || true
+    fi
+    lc_tool journal-abort-end . </dev/null >/dev/null
+}
+
+# lc_abort_rollback — --abort of a rollback (6.7): one atomic journal
+# write starts the journaled undo, which runs detached; an interrupted
+# undo is only ever continued.
+lc_abort_rollback() {
+    local state started cur
+    state=$(lc_jget state)
+    if [ "$state" != aborting ]; then
+        started=$(lc_jget bridge_started_at)
+        cur=$(lc_jget from_version)
+        if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+            echo "==> --abort would (--dry-run: nothing was changed): stop and hold the stack, put the data of before the rollback back in both volumes (or remove the staged copy), restore every file of restore point $(lc_jget files_snapshot), and start ${cur} again."
+            return 0
+        fi
+        LC_CONFIRMED=0
+        if [ -n "$started" ] || [ -n "${LC_CONFIRM:-}" ]; then
+            # Needed once the rolled-back bridge started; a --confirm that
+            # names another version is refused either way (2.3 rule 1).
+            LC_CONFIRM_WHAT="abort brings back"
+            LC_CONFIRM_TEXT="the rolled-back $(lc_jget to_version) bridge started at ${started} and may have written data; --abort discards it and brings back ${cur}."
+            LC_CONFIRM_DETAIL="See what it would do: $(lc_in_here bash install-release.sh --abort --dry-run)"
+            LC_CONFIRM_DECLINED="Not undone: you did not type ${cur}. Nothing was changed."
+            lc_confirm "$cur" "undo the rollback" "$(lc_in_here bash install-release.sh --abort)"
+        fi
+        lc_tool journal-abort-begin . --confirmed "$([ -n "$started" ] && [ "$LC_CONFIRMED" = 1 ] && echo 1 || echo 0)" \
+            --steps "${LC_ABORT_ROLLBACK_STEPS// /,}" </dev/null
+    elif [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would go on with the interrupted undo at step $(lc_jget next) (--dry-run: nothing was changed)."
+        return 0
+    fi
+    lc_tool lock-owner . --op rollback --log "$(lc_jget log)" --pid "$$" </dev/null
+    echo "==> Undoing the rollback to $(lc_jget to_version) (step $(lc_jget next))."
+    lc_run_detached
+}
+
+# lc_abort_snapshot — --abort of --snapshot: the partial point deleted,
+# the stack unheld and started when it ran (foreground; each part is
+# idempotent).
+lc_abort_snapshot() {
+    local partial
+    if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would (--dry-run: nothing was changed): delete the partial restore point, put the real compose file back and start the stack when it ran."
+        return 0
+    fi
+    lc_use_journal_project
+    partial=$(lc_jget rp_partial.id)
+    if [ -n "$partial" ] && [ "$partial" != "$(lc_jget restore_point)" ]; then
+        lc_st rp-delete-partial --dir . --id "$partial" >/dev/null || true
+    fi
+    lc_unhold
+    if [ "$(lc_jget was_running)" = 1 ]; then
+        docker compose up -d --pull never --remove-orphans >/dev/null 2>&1 || true
+    fi
+    lc_journal_state aborted
+    lc_tool lock-owner . --release </dev/null
+    echo "==> Aborted the restore point; $(lc_jget from_version) runs as before."
+}
+
+lc_abort_finish() {
+    if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would close the interrupted --rollback --finish (--dry-run: nothing was changed); nothing it removed can be brought back."
+        return 0
+    fi
+    lc_journal_state aborted
+    echo "==> Closed the interrupted --rollback --finish; what it removed cannot be brought back, and $(lc_in_here bash install-release.sh --rollback --finish) completes it."
+}
+
+# ── --rollback [ID] (6.3), the parent ────────────────────────────────
+
+lc_rb_main() {
+    local take rp cur rpv cmpf resf imgf spf decf rbdir engine rpimg rid rc=0 needs extra
+    local fprime cmd gw guard=() was rid=()
+    lc_lock_acquire . rollback
+    # The plan's working files (ids, usernames, counts; no secret), removed
+    # whatever way this run ends.
+    LC_RB_TMP=$(mktemp -d "${TMPDIR:-/tmp}/sigrift-rb.XXXXXX")
+    trap 'rm -rf -- "$LC_RB_TMP"' EXIT
+    if [ ! -e .env ] && ! lc_is_held; then
+        lc_refuse "$(lc_here_cmd --status)" "$(pwd -P) holds no SigRift release install, so there is nothing to roll back here."
+    fi
+    lc_identity "${LC_INSTALLER:-release}"
+    cmd=$(lc_rb_cmd)
+    take=$(lc_tool rb-journal-check . --req "--rollback" </dev/null) || exit "$?"
+    if [ "$take" = takeover ]; then
+        lc_use_journal_project
+        cur=$(lc_jget to_version)
+        was=1
+    else
+        if lc_is_held; then
+            lc_refuse "$(lc_here_cmd --status)" "$(pwd -P)/docker-compose.yml is the hold stub, but no upgrade is in progress there, so this run does not guess which files are real."
+        fi
+        cur=${LC_FROM_VERSION:-$VERSION}
+        was=${LC_WAS_RUNNING:-0}
+    fi
+    [ "${LC_DRY_RUN:-0}" = 1 ] || lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    engine=$(docker inspect --format '{{.Image}}' "${LC_BRIDGE_CONTAINER:-none}" 2>/dev/null || true)
+    [ -n "$engine" ] || engine=$(lc_image_id "$(lc_tool engine-image --installer "${LC_INSTALLER:-release}" --project "$LC_PROJECT" --dir . \
+        --bridge "${LC_BRIDGE_CONTAINER:-}" --owner "${OWNER:-}" --version "$cur" </dev/null)")
+    [ -n "$engine" ] || engine=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${cur}")
+    # 3. no leftover of an earlier restore that no journal names
+    lc_facts_or_refuse "$engine" .env "${LC_BRIDGE_CONTAINER:-}"
+    lc_rb_leftovers
+    # 4. the target and its checks
+    [ -z "${LC_RB_ID:-}" ] || rid=(--id "$LC_RB_ID")
+    lc_st rp-resolve --dir . "${rid[@]}" --current "$cur" --project "$LC_PROJECT" || exit "$?"
+    resf="$LC_RB_TMP/resolve.json"
+    lc_save_json "$resf" "$LC_ST_JSON"
+    rp=$(lc_st_get id)
+    rpv=$(lc_st_get from_version)
+    # 2.3 rule 1: a --confirm that names another version is refused first,
+    # whether or not the plan needs one (M-CONFIRM-WRONG).
+    # Quickstart (8.3): the token is the point's commit, and HEAD must be it.
+    [ "${LC_INSTALLER:-release}" != quickstart ] || lc_qs_rb_token "$resf"
+    rpv=${LC_QS_RB_TOKEN:-$rpv}
+    LC_CONFIRMED=0
+    if [ -n "${LC_CONFIRM:-}" ]; then
+        LC_CONFIRM_WHAT="rollback restores"
+        lc_confirm "$rpv" "roll back to it" "$cmd"
+    fi
+    lc_st rp-verify --dir . --id "$rp" || exit "$?"
+    [ "${LC_INSTALLER:-release}" != quickstart ] || lc_qs_head_gate "$resf"
+    lc_tool volumes-check --project "$LC_PROJECT" </dev/null
+    # 6. the images, pulled by digest when missing (a dry run only checks;
+    # quickstart rebuilds a missing one from the checkout, 8.3)
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        lc_qs_rb_images "$resf"
+        LC_ST_JSON='{}'
+    elif [ "${LC_DRY_RUN:-0}" = 1 ]; then
+        lc_st images-ensure --rp "$rp" --dir . --check || true
+    else
+        lc_st images-ensure --rp "$rp" --dir . --pull-allowed || exit "$?"
+    fi
+    imgf="$LC_RB_TMP/images.json"
+    lc_save_json "$imgf" "$LC_ST_JSON"
+    # 7. what it would discard, keep and bring back
+    [ "${LC_DRY_RUN:-0}" = 1 ] || guard=(--rf-guard)
+    [ "${LC_ACCEPT_SUMMARY_RESET:-0}" = 0 ] || [ "${#guard[@]}" -eq 0 ] || guard+=(--accept-summary-reset)
+    lc_st compare --project "$LC_PROJECT" --image "$engine" --rp "$rp" --dir . "${guard[@]}" || exit "$?"
+    cmpf="$LC_RB_TMP/compare.json"
+    lc_save_json "$cmpf" "$LC_ST_JSON"
+    lc_rb_flag_args
+    if [ "${LC_DRY_RUN:-0}" != 1 ]; then
+        lc_tool rb-guards --compare "$cmpf" --resolve "$resf" --cmd "$cmd" "${LC_RB_FLAG_ARGS[@]}" </dev/null
+    fi
+    # 8. room to stage it
+    lc_st space-plan --dir . --project "$LC_PROJECT" --image "$engine" --kind rollback --rp "$rp" \
+        --cmd "$cmd" || exit "$?"
+    spf="$LC_RB_TMP/space.json"
+    lc_save_json "$spf" "$LC_ST_JSON"
+    # 9. the plan
+    decf="$LC_RB_TMP/decision.json"
+    gw=0
+    [ "$was" != 1 ] || gw=1
+    lc_tool rb-plan --compare "$cmpf" --resolve "$resf" --images "$imgf" --space "$spf" \
+        --current "$cur" --dry-run "${LC_DRY_RUN:-0}" --stack-running "$gw" --cmd "$cmd" \
+        --out "$decf" "${LC_RB_FLAG_ARGS[@]}" </dev/null
+    if [ "${LC_DRY_RUN:-0}" = 1 ]; then
+        exit 0
+    fi
+    # 10. the typed confirmation
+    needs=$(lc_tool json-get needs_confirm <"$decf")
+    if [ "$needs" = 1 ]; then
+        if [ "$(lc_tool json-get short_discards <"$decf")" != nothing ]; then
+            LC_CONFIRM_TEXT="this rollback to ${rpv} discards data written since $(lc_tool json-get created_at <"$decf") ($(lc_tool json-get short_discards <"$decf"))"
+            if [ -n "$(lc_tool json-get short_not_carried <"$decf")" ]; then
+                LC_CONFIRM_TEXT+=" and brings back $(lc_tool json-get short_not_carried <"$decf")"
+            fi
+        elif [ -n "$(lc_tool json-get short_not_carried <"$decf")" ]; then
+            LC_CONFIRM_TEXT="this rollback to ${rpv} brings back $(lc_tool json-get short_not_carried <"$decf") (changed since $(lc_tool json-get created_at <"$decf"))"
+        else
+            LC_CONFIRM_TEXT="this rollback to ${rpv} uses an override that needs the version typed"
+        fi
+        LC_CONFIRM_TEXT+=", and there is no terminal to ask you to type the version."
+        LC_CONFIRM_DETAIL="See everything it would do: ${cmd} --dry-run"
+        LC_CONFIRM_WHAT="rollback restores"
+        lc_confirm "$rpv" "roll back to it" "$cmd"
+    fi
+    # 11. F': the files as they are now (the logical view under a hold)
+    fprime=""
+    [ "$take" != takeover ] || fprime=$(lc_jget auto_rollback.files_snapshot)
+    if [ -z "$fprime" ]; then
+        if ! lc_snapshot_files rollback >/dev/null; then
+            lc_refuse "$(lc_in_here ls -la "${LC_STATE_DIRNAME}/")" \
+                "could not save a restore point of this folder's files before changing them."
+        fi
+        fprime=$LC_SNAPSHOT_ID
+    fi
+    # 12. the journal, then the detached part
+    rpimg=$(lc_tool json-get images.bridge.id <"$resf")
+    # Confirmed only by the version given or typed right (lc_confirm); it
+    # then also covers what arrives while staging (rb-guard).
+    extra=$(python3 -I - "$decf" "$cmpf" "$resf" "$spf" "$engine" "$rpimg" "$fprime" "$cur" \
+        "${LC_CONFIRMED:-0}" "$cmd" "${LC_ACCEPT_SUMMARY_RESET:-0}" "${LC_NO_CARRY:-0}" \
+        "${LC_ACCEPT_UNVERIFIED:-0}" "${LC_REVERT_CREDENTIALS:-0}" "$was" <<'PY'
+import json, sys
+dec, cmp_, res, sp = (json.load(open(p)) for p in sys.argv[1:5])
+engine, rpimg, fprime, cur, confirm, cmd = sys.argv[5:11]
+flags = dict(zip(("accept_summary_reset", "no_carry", "accept_unverified", "revert_credentials"),
+                 (x == "1" for x in sys.argv[11:15])))
+print(json.dumps({"restore_point": res.get("id"), "rp_root": res.get("root"),
+                  "files_snapshot": fprime, "current_version": cur, "plan": dec.get("plan"),
+                  "confirmed": confirm == "1", "flags": flags,
+                  "engine_image": engine, "rp_image": rpimg, "rp_images": res.get("images"),
+                  "keep_current_master": bool(dec.get("keep_current_master")),
+                  "reserve": sp.get("docker_reserve") or 0, "rb_cmd": cmd,
+                  "rb_was_running": sys.argv[15] == "1", "cause": "manual",
+                  "replaced": res.get("replaced")}))
+PY
+)
+    local rbsteps=$LC_ROLLBACK_STEPS
+    [ "${LC_INSTALLER:-release}" != quickstart ] || rbsteps=${rbsteps/rb-images/rb-qs-images}
+    if [ "$take" = takeover ]; then
+        lc_tool journal-handoff . --op rollback --cause interrupted-upgrade --restore-point "$rp" \
+            --files-snapshot "$fprime" --steps "${rbsteps// /,}" --done snapshot \
+            --extra "$extra" </dev/null >/dev/null
+    else
+        lc_journal_vars | lc_tool journal-new --dir . --op rollback --steps "${rbsteps// /,}" \
+            --done snapshot --from "$cur" --to "$rpv" --owner "$OWNER" --project "$LC_PROJECT" \
+            --snapshot "$fprime" --was-running "$was" --bridge "${LC_BRIDGE_CONTAINER:-}" \
+            --gateway "${LC_GATEWAY_CONTAINER:-}" --pin "${LC_PIN:-0}" \
+            --project-how "${LC_PROJECT_HOW:-}" --extra "$extra" >/dev/null
+    fi
+    rbdir="${LC_STATE_DIRNAME}/logs/rollback-$(lc_jget rb_id)"
+    (umask 077 && mkdir -p "$rbdir")
+    python3 -I -c 'import json, sys
+c = json.load(open(sys.argv[1])); d = json.load(open(sys.argv[2])); r = json.load(open(sys.argv[3]))
+out = {"format": 1, "restore_point": r.get("id"), "from_version": sys.argv[4], "to_version": r.get("from_version"),
+       "confirmed": sys.argv[5] == "1", "discards": c.get("discards"), "carries": c.get("carries"),
+       "not_carried": c.get("not_carried"), "summary_nodes": c.get("summary_nodes"),
+       "env_kept": c.get("env_kept"), "env_undone_with_upgrade": c.get("env_undone_with_upgrade"),
+       "needs_confirm": d.get("needs_confirm")}
+print(json.dumps(out, indent=1, sort_keys=True))' "$cmpf" "$decf" "$resf" "$cur" "${LC_CONFIRMED:-0}" \
+        >"$rbdir/plan.json"
+    chmod 0600 "$rbdir/plan.json"
+    lc_tool lock-owner . --op rollback --log "$(lc_jget log)" --pid "$$" </dev/null
+    echo "==> Rolling back to ${rpv} (restore point ${rp})"
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+# lc_facts_or_refuse IMAGE [ENV CONTAINER] — the facts of this install's
+# volumes in LC_FACTS_JSON, or a refusal: a facts run that failed, or a
+# reply without the markers and lifecycle entries, is unknown, never
+# "nothing left there" (exit 3, nothing changed).
+lc_facts_or_refuse() {
+    local img="${1:-none}"
+    shift
+    LC_FACTS_JSON=$(lc_engine "${img:-none}" "$LC_PROJECT" facts "$@" 2>/dev/null) || LC_FACTS_JSON=""
+    if ! python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(f, dict) and isinstance(f.get("lifecycle"), dict)
+         and isinstance(f.get("markers"), dict) else 1)' "${LC_FACTS_JSON:-x}"; then
+        lc_refuse "$(lc_here_cmd --status)" \
+            "the installer could not read this install's volumes (a facts run in ${img:-no image} failed), so it cannot tell whether an earlier restore left a marker or a copy there."
+    fi
+}
+
+# lc_rb_leftovers — M-RB-LEFTOVER: a marker, a staging directory or a
+# replaced copy not in phase done that no journal names.
+lc_rb_leftovers() {
+    local out
+    out=$(python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[1] or "{}")
+except ValueError:
+    f = {}
+lc = f.get("lifecycle") or {}
+for vol, m in sorted((f.get("markers") or {}).items()):
+    if m:
+        print("%s holds .sigrift-restore-incomplete (%s %s)" % (vol, m.get("op") or "?", m.get("id") or "?")); sys.exit()
+for s in lc.get("staging") or []:
+    print("%s holds .sigrift-restore-%s" % (s.get("volume"), s.get("id"))); sys.exit()
+for r in lc.get("replaced") or []:
+    if r.get("phase") != "done":
+        print("%s holds .sigrift-replaced-%s (phase %s)" % (r.get("volume"), r.get("id"), r.get("phase"))); sys.exit()' "${LC_FACTS_JSON:-}")
+    if [ -n "$out" ]; then
+        lc_refuse "$(lc_here_cmd --status)" "${out} from an earlier restore that no journal here names, so this run does not touch the data."
+    fi
+}
+
+# ── --snapshot (6.5) ─────────────────────────────────────────────────
+
+lc_snapshot_main() {
+    local engine was steps done="snapshot" rc=0 excl=""
+    lc_lock_acquire . snapshot
+    if [ ! -e .env ]; then
+        lc_refuse "$(lc_here_cmd --status)" "$(pwd -P) holds no SigRift release install."
+    fi
+    lc_identity "${LC_INSTALLER:-release}"
+    if [ "$LC_KIND" = held ]; then
+        lc_refuse "$(lc_here_cmd --status)" "$(pwd -P)/docker-compose.yml is the hold stub of an operation in progress."
+    fi
+    lc_tool journal-busy . --req "--snapshot" </dev/null
+    [ "${LC_DRY_RUN:-0}" = 1 ] || lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    engine=$(docker inspect --format '{{.Image}}' "${LC_BRIDGE_CONTAINER:-none}" 2>/dev/null || true)
+    [ -n "$engine" ] || engine=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${LC_FROM_VERSION:-$VERSION}")
+    lc_facts_or_refuse "$engine" .env "${LC_BRIDGE_CONTAINER:-}"
+    [ "${LC_INSTALLER:-release}" = release ] || lc_qs_state_init
+    lc_check_restore_marker
+    lc_rb_leftovers
+    # M-SNAPSHOT-DIR-UNSAFE before anything stops (the upgrade's preflight
+    # check, on the root rp-create will use).
+    lc_tool snapshot-dir-check . --project "$LC_PROJECT" \
+        --cmd "$(lc_in_here bash install-release.sh --snapshot)" </dev/null
+    excl=${LC_EXCLUDE:-}
+    lc_st space-plan --dir . --project "$LC_PROJECT" --image "$engine" --kind snapshot \
+        ${excl:+--exclude "$excl"} --cmd "$(lc_in_here bash install-release.sh --snapshot)" || exit "$?"
+    echo "==> Restore point plan$([ "${LC_DRY_RUN:-0}" = 1 ] && echo " (--dry-run: nothing was changed)")"
+    echo "  restore   ~$(lc_st_get rp | lc_human) in $(lc_st_get root); the stack stops while it is taken, then starts again unchanged"
+    [ "${LC_DRY_RUN:-0}" = 0 ] || exit 0
+    if ! lc_snapshot_files snapshot >/dev/null; then
+        lc_refuse "$(lc_in_here ls -la "${LC_STATE_DIRNAME}/")" \
+            "could not save a restore point of this folder's files before changing them."
+    fi
+    was=${LC_WAS_RUNNING:-0}
+    [ "$was" = 1 ] || done+=",start-bridge,start-rest"
+    steps=${LC_SNAPSHOT_STEPS// /,}
+    LC_TO_VERSION=${LC_FROM_VERSION:-$VERSION}
+    lc_journal_vars | lc_tool journal-new --dir . --op snapshot --steps "$steps" --done "$done" \
+        --from "$LC_TO_VERSION" --to "$LC_TO_VERSION" --owner "$OWNER" --project "$LC_PROJECT" \
+        --snapshot "$LC_SNAPSHOT_ID" --was-running "$was" --bridge "${LC_BRIDGE_CONTAINER:-}" \
+        --gateway "${LC_GATEWAY_CONTAINER:-}" --pin "${LC_PIN:-0}" \
+        --project-how "${LC_PROJECT_HOW:-}" \
+        --extra "{\"flags\": {\"exclude\": $(lc_json_str "$excl")}, \"snapshot_dir\": $(lc_json_str "$(lc_st_get root)")}" >/dev/null
+    lc_tool lock-owner . --op snapshot --log "$(lc_jget log)" --pid "$$" </dev/null
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+lc_step_unhold() {
+    # A moved folder keeps its move stub (G8; 6.1 marks this step done at
+    # creation for an export there, this is the guard behind it).
+    if [ -e "$(lc_state_path)/moved.json" ] && [ "$(lc_jget op)" = export ]; then
+        lc_op_progress "the move stub stays (the folder stays moved)"
+        return 0
+    fi
+    lc_unhold
+    lc_op_progress "the real compose file is back"
+}
+
+lc_step_snap_record() {
+    local rp
+    rp=$(lc_jget restore_point)
+    lc_tool write-host-record --dir . --op snapshot --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+        --from "$(lc_jget from_version)" --to "$(lc_jget to_version)" \
+        --installer "$(pwd -P)/install-release.sh" --installer-version "${INSTALLER_RELEASE:-dev}" \
+        --snapshot "$(lc_jget snapshot)" --with-journal --restore-point "$rp" </dev/null >/dev/null || true
+    lc_st rp-prune --dir . --protect "$rp" >/dev/null || true
+    lc_tool prune-snapshots . --keep 10 --protect "$(lc_jget snapshot)" </dev/null >/dev/null || true
+    lc_op_progress "records written"
+}
+
+# ── --rollback --finish (6.4) ────────────────────────────────────────
+
+lc_finish_main() {
+    local engine ids rc=0 total
+    lc_lock_acquire . finish
+    if [ ! -e .env ]; then
+        lc_refuse "$(lc_here_cmd --status)" "$(pwd -P) holds no SigRift release install."
+    fi
+    lc_identity "${LC_INSTALLER:-release}"
+    lc_tool journal-busy . --finish </dev/null
+    engine=$(docker inspect --format '{{.Image}}' "${LC_BRIDGE_CONTAINER:-none}" 2>/dev/null || true)
+    [ -n "$engine" ] || engine=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${LC_FROM_VERSION:-$VERSION}")
+    lc_facts_or_refuse "$engine"
+    ids=$(python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[1] or "{}")
+except ValueError:
+    f = {}
+seen = []
+for r in (f.get("lifecycle") or {}).get("replaced") or []:
+    if r.get("id") not in seen:
+        seen.append(r.get("id"))
+try:
+    rec = json.load(open(sys.argv[2]))
+except (OSError, ValueError):
+    rec = {}
+for x in rec.get("finish_pending") or []:
+    if isinstance(x, dict) and x.get("id") not in seen:
+        seen.append(x.get("id"))
+print(" ".join(seen))' "${LC_FACTS_JSON:-}" "${LC_STATE_DIRNAME}/install.json")
+    if [ -z "$ids" ]; then
+        echo "==> Nothing to finish: no rollback left a copy in $(pwd -P)'s volumes."
+        exit 0
+    fi
+    total=$(python3 -I -c 'import json, sys
+try:
+    f = json.loads(sys.argv[1] or "{}")
+except ValueError:
+    f = {}
+print(sum(r.get("bytes") or 0 for r in (f.get("lifecycle") or {}).get("replaced") or []))' "${LC_FACTS_JSON:-}")
+    if [ "${LC_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --rollback --finish would remove (--dry-run: nothing was changed): .sigrift-replaced-${ids// /, .sigrift-replaced-} from both data volumes ($(lc_human <<<"${total:-0}")); the running stack is not stopped."
+        exit 0
+    fi
+    lc_journal_vars | lc_tool journal-new --dir . --op finish --steps "${LC_FINISH_STEPS// /,}" \
+        --done "" --from "${LC_FROM_VERSION:-$VERSION}" --to "${LC_FROM_VERSION:-$VERSION}" \
+        --owner "$OWNER" --project "$LC_PROJECT" --was-running "${LC_WAS_RUNNING:-0}" \
+        --extra "{\"ids\": $(python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1].split()))' "$ids"), \"engine_image\": $(lc_json_str "$engine")}" >/dev/null
+    lc_run_journal_here || rc=$?
+    exit "$rc"
+}
+
+lc_step_finish_delete() {
+    local id total=0 b
+    for id in $(lc_tool journal-get . ids </dev/null | tr -d '[]",'); do
+        if ! lc_st_step finish --dir . --project "$LC_PROJECT" --image "$(lc_rb_engine)" --id "$id" >/dev/null; then
+            exit "$LC_EXIT_FAILED"
+        fi
+        b=$(lc_st_get freed_bytes)
+        total=$((total + ${b:-0}))
+    done
+    lc_tool journal-set . "bytes=${total}" </dev/null
+}
+
+lc_step_finish_record() {
+    local ids
+    ids=$(lc_tool journal-get . ids </dev/null | tr -d '[]" ')
+    if [ -e "${LC_STATE_DIRNAME}/install.json" ]; then
+        lc_tool write-host-record --dir . --op finish --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+            --from "$(lc_jget from_version)" --to "$(lc_jget to_version)" --cause manual \
+            --replaced "$ids" --finish-pending-clear "${ids},all" </dev/null >/dev/null || true
+    fi
+}
+
+# ── --list-snapshots (6.6) ───────────────────────────────────────────
+
+lc_list_snapshots() {
+    local args=(rp-list --dir .) project image rc=0
+    [ "${LC_JSON:-0}" = 0 ] || args+=(--json)
+    if [ "${LC_VERIFY:-0}" = 1 ]; then
+        if [ -n "${LC_VERIFY_ID:-}" ]; then args+=(--verify "$LC_VERIFY_ID"); else args+=(--verify); fi
+    fi
+    LC_FACTS_JSON='{}'
+    if lc_tool op-running . </dev/null; then
+        LC_FACTS_JSON=$(lc_tool cached-facts . </dev/null 2>/dev/null) || LC_FACTS_JSON='{}'
+    else
+        project=$(lc_tool project-of . </dev/null)
+        image=$(lc_tool engine-image --installer "${LC_INSTALLER:-release}" --project "$project" --dir . --bridge "" \
+            --owner "${OWNER:-}" --version "$(lc_tool installed-version . </dev/null)" </dev/null)
+        if [ -n "$image" ]; then
+            LC_FACTS_JSON=$(lc_engine "$image" "$project" facts 2>/dev/null) || LC_FACTS_JSON='{}'
+        fi
+    fi
+    [ -n "$LC_FACTS_JSON" ] || LC_FACTS_JSON='{}'
+    lc_st "${args[@]}" || rc=$?
+    return "$rc"
+}
+# <<< shared: restore
+
+# >>> shared: archive-engine (keep byte-identical in scripts/quickstart.sh and
+#     scripts/install-release.sh; scripts/tests/test_install_scripts.py checks)
+#
+# The archive engine (Phase 2): archive format v1 (docs/state-archive-format.md),
+# framed ops sent between the state engine's source and the lifecycle
+# engine's (one module): ar-wrap, ar-write, ar-verify, ar-probe, ar-stage
+# and import-rules. Its module level imports the standard library only;
+# cryptography's AESGCM and Argon2id are imported inside the ops that use
+# them. Every run that holds a passphrase or a data key gets it on stdin
+# only, in a container with --log-driver none, --network none and
+# --ulimit core=0.
+lc_archive_engine_source() {
+    cat <<'PY'
+"""SigRift archive engine (Phase 2): archive format v1.
+
+Printed by lc_engine_source between the state engine and the lifecycle
+engine (one module, one exec), so it runs in the bridge image like them
+and uses the state engine's frames, data sections and st_stage_volume.
+docs/state-archive-format.md is the normative text of the format; the
+names here follow it (header, prefix, wrap, wrap_check, write_salt,
+K_header, K_wrapcheck, K_metadata, K_segments, STREAM segments).
+
+The module level imports the standard library only. cryptography's
+AESGCM is imported inside ar_aead() and Argon2id inside ar_kdf(), so a
+bridge image without them fails one op with E no-crypto or E no-kdf.
+KDF, URANDOM and AEAD are indirections for the tests. Every ar-* op runs
+under ar_framed: an error carries its code, the fields named in
+phase2-spec 5.1 and fixed text, never a request field, a secret or an
+exception's text; ar-probe's data_key is the only secret a reply holds.
+"""
+
+import base64
+import errno
+import hashlib
+import hmac
+import json
+import os
+import re
+import struct
+import sys
+import tarfile
+import threading
+import time
+import zlib
+
+AR_MAGIC = b"SIGRIFT-ARCHIVE\x00"
+AR_FORMAT = 1
+AR_KDF_ARGON2ID = 2
+AR_AEAD_AESGCM = 1
+AR_PREFIX = 52
+AR_FIXED = 120
+AR_TAG = 16
+AR_META_MIN, AR_META_MAX = 17, 65552
+AR_META_JSON_MAX = 65536
+AR_SEG_MIN, AR_SEG_MAX = 65536, 4194304
+AR_MEM_MIN, AR_MEM_MAX = 16, 18
+AR_T_MAX, AR_LANES_MAX = 4, 4
+AR_MANIFEST_MAX = 16 << 20
+AR_NAME_MAX = 255
+AR_ZERO = b"\x00" * 12
+AR_LABEL = b"sigrift-archive v1 "
+AR_HEADER = struct.Struct(">16sHBBBB16sBBI7sBI48s16s")
+AR_NAME = re.compile(r"(manifest\.json|rf_rows\.json|files/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*"
+                     r"|volumes/(bridge_secrets|bridge_data|edge_data|opt-sigrift-pki)"
+                     r"\.(members\.json|tar\.gz))")
+AR_HEX64 = re.compile(r"[0-9a-f]{64}")
+AR_PARTS = ("bridge_secrets", "bridge_data", "edge_data", "opt-sigrift-pki")
+AR_PART_KEY = {"bridge_secrets": "secrets_dir", "bridge_data": "data_dir",
+               "edge_data": "edge_dir", "opt-sigrift-pki": "pki_dir"}
+
+# The fixed text of every code an ar-* E frame carries.
+AR_TEXT = {
+    "A-NOT-ARCHIVE": "the file is not a SigRift archive",
+    "A-FORMAT": "the archive is of another format",
+    "A-HEADER-DAMAGED": "the archive header is damaged",
+    "A-PARAMS": "the archive asks for parameters this reader does not accept",
+    "A-PASSPHRASE": "the passphrase does not open the archive",
+    "A-HEADER-AUTH": "the archive header fails authentication",
+    "A-METADATA": "the sealed metadata is not valid",
+    "A-LENGTH": "the archive length differs from what its header says",
+    "A-SEGMENT": "a segment fails authentication",
+    "A-ORDER": "a segment holds the data of another segment",
+    "A-TRUNCATED": "the stream ends before its last segment",
+    "A-TRAILING": "bytes follow the last segment",
+    "A-TAR": "the payload is not what the sealed list says",
+    "integrity": "the archive key, its wrap or the archive header do not match",
+    "no-crypto": "the cryptography package is missing",
+    "no-kdf": "Argon2id is missing from the cryptography package",
+    "no-space": "free space fell below the reserve",
+    "short-input": "the input ended early",
+    "phase": "the staging is not in the expected state",
+    "unsafe": "the request names an unknown part",
+}
+# The E fields that may accompany a code (phase2-spec 5.1; expected: the
+# length the header says, for A-LENGTH).
+AR_E_FIELDS = ("segment", "of", "held", "member", "why", "expected")
+
+
+class ArError(Exception):
+    """A refusal of an ar-* op: CODE is an A-* code (E archive) or an E
+    code. FIELDS are indexes and fixed tokens only."""
+
+    def __init__(self, code, **fields):
+        Exception.__init__(self, code)
+        self.code, self.fields = code, fields
+
+
+# -- primitives ---------------------------------------------------------------
+
+
+class ArAead(object):
+    """AES-256-GCM, one-shot (cryptography's AESGCM): encrypt, and decrypt
+    that returns None when the tag does not verify."""
+
+    def __init__(self, cls, invalid, key):
+        if len(key) != 32:
+            raise ArError("integrity")
+        self.g, self.invalid = cls(key), invalid
+
+    def encrypt(self, nonce, data, aad):
+        assert len(nonce) == 12
+        return self.g.encrypt(nonce, data, aad)
+
+    def decrypt(self, nonce, data, aad):
+        assert len(nonce) == 12
+        try:
+            return self.g.decrypt(nonce, data, aad)
+        except self.invalid:
+            return None
+
+
+def ar_aead(key):
+    try:
+        from cryptography.exceptions import InvalidTag
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        raise ArError("no-crypto")
+    return ArAead(AESGCM, InvalidTag, key)
+
+
+def ar_kdf(password, salt, mem_log2, t, lanes):
+    """KEK = Argon2id (RFC 9106, version 0x13): memory 2^mem_log2 KiB,
+    T passes, LANES lanes, 32 bytes, no secret and no associated data."""
+    try:
+        from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+    except ImportError:
+        raise ArError("no-kdf")
+    return Argon2id(salt=salt, length=32, iterations=t, lanes=lanes,
+                    memory_cost=1 << mem_log2).derive(password)
+
+
+KDF = ar_kdf
+URANDOM = os.urandom
+AEAD = ar_aead
+
+
+def ar_hkdf(salt, ikm, info, length=32):
+    """HKDF-SHA256 (RFC 5869) with the standard library's hmac."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    okm, t, i = b"", b"", 1
+    while len(okm) < length:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        okm += t
+        i += 1
+    return okm[:length]
+
+
+def ar_subkeys(salt, dk, write_salt=None):
+    """K_header and K_wrapcheck from DK; K_metadata and K_segments also
+    from the write attempt's WRITE_SALT."""
+    keys = {"header": ar_hkdf(salt, dk, AR_LABEL + b"header"),
+            "wrapcheck": ar_hkdf(salt, dk, AR_LABEL + b"wrapcheck")}
+    if write_salt is not None:
+        keys["metadata"] = ar_hkdf(salt, dk, AR_LABEL + b"metadata" + write_salt)
+        keys["segments"] = ar_hkdf(salt, dk, AR_LABEL + b"segments" + write_salt)
+    return keys
+
+
+def ar_wrap_check(dk, salt, prefix, wrapped):
+    return hmac.new(ar_subkeys(salt, dk)["wrapcheck"], prefix + wrapped,
+                    hashlib.sha256).digest()
+
+
+def ar_seg_ok(s):
+    return AR_SEG_MIN <= s <= AR_SEG_MAX and not s & (s - 1)
+
+
+def ar_params_ok(kdf_id, mem_log2, t, lanes, segment_size, aead_id=1, flags=0, reserved=0):
+    return (kdf_id == AR_KDF_ARGON2ID and aead_id == AR_AEAD_AESGCM and flags == 0
+            and reserved == 0 and AR_MEM_MIN <= mem_log2 <= AR_MEM_MAX
+            and 1 <= t <= AR_T_MAX and 1 <= lanes <= AR_LANES_MAX and ar_seg_ok(segment_size))
+
+
+def ar_prefix(mem_log2, t, lanes, salt, segment_size, nonce_prefix):
+    """header[0:52]: every field before meta_len (the wrap's AAD)."""
+    return (AR_MAGIC + struct.pack(">HBBBB", AR_FORMAT, AR_KDF_ARGON2ID, mem_log2, t, lanes)
+            + salt + struct.pack(">BBI", AR_AEAD_AESGCM, 0, segment_size) + nonce_prefix
+            + b"\x00")
+
+
+def ar_int(x):
+    if type(x) is not int:
+        raise ArError("integrity")
+    return x
+
+
+def ar_b64(text, n=None):
+    try:
+        b = base64.b64decode(str(text or ""), validate=True)
+    except (ValueError, TypeError):
+        raise ArError("integrity")
+    if n is not None and len(b) != n:
+        raise ArError("integrity")
+    return b
+
+
+def ar_e64(b):
+    return base64.b64encode(b).decode("ascii")
+
+
+def ar_crypto_versions():
+    out = {"cryptography": "unknown", "openssl": "unknown"}
+    try:
+        import cryptography
+        out["cryptography"] = str(cryptography.__version__)
+        from cryptography.hazmat.backends.openssl.backend import backend
+        out["openssl"] = str(backend.openssl_version_text())
+    except Exception:  # a version string is a note, never a failure
+        pass
+    return out
+
+
+# -- the header (phase2-spec 3.2, 3.7 steps 1-5) -------------------------------
+
+
+def ar_header_len(buf, file_len):
+    """Steps 1-3 on the first 56 bytes: -> H."""
+    if file_len < 56 or len(buf) < 56 or buf[:16] != AR_MAGIC:
+        raise ArError("A-NOT-ARCHIVE")
+    if struct.unpack(">H", buf[16:18])[0] != AR_FORMAT:
+        raise ArError("A-FORMAT")
+    m = struct.unpack(">I", buf[52:56])[0]
+    if not AR_META_MIN <= m <= AR_META_MAX:
+        raise ArError("A-HEADER-DAMAGED", why="field")
+    return 184 + m
+
+
+def ar_parse(buf, file_len):
+    """Steps 1-5 on header bytes BUF of a file of FILE_LEN bytes: -> the
+    header's fields; nothing is derived before the bounds hold."""
+    H = ar_header_len(buf, file_len)
+    if file_len < H or len(buf) < H:
+        raise ArError("A-HEADER-DAMAGED", why="short")
+    hdr = bytes(buf[:H])
+    m = H - 184
+    if hashlib.sha256(hdr[:152 + m]).digest() != hdr[152 + m:]:
+        raise ArError("A-HEADER-DAMAGED", why="checksum")
+    (_magic, _fmt, kdf_id, mem, t, lanes, salt, aead_id, flags, seg, nprefix, reserved, _m,
+     wrapped, write_salt) = AR_HEADER.unpack(hdr[:AR_FIXED])
+    if not ar_params_ok(kdf_id, mem, t, lanes, seg, aead_id, flags, reserved):
+        raise ArError("A-PARAMS")
+    return {"H": H, "m": m, "header": hdr, "kdf_id": kdf_id, "mem_log2": mem, "t": t,
+            "lanes": lanes, "salt": salt, "segment_size": seg, "nonce_prefix": nprefix,
+            "wrapped": wrapped, "write_salt": write_salt, "mac": hdr[120 + m:152 + m],
+            "checksum": hdr[152 + m:]}
+
+
+def ar_read_exact(src, n):
+    parts, left = [], n
+    while left > 0:
+        b = src.read(min(left, ST_FRAME_MAX))  # noqa: F821 - state engine
+        if not b:
+            break
+        parts.append(b)
+        left -= len(b)
+    return b"".join(parts)
+
+
+def ar_read_header(src, file_len):
+    """The header from the start of an archive stream (steps 1-5)."""
+    head = ar_read_exact(src, 56)
+    H = ar_header_len(head, file_len)
+    return ar_parse(head + ar_read_exact(src, H - 56), file_len)
+
+
+def ar_unlock(h, passphrase):
+    """Step 6: the KDF (any exception from it: A-PARAMS), then the unwrap."""
+    try:
+        kek = KDF(passphrase, h["salt"], h["mem_log2"], h["t"], h["lanes"])
+    except ArError:
+        raise
+    except Exception:
+        raise ArError("A-PARAMS")
+    dk = AEAD(kek).decrypt(AR_ZERO, h["wrapped"], h["header"][:AR_PREFIX])
+    if dk is None or len(dk) != 32:
+        raise ArError("A-PASSPHRASE")
+    return dk
+
+
+def ar_mac_ok(h, dk):
+    """Step 7 (hmac.compare_digest): -> the subkeys, or None."""
+    keys = ar_subkeys(h["salt"], dk, h["write_salt"])
+    mac = hmac.new(keys["header"], h["header"][:120 + h["m"]], hashlib.sha256).digest()
+    return keys if hmac.compare_digest(mac, h["mac"]) else None
+
+
+def ar_strict_json(b):
+    def pairs(kv):
+        d = {}
+        for k, v in kv:
+            if k in d:
+                raise ValueError("duplicate key")
+            d[k] = v
+        return d
+
+    def const(_x):
+        raise ValueError("not a number")
+    return json.loads(b.decode("utf-8"), object_pairs_hook=pairs, parse_constant=const)
+
+
+def ar_members_ok(members, payload_bytes=None):
+    """3.6's grammar, order and uniqueness; sizes ints; -> the volume parts."""
+    if not isinstance(members, list) or len(members) < 2:
+        return None
+    names = []
+    total = 0
+    for m in members:
+        if not isinstance(m, dict) or set(m) != {"n", "s", "h"}:
+            return None
+        n, s, h = m["n"], m["s"], m["h"]
+        if type(n) is not str or len(n.encode("utf-8")) > AR_NAME_MAX \
+                or not AR_NAME.fullmatch(n) or any(c in (".", "..") for c in n.split("/")):
+            return None
+        if type(s) is not int or s < 0 or type(h) is not str or not AR_HEX64.fullmatch(h):
+            return None
+        names.append(n)
+        total += s
+    if len(set(names)) != len(names) or names[0] != "manifest.json" \
+            or names[1] != "rf_rows.json" or members[0]["s"] > AR_MANIFEST_MAX \
+            or members[0]["s"] < 1:
+        return None
+    i = 2
+    while i < len(names) and names[i].startswith("files/"):
+        i += 1
+    parts = []
+    while i < len(names):
+        mm = re.fullmatch(r"volumes/([a-z_-]+)\.members\.json", names[i])
+        if not mm or i + 1 >= len(names) or names[i + 1] != "volumes/%s.tar.gz" % mm.group(1):
+            return None
+        parts.append(mm.group(1))
+        i += 2
+    order = [p for p in AR_PARTS if p in parts]
+    if parts != order or "bridge_secrets" not in parts or "bridge_data" not in parts:
+        return None
+    if payload_bytes is not None and total != payload_bytes:
+        return None
+    return parts
+
+
+def ar_metadata_ok(meta, segment_size):
+    if not isinstance(meta, dict) or meta.get("format") != 1 or type(meta.get("format")) is not int:
+        return False
+    pb, n = meta.get("payload_bytes"), meta.get("segments")
+    if type(pb) is not int or type(n) is not int or pb < 1:
+        return False
+    if n != -(-pb // segment_size) or not 1 <= n < (1 << 32):
+        return False
+    return ar_members_ok(meta.get("members"), pb) is not None
+
+
+def ar_open_metadata(h, keys):
+    """Step 8: the sealed metadata, decrypted and strictly parsed."""
+    m = h["m"]
+    plain = AEAD(keys["metadata"]).decrypt(AR_ZERO, h["header"][AR_FIXED:AR_FIXED + m],
+                                           h["header"][:AR_FIXED])
+    if plain is None:
+        raise ArError("A-METADATA")
+    try:
+        meta = ar_strict_json(plain)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise ArError("A-METADATA")
+    if not ar_metadata_ok(meta, h["segment_size"]):
+        raise ArError("A-METADATA")
+    return meta
+
+
+def ar_expected_len(h, meta):
+    return h["H"] + meta["payload_bytes"] + AR_TAG * meta["segments"]
+
+
+# -- segments (3.4, 3.7 steps 10-11) ------------------------------------------
+
+
+class ArStream(object):
+    """The payload of one archive, read from SRC (the bytes after the
+    header) one segment at a time; a segment's plaintext is released only
+    after its tag verified. read(n) gives the next payload bytes."""
+
+    def __init__(self, src, h, keys, meta, out):
+        self.src, self.h, self.out = src, h, out
+        self.S, self.n, self.pb = h["segment_size"], meta["segments"], meta["payload_bytes"]
+        self.aead = AEAD(keys["segments"])
+        self.aad = h["checksum"]
+        self.i, self.buf, self.pos = 0, b"", 0
+        self.decrypted = 0
+
+    def seg_len(self, i):
+        return self.S if i < self.n - 1 else self.pb - self.S * (self.n - 1)
+
+    def nonce(self, i, last):
+        return self.h["nonce_prefix"] + struct.pack(">I", i) + (b"\x01" if last else b"\x00")
+
+    def segment(self):
+        i = self.i
+        ct = ar_read_exact(self.src, self.seg_len(i) + AR_TAG)
+        if len(ct) < self.seg_len(i) + AR_TAG:
+            raise ArError("A-TRUNCATED", segment=i, of=self.n)
+        last = i == self.n - 1
+        pt = self.aead.decrypt(self.nonce(i, last), ct, self.aad)
+        self.decrypted += 1
+        if pt is None:
+            self.diagnose(i, ct)
+        self.i += 1
+        self.out.step(nbytes=0, n=1)
+        return pt
+
+    def diagnose(self, i, ct):
+        """At most 17 extra decryptions of this one segment's bytes."""
+        last = i == self.n - 1
+        if self.aead.decrypt(self.nonce(i, not last), ct, self.aad) is not None:
+            raise ArError("A-TRUNCATED", segment=i, of=self.n)
+        for j in range(max(0, i - 8), min(self.n, i + 9)):
+            if j != i and self.aead.decrypt(self.nonce(j, j == self.n - 1), ct,
+                                            self.aad) is not None:
+                raise ArError("A-ORDER", segment=i, held=j, of=self.n)
+        raise ArError("A-SEGMENT", segment=i, of=self.n)
+
+    def read(self, size):
+        while self.pos >= len(self.buf):
+            if self.i >= self.n:
+                return b""
+            self.buf, self.pos = self.segment(), 0
+        b = self.buf[self.pos:self.pos + size]
+        self.pos += len(b)
+        return b
+
+    def done(self):
+        return self.i >= self.n and self.pos >= len(self.buf)
+
+
+def ar_trailing(src):
+    """Step 11: EOF after the last segment."""
+    if src.read(1):
+        raise ArError("A-TRAILING")
+
+
+class ArMember(object):
+    """Member INDEX of the payload as a reader of exactly its size, hashed;
+    finish() checks its sha256 against the sealed list (A-TAR)."""
+
+    def __init__(self, stream, members, index):
+        self.stream, self.index = stream, index
+        self.m = members[index]
+        self.left = self.m["s"]
+        self.h = hashlib.sha256()
+        self.n = 0
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = self.left
+        size = min(size, self.left)
+        parts = []
+        while size > 0:
+            b = self.stream.read(min(size, ST_FRAME_MAX))  # noqa: F821
+            if not b:
+                raise ArError("A-TRUNCATED", segment=self.stream.i, of=self.stream.n)
+            parts.append(b)
+            size -= len(b)
+            self.left -= len(b)
+        data = b"".join(parts)
+        self.h.update(data)
+        self.n += len(data)
+        return data
+
+    def drain(self):
+        while self.left:
+            self.read(ST_FRAME_MAX)  # noqa: F821
+        return self.h.hexdigest(), self.n
+
+    def finish(self):
+        self.drain()
+        if self.h.hexdigest() != self.m["h"]:
+            raise ArError("A-TAR", member=self.index, why="sha256")
+
+
+class ArBlob(object):
+    """Bytes as a members reader for st_stage_volume."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def read(self, size=-1):
+        return self.data
+
+    def drain(self):
+        return hashlib.sha256(self.data).hexdigest(), len(self.data)
+
+
+def ar_check_volume(blob, reader, out):
+    """A part's tar.gz read through and walked against its members file
+    without writing (1b verify-staged's comparison): StError on a mismatch."""
+    members = st_members(blob)  # noqa: F821
+    tar = tarfile.open(fileobj=reader, mode="r|gz")
+    i = 0
+    for ti in tar:
+        if i >= len(members):
+            raise StError("integrity", "more members than the members file")  # noqa: F821
+        m = members[i]
+        i += 1
+        rel = ti.name.rstrip("/") if ti.isdir() else ti.name
+        if rel != m["p"] or "%04o" % ti.mode != m["m"]:
+            raise StError("integrity", "a member differs from its line")  # noqa: F821
+        if not st_safe_rel(rel, (), ()):  # noqa: F821
+            raise StError("unsafe", "a member may not be restored")  # noqa: F821
+        if ti.isdir():
+            ok = m["t"] == "d"
+        elif ti.issym():
+            ok = m["t"] == "l" and ti.linkname == m.get("l")
+        elif ti.isreg() and ti.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+            ok = m["t"] == "f" and ti.size == m.get("s")
+            if ok:
+                hh = hashlib.sha256()
+                f = tar.extractfile(ti)
+                for b in iter(lambda: f.read(ST_FRAME_MAX), b""):  # noqa: F821
+                    hh.update(b)
+                ok = hh.hexdigest() == m.get("h")
+        else:
+            raise StError("unsafe", "a hard link, a device or a FIFO")  # noqa: F821
+        if not ok:
+            raise StError("integrity", "a member differs from its line")  # noqa: F821
+        out.step(members=1)
+    tar.close()
+    if i != len(members):
+        raise StError("integrity", "members missing")  # noqa: F821
+
+
+# -- framing -------------------------------------------------------------------
+
+
+def ar_excepthook(t, _v, _tb):
+    sys.stderr.write("engine: %s\n" % getattr(t, "__name__", "error"))
+
+
+def ar_error(out, code, fields, typename=None):
+    e = {"format": 1, "ok": False, "code": "archive" if code.startswith("A-") else code,
+         "error": AR_TEXT.get(code) or typename or "error", "where": out.phase}
+    if code.startswith("A-"):
+        e["archive_error"] = code
+    if code == "A-LENGTH" and type((fields or {}).get("segments")) is int:
+        e["of"] = fields["segments"]
+    for k in AR_E_FIELDS:
+        v = (fields or {}).get(k)
+        if type(v) is int or (k == "why" and type(v) is str and re.fullmatch(r"[a-z0-9-]{1,40}", v)):
+            e[k] = v
+    out.frame(b"E", json.dumps(e, sort_keys=True).encode())
+
+
+def ar_framed(fn):
+    """Run ar-* op FN(req, out) with frames, a heartbeat and one terminal
+    frame; nothing but a code, the 5.1 fields and fixed text (or an
+    exception's type name) leaves on an error."""
+
+    def op(req):
+        sys.excepthook = ar_excepthook
+        threading.excepthook = lambda a: ar_excepthook(a.exc_type, None, None)
+        out = StOut(st_stdout())  # noqa: F821
+        beat = threading.Thread(target=out.heartbeat, daemon=True)
+        beat.start()
+        try:
+            try:
+                reply = fn(req, out)
+            except ArError as e:
+                ar_error(out, e.code, e.fields)
+                raise SystemExit(1)
+            except StError as e:  # noqa: F821
+                ar_error(out, e.code if e.code in AR_TEXT else "io", {}, type(e).__name__)
+                raise SystemExit(1)
+            except SystemExit:
+                raise
+            except BaseException as e:
+                code = "no-space" if isinstance(e, OSError) and e.errno == errno.ENOSPC else "io"
+                ar_error(out, code, {}, type(e).__name__)
+                raise SystemExit(1)
+            out.reply(reply)
+        finally:
+            out.stop.set()
+            beat.join(5)
+        return None
+    return op
+
+
+# -- ar-wrap (5.1) ---------------------------------------------------------------
+
+
+def ar_op_wrap(req, out):
+    passphrase = ar_b64(req.get("passphrase_b64"))
+    dk = ar_b64(req.get("data_key"))
+    if len(dk) != 32:
+        raise ArError("integrity")
+    k = req.get("kdf") or {}
+    mem, t, lanes = ar_int(k.get("mem_log2")), ar_int(k.get("t")), ar_int(k.get("lanes"))
+    seg = ar_int(req.get("segment_size"))
+    if not ar_params_ok(AR_KDF_ARGON2ID, mem, t, lanes, seg):
+        raise ArError("A-PARAMS")
+    salt = URANDOM(16)
+    nonce_prefix = URANDOM(7)
+    prefix = ar_prefix(mem, t, lanes, salt, seg, nonce_prefix)
+    out.step(phase="kdf")
+    t0 = time.time()
+    try:
+        kek = KDF(passphrase, salt, mem, t, lanes)
+    except ArError:
+        raise
+    except Exception:
+        raise ArError("A-PARAMS")
+    seconds = time.time() - t0
+    a = AEAD(kek)
+    wrapped = a.encrypt(AR_ZERO, dk, prefix)
+    if len(wrapped) != 48 or a.decrypt(AR_ZERO, wrapped, prefix) != dk:
+        raise ArError("integrity")
+    return {"format": 1, "ok": True, "op": "ar-wrap", "salt": salt.hex(),
+            "kdf": {"id": AR_KDF_ARGON2ID, "mem_log2": mem, "t": t, "lanes": lanes},
+            "segment_size": seg, "prefix": ar_e64(prefix), "wrapped": ar_e64(wrapped),
+            "wrap_check": ar_wrap_check(dk, salt, prefix, wrapped).hex(),
+            "nonce_prefix": nonce_prefix.hex(), "seconds": round(seconds, 3),
+            "crypto": ar_crypto_versions()}
+
+
+def ar_hex_eq(have, want):
+    """hmac.compare_digest of two hex texts; WANT that is not ASCII text
+    (a damaged wrap.json) is unequal, so the op answers E integrity."""
+    try:
+        return hmac.compare_digest(have.encode("ascii"), str(want or "").encode("ascii"))
+    except UnicodeEncodeError:
+        return False
+
+
+def ar_wrap_parts(wrap, dk):
+    """(prefix, wrapped, salt, S, nonce prefix) of wrap.json, its
+    wrap_check verified under DK first (E integrity)."""
+    if len(dk) != 32 or not isinstance(wrap, dict):
+        raise ArError("integrity")
+    prefix, wrapped = ar_b64(wrap.get("prefix"), AR_PREFIX), ar_b64(wrap.get("wrapped"), 48)
+    want = wrap.get("wrap_check")
+    salt = prefix[22:38]
+    if not ar_hex_eq(ar_wrap_check(dk, salt, prefix, wrapped).hex(), want):
+        raise ArError("integrity")
+    (magic, fmt, kdf_id, mem, t, lanes) = struct.unpack(">16sHBBBB", prefix[:22])
+    aead_id, flags, seg = struct.unpack(">BBI", prefix[38:44])
+    if magic != AR_MAGIC or fmt != AR_FORMAT or prefix[51] != 0 or \
+            not ar_params_ok(kdf_id, mem, t, lanes, seg, aead_id, flags):
+        raise ArError("integrity")
+    return prefix, wrapped, salt, seg, prefix[44:51]
+
+
+# -- ar-write (5.1) ----------------------------------------------------------------
+
+
+def ar_metadata_bytes(meta):
+    return json.dumps(meta, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def ar_op_write(req, out):
+    dk = ar_b64(req.get("data_key"))
+    wrap = req.get("wrap") or {}
+    prefix, wrapped, salt, seg, nprefix = ar_wrap_parts(wrap, dk)
+    members = req.get("members")
+    if ar_members_ok(members) is None:
+        raise ArError("integrity")
+    members = [{"n": m["n"], "s": m["s"], "h": m["h"]} for m in members]
+    write_salt = URANDOM(16)
+    keys = ar_subkeys(salt, dk, write_salt)
+    pb = sum(m["s"] for m in members)
+    n = -(-pb // seg)
+    if not 1 <= n < (1 << 32):
+        raise ArError("integrity")
+    meta = dict(req.get("metadata") or {})
+    meta.update({"format": 1, "archive_id": wrap.get("archive_id"),
+                 "created_at": wrap.get("created_at"), "crypto": wrap.get("crypto"),
+                 "payload_bytes": pb, "segments": n, "members": members})
+    mjson = ar_metadata_bytes(meta)
+    if len(mjson) > AR_META_JSON_MAX:
+        raise ArError("integrity")
+    m = len(mjson) + AR_TAG
+    fixed = prefix + struct.pack(">I", m) + wrapped + write_salt
+    sealed = AEAD(keys["metadata"]).encrypt(AR_ZERO, mjson, fixed)
+    body = fixed + sealed
+    mac = hmac.new(keys["header"], body, hashlib.sha256).digest()
+    checksum = hashlib.sha256(body + mac).digest()
+    header = body + mac + checksum
+    data = StData(out)  # noqa: F821
+    data.write(header)
+    data.flush_frames(final=True)
+    out.step(phase="encrypt")
+    aead = AEAD(keys["segments"])
+    stdin = st_stdin()  # noqa: F821
+    buf = bytearray()
+    i = 0
+
+    def emit(chunk, idx):
+        last = idx == n - 1
+        data.write(aead.encrypt(nprefix + struct.pack(">I", idx) + (b"\x01" if last else b"\x00"),
+                                bytes(chunk), checksum))
+
+    for idx, mem in enumerate(members):
+        sec = StSection(stdin, out)  # noqa: F821
+        h = hashlib.sha256()
+        got = 0
+        while True:
+            b = sec.read(ST_FRAME_MAX)  # noqa: F821
+            if not b:
+                break
+            got += len(b)
+            if got > mem["s"]:
+                raise ArError("A-TAR", member=idx, why="size")
+            h.update(b)
+            buf += b
+            while len(buf) >= seg and i < n - 1:
+                emit(buf[:seg], i)
+                del buf[:seg]
+                i += 1
+        if got != mem["s"] or h.hexdigest() != mem["h"]:
+            raise ArError("A-TAR", member=idx, why="sha256" if got == mem["s"] else "size")
+    if i != n - 1 or not 1 <= len(buf) <= seg:
+        raise ArError("integrity")
+    emit(buf, i)
+    data.close()
+    if data.total != len(header) + pb + AR_TAG * n:
+        raise ArError("integrity")
+    return {"format": 1, "ok": True, "op": "ar-write", "archive_bytes": data.total,
+            "archive_sha256": data.h.hexdigest(), "header_checksum": checksum.hex(),
+            "segments": n, "payload_bytes": pb}
+
+
+# -- ar-verify (5.1) --------------------------------------------------------------
+
+
+def ar_walk(stream, meta, out, on_member):
+    """Every member of the payload, in order: ON_MEMBER(index, reader)
+    consumes it (or not); each member's sha256 is checked after it."""
+    members = meta["members"]
+    for i in range(len(members)):
+        r = ArMember(stream, members, i)
+        on_member(i, r)
+        r.finish()
+        out.step(members=1)
+
+
+def ar_op_verify(req, out):
+    dk = ar_b64(req.get("data_key"))
+    if len(dk) != 32:
+        raise ArError("integrity")
+    total = ar_int(req.get("archive_bytes"))
+    src = StSection(st_stdin(), out)  # noqa: F821
+    out.step(phase="header")
+    h = ar_read_header(src, total)
+    if not ar_hex_eq(ar_wrap_check(dk, h["salt"], h["header"][:AR_PREFIX],
+                                   h["wrapped"]).hex(), req.get("wrap_check")):
+        raise ArError("integrity")
+    if h["checksum"].hex() != req.get("header_checksum"):
+        raise ArError("A-HEADER-DAMAGED", why="checksum")
+    keys = ar_mac_ok(h, dk)
+    if keys is None:
+        raise ArError("A-HEADER-AUTH")
+    meta = ar_open_metadata(h, keys)
+    if ar_expected_len(h, meta) != total:
+        raise ArError("A-LENGTH", expected=ar_expected_len(h, meta), segments=meta["segments"])
+    if meta["members"] != req.get("members"):
+        raise ArError("A-TAR", why="list")
+    stream = ArStream(src, h, keys, meta, out)
+    out.step(phase="verify")
+    blobs = {}
+
+    def on_member(i, r):
+        name = meta["members"][i]["n"]
+        if name.endswith(".members.json"):
+            blobs[name[:-len(".members.json")]] = r.read()
+        elif name.endswith(".tar.gz"):
+            try:
+                ar_check_volume(blobs.pop(name[:-len(".tar.gz")], b""), r, out)
+            except StError as e:  # noqa: F821
+                raise ArError("A-TAR", member=i, why="inner-" + e.code)
+            except (tarfile.TarError, EOFError, zlib.error, ValueError):
+                raise ArError("A-TAR", member=i, why="inner-tar")
+    ar_walk(stream, meta, out, on_member)
+    ar_trailing(src)
+    return {"format": 1, "ok": True, "op": "ar-verify", "segments": meta["segments"],
+            "members": len(meta["members"])}
+
+
+# -- ar-probe (5.1) ---------------------------------------------------------------
+
+
+def ar_op_probe(req, out):
+    passphrase = ar_b64(req.get("passphrase_b64"))
+    header = ar_b64(req.get("header"))
+    total = ar_int(req.get("archive_bytes"))
+    out.step(phase="header")
+    h = ar_parse(header, total)
+    if len(header) != h["H"]:
+        raise ArError("A-HEADER-DAMAGED", why="short")
+    out.step(phase="kdf")
+    dk = ar_unlock(h, passphrase)
+    keys = ar_mac_ok(h, dk)
+    if keys is None:
+        raise ArError("A-HEADER-AUTH")
+    meta = ar_open_metadata(h, keys)
+    if ar_expected_len(h, meta) != total:
+        raise ArError("A-LENGTH", expected=ar_expected_len(h, meta), segments=meta["segments"])
+    src = StSection(st_stdin(), out)  # noqa: F821
+    stream = ArStream(src, h, keys, meta, out)
+    out.step(phase="probe")
+    members = meta["members"]
+    man = ArMember(stream, members, 0)
+    data = StData(out)  # noqa: F821
+    while man.left:
+        data.write(man.read(ST_FRAME_MAX))  # noqa: F821
+    data.close()
+    man.finish()
+    rf = ArMember(stream, members, 1)
+    rf.finish()
+    reply = {"format": 1, "ok": True, "op": "ar-probe", "metadata": meta,
+             "manifest_sha256": man.h.hexdigest(), "rf_rows_sha256": rf.h.hexdigest(),
+             "header_checksum": h["checksum"].hex(), "segments_read": stream.decrypted}
+    if req.get("want_key") is True:
+        reply["data_key"] = ar_e64(dk)
+    return reply
+
+
+# -- ar-stage (5.1) ---------------------------------------------------------------
+
+
+def ar_op_stage(req, out):
+    dk = ar_b64(req.get("data_key"))
+    if len(dk) != 32:
+        raise ArError("integrity")
+    total = ar_int(req.get("archive_bytes"))
+    rb = st_rb_id(req)  # noqa: F821
+    reserve = int(req.get("reserve_bytes") or 0)
+    parts = {}
+    for p in req.get("parts") or []:
+        if not isinstance(p, dict) or p.get("name") not in AR_PARTS or \
+                p.get("action") not in ("stage", "host", "verify"):
+            raise ArError("unsafe")
+        if p["action"] == "stage" and not req.get(AR_PART_KEY[p["name"]]):
+            raise ArError("unsafe")
+        parts[p["name"]] = p["action"]
+    src = StSection(st_stdin(), out)  # noqa: F821
+    out.step(phase="header")
+    h = ar_read_header(src, total)
+    if h["checksum"].hex() != req.get("header_checksum"):
+        raise ArError("integrity", why="header-checksum")
+    keys = ar_mac_ok(h, dk)
+    if keys is None:
+        # The stored key does not open this header: no segment is read.
+        raise ArError("integrity", why="mac")
+    meta = ar_open_metadata(h, keys)
+    if ar_expected_len(h, meta) != total:
+        raise ArError("A-LENGTH", expected=ar_expected_len(h, meta), segments=meta["segments"])
+    stream = ArStream(src, h, keys, meta, out)
+    members = meta["members"]
+    data = StData(out)  # noqa: F821
+    made, staged, verified, host = [], [], [], []
+    ctx = {"manifest": None, "blobs": {}}
+
+    def emit(r):
+        while r.left:
+            data.write(r.read(ST_FRAME_MAX))  # noqa: F821
+
+    def vol_entry(part, i):
+        for v in (ctx["manifest"] or {}).get("volumes") or []:
+            if isinstance(v, dict) and v.get("name") == part:
+                return v
+        raise ArError("A-TAR", member=i, why="manifest")
+
+    def on_member(i, r):
+        name = members[i]["n"]
+        if i == 0:
+            raw = r.read()
+            data.write(raw)
+            if hashlib.sha256(raw).hexdigest() != req.get("manifest_sha256"):
+                raise ArError("integrity", why="manifest")
+            try:
+                ctx["manifest"] = ar_strict_json(raw)
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                raise ArError("A-METADATA")
+            if not isinstance(ctx["manifest"], dict):
+                raise ArError("A-METADATA")
+            host.append(name)
+            return
+        if not name.startswith("volumes/"):
+            emit(r)
+            host.append(name)
+            return
+        part, kind = name[len("volumes/"):].split(".", 1)
+        action = parts.get(part, "verify")
+        v = vol_entry(part, i)
+        if kind == "members.json":
+            if members[i]["h"] != v.get("members_file_sha256"):
+                raise ArError("A-TAR", member=i, why="manifest")
+            blob = r.read()
+            ctx["blobs"][part] = blob
+            if action == "host":
+                data.write(blob)
+                host.append(name)
+            return
+        if members[i]["h"] != v.get("archive_sha256") or members[i]["s"] != v.get(
+                "archive_bytes"):
+            raise ArError("A-TAR", member=i, why="manifest")
+        blob = ctx["blobs"].get(part, b"")
+        expect = {"restore_point": ctx["manifest"].get("id"), "volume": part,
+                  "members_file_sha256": v.get("members_file_sha256"),
+                  "archive_sha256": v.get("archive_sha256"),
+                  "archive_bytes": v.get("archive_bytes"), "keep_back": v.get("keep_back"),
+                  "excludes": v.get("excludes")}
+        try:
+            if action == "host":
+                emit(r)
+                host.append(name)
+            elif action == "stage":
+                root = req[AR_PART_KEY[part]]
+                S = os.path.join(root, ST_RESTORE + rb)  # noqa: F821
+                if st_staged_ok(S, expect):  # noqa: F821
+                    ar_check_volume(blob, r, out)
+                    staged.append({"volume": part, "members": len(st_members(blob)),  # noqa
+                                   "bytes": 0, "already": True})
+                else:
+                    made.append(S)
+                    res = st_stage_volume(root, rb, ArBlob(blob), r, expect, reserve,  # noqa
+                                          out, owners=part == "opt-sigrift-pki")
+                    staged.append({"volume": part, "members": res["members"],
+                                   "bytes": res["bytes"], "already": False})
+            else:
+                ar_check_volume(blob, r, out)
+                verified.append(part)
+        except StError as e:  # noqa: F821
+            if e.code == "no-space":
+                raise
+            raise ArError("A-TAR", member=i, why="inner-" + e.code)
+        except (tarfile.TarError, EOFError, zlib.error, ValueError):
+            raise ArError("A-TAR", member=i, why="inner-tar")
+
+    try:
+        out.step(phase="stage")
+        ar_walk(stream, meta, out, on_member)
+        ar_trailing(src)
+        if (meta.get("audit") or {}).get("source") == "file":
+            ar_emit_promote(req, rb, ctx["blobs"].get("bridge_data") or b"", data, members)
+            host.append("promote/audit.key")
+        data.close()
+    except BaseException:
+        for S in made:
+            st_rmtree(S)  # noqa: F821
+        raise
+    return {"format": 1, "ok": True, "op": "ar-stage", "staged": staged,
+            "host_part": {"members": host, "sha256": data.h.hexdigest(), "bytes": data.total},
+            "verified_only": verified, "segments": meta["segments"]}
+
+
+def ar_emit_promote(req, rb, blob, data, members):
+    """The staged bridge_data audit.key (7.2) after the host part, checked
+    against its line in the bridge_data members file."""
+    line = None
+    for m in st_members(blob):  # noqa: F821
+        if m.get("p") == "audit.key":
+            line = m
+    root = req.get("data_dir")
+    if line is None or line.get("t") != "f" or not root:
+        raise ArError("A-TAR", member=len(members) - 1, why="promote")
+    S = os.path.join(root, ST_RESTORE + rb)  # noqa: F821
+    try:
+        fd = os.open(os.path.join(S, "audit.key"), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise ArError("A-TAR", member=len(members) - 1, why="promote")
+    with os.fdopen(fd, "rb") as f:
+        b = f.read(line.get("s", 0) + 1)
+    if len(b) != line.get("s") or hashlib.sha256(b).hexdigest() != line.get("h"):
+        raise ArError("A-TAR", member=len(members) - 1, why="promote")
+    data.write(b)
+
+
+# -- import-rules (5.1) -------------------------------------------------------------
+
+
+def ar_key_rules(R, revoke, drop, rep):
+    """revoke_key_ids and drop_revoked_key_ids on the staged keys.json and
+    keys.json.bak (stricter wins: a revoked key stays as it is)."""
+    for name in ("keys.json", "keys.json.bak"):
+        path = os.path.join(R, name)
+        obj, state = st_read_json(path)  # noqa: F821
+        if state == "absent":
+            continue
+        if state != "ok" or not isinstance(obj, dict) or not isinstance(obj.get("keys"), dict):
+            raise StError("unreadable", "the staged keys file cannot be read")  # noqa: F821
+        changed = False
+        for kid in revoke:
+            e = obj["keys"].get(kid)
+            if isinstance(e, dict) and e.get("revoked") is not True:
+                e["revoked"] = True
+                e["revoked_at"] = st_now()  # noqa: F821
+                changed = True
+                if kid not in rep["revoked"]:
+                    rep["revoked"].append(kid)
+        for kid in drop:
+            e = obj["keys"].get(kid)
+            if isinstance(e, dict) and e.get("revoked") is True:
+                del obj["keys"][kid]
+                changed = True
+                if kid not in rep["dropped"]:
+                    rep["dropped"].append(kid)
+        if changed:
+            st_write_json_like(path, obj)  # noqa: F821
+
+
+def ar_op_import_rules(req, out):
+    L, LS = st_roots(req)  # noqa: F821
+    rb = st_rb_id(req)  # noqa: F821
+    R, RS = os.path.join(L, ST_RESTORE + rb), os.path.join(LS, ST_RESTORE + rb)  # noqa: F821
+    if not os.path.exists(os.path.join(R, ST_STAGED)):  # noqa: F821
+        raise StError("phase", "bridge_data is not staged", "import-rules")  # noqa: F821
+    rules = req.get("rules") or {}
+    revoke = [str(x) for x in rules.get("revoke_key_ids") or []]
+    drop = [str(x) for x in rules.get("drop_revoked_key_ids") or []]
+    carry = bool(rules.get("carry_from_live")) and not rules.get("no_carry")
+    prev, state = st_read_json(os.path.join(R, ST_CARRIED))  # noqa: F821
+    if state == "ok" and isinstance(prev, dict) and prev.get("complete") and \
+            isinstance(prev.get("report"), dict):
+        return dict(prev["report"], already=True)
+    out.step(phase="import-rules")
+    rep = st_carry_pass(R, RS, L, LS, not carry, True, False)  # noqa: F821
+    rep.update({"import": True, "revoked": [], "dropped": []})
+    st_atomic_json(os.path.join(R, ST_CARRIED), {  # noqa: F821
+        "format": 1, "no_carry": not carry, "at": st_now(), "report": rep,  # noqa: F821
+        "ca_carried": bool(rep.get("ca_replaced")), "complete": False})
+    st_carry_pass(R, RS, L, LS, not carry, True, True)  # noqa: F821
+    ar_key_rules(R, revoke, drop, rep)
+    SYNC()  # noqa: F821
+    st_fsync_dir(R)  # noqa: F821
+    st_atomic_json(os.path.join(R, ST_CARRIED), {  # noqa: F821
+        "format": 1, "no_carry": not carry, "at": st_now(), "report": rep,  # noqa: F821
+        "ca_carried": bool(rep.get("ca_replaced")), "complete": True})
+    return rep
+
+
+ARCHIVE_OPS = dict((name, ar_framed(fn)) for name, fn in (
+    ("ar-wrap", ar_op_wrap), ("ar-write", ar_op_write), ("ar-verify", ar_op_verify),
+    ("ar-probe", ar_op_probe), ("ar-stage", ar_op_stage)))
+ARCHIVE_OPS["import-rules"] = st_framed(ar_op_import_rules)  # noqa: F821 - no secret held
+PY
+}
+# <<< shared: archive-engine
+
+# >>> shared: move (keep byte-identical in scripts/quickstart.sh and
+#     scripts/install-release.sh; scripts/tests/test_install_scripts.py checks)
+#
+# Phase 2: archives, host moves, type switches and quickstart's restore
+# points. --export writes an encrypted archive of a full restore point
+# (docs/state-archive-format.md) and, with --move, leaves this install
+# stopped, held and marked moved; --import fills an empty install (or,
+# with --replace, an existing one) from an archive, staging it beside
+# nothing in volumes Docker Compose creates; --reactivate undoes a move.
+# The data and crypto work is lc_state_tool's (state-tool and
+# archive-engine blocks); this block runs the steps and their journal
+# (lifecycle block). The passphrase is read only by lc_state_tool from fd
+# 4 (2.4): the parent moves its stdin there (exec 4<&0 0</dev/null) right
+# after parsing and closes it after the last reader; the detached part
+# never has it.
+
+LC_EXPORT_STEPS="snapshot installer stop hold prechecks restore-point unhold start-bridge start-rest ar-write ar-verify ar-publish ar-drop-rp record ar-forget"
+LC_MOVE_STEPS="snapshot installer stop hold prechecks restore-point ar-write ar-verify ar-publish ar-drop-rp mv-mark record ar-forget"
+LC_IMPORT_STEPS="snapshot hold im-volumes im-stage im-guard im-carry im-mark im-swap im-files im-unmark start-bridge start-rest im-verify record ar-forget"
+LC_IMPORT_REPLACE_STEPS="snapshot im-stage im-relate stop hold prechecks restore-point im-guard im-carry im-mark im-swap im-files im-unmark start-bridge start-rest im-verify record ar-forget"
+LC_REACTIVATE_STEPS="rv-unmark rv-moved unhold start-bridge start-rest verify record"
+LC_QS_UPGRADE_STEPS="snapshot stop hold prechecks restore-point qs-switch start-bridge start-rest verify record"
+# The writer's archive parameters (3.2; the reader's bounds are the
+# engine's). The variables only exist so the tests can run Argon2id at its
+# smallest accepted cost; the engine refuses anything outside 3.2.
+LC_AR_SEGMENT=${LC_AR_SEGMENT:-1048576} LC_AR_MEM_LOG2=${LC_AR_MEM_LOG2:-18}
+LC_AR_T=${LC_AR_T:-3} LC_AR_LANES=${LC_AR_LANES:-4}
+LC_MV_PENDING=""
+
+# ── helpers ─────────────────────────────────────────────────────────────
+
+# lc_mv_esc TEXT — TEXT with C0, C1 and DEL escaped (11: file names and
+# archive strings never move the cursor or forge a line).
+lc_mv_esc() {
+    lc_tool esc "$1" </dev/null
+}
+
+lc_mv_ops_dir() {
+    printf '%s/ops/%s' "$(lc_state_path)" "${1:-$(lc_jget id)}"
+}
+
+# lc_mv_pass_notice — 2.4: fd 4 is a pipe and stderr a terminal. The
+# parent says it (lc_st gives the tool a file as stderr).
+lc_mv_pass_notice() {
+    if [ ! -t 4 ] && [ -p /dev/fd/4 ] && [ -t 2 ]; then
+        echo "Reading the archive passphrase from standard input (one line)." >&2
+    fi
+}
+
+# lc_mv_pass_close — the operator's stdin (fd 4) is no longer needed.
+lc_mv_pass_close() {
+    exec 4<&-
+}
+
+# lc_mv_pending_cleanup — EXIT trap of a parent between ar-wrap/ar-probe
+# and ops-adopt: the pending key directory goes (G3).
+lc_mv_pending_cleanup() {
+    if [ -n "${LC_MV_PENDING:-}" ]; then
+        lc_st ar-forget --dir . --pending "$LC_MV_PENDING" >/dev/null 2>&1 || true
+        LC_MV_PENDING=""
+    fi
+}
+
+# lc_mv_cmd SUB — the command as the operator typed it, for Next lines.
+lc_mv_cmd() {
+    local cmd
+    cmd="$(lc_inst) $1"
+    [ -z "${LC_MV_FILE:-}" ] || cmd+=" $(printf %q "${LC_MV_FILE_TYPED:-$LC_MV_FILE}")"
+    case "$1" in
+        --export)
+            [ "${LC_MOVE:-0}" = 0 ] || cmd+=" --move"
+            [ -z "${LC_FROM_DIR:-}" ] || cmd+=" --from $(printf %q "$LC_FROM_DIR")"
+            [ -z "${LC_EXCLUDE:-}" ] || cmd+=" --exclude ${LC_EXCLUDE}" ;;
+        --import)
+            [ -z "${LC_IMPORT_PROJECT:-}" ] || cmd+=" --project ${LC_IMPORT_PROJECT}"
+            [ "${LC_REPLACE:-0}" = 0 ] || cmd+=" --replace"
+            [ "${LC_REGEN_TLS:-0}" = 0 ] || cmd+=" --regenerate-tls"
+            [ "${LC_ALLOW_LIVE:-0}" = 0 ] || cmd+=" --allow-live-source"
+            [ "${LC_ACCEPT_UNVERIFIED:-0}" = 0 ] || cmd+=" --accept-unverified"
+            [ "${LC_NO_CARRY:-0}" = 0 ] || cmd+=" --no-carry-revocations"
+            [ "${LC_ACCEPT_SUMMARY_RESET:-0}" = 0 ] || cmd+=" --accept-summary-reset"
+            [ "${LC_REVERT_CREDENTIALS:-0}" = 0 ] || cmd+=" --revert-credentials"
+            [ -z "${LC_EXPECT:-}" ] || cmd+=" --expect ${LC_EXPECT}"
+            [ "${LC_QS_IMPORT_MODE:-}" != auto ] || cmd+=" --scanners=auto" ;;
+    esac
+    printf '%s' "$cmd"
+}
+
+# lc_mv_engine_image — the image the running (or last) bridge of this
+# project ran, by id; else what engine-image finds.
+lc_mv_engine_image() {
+    local img
+    img=$(docker inspect --format '{{.Image}}' "${LC_BRIDGE_CONTAINER:-none}" 2>/dev/null || true)
+    [ -n "$img" ] || img=$(lc_image_id "$(lc_tool engine-image --installer "${LC_INSTALLER:-release}" \
+        --project "$LC_PROJECT" --dir . --bridge "" --owner "${OWNER:-}" \
+        --version "${LC_FROM_VERSION:-${VERSION:-main}}" </dev/null)")
+    printf '%s' "$img"
+}
+
+# lc_mv_has_volume PROJECT NAME — the project has the Compose volume NAME.
+lc_mv_has_volume() {
+    [ -n "$(docker volume ls -q --filter "label=com.docker.compose.project=$1" \
+        --filter "label=com.docker.compose.volume=$2" 2>/dev/null)" ]
+}
+
+# lc_hold_reason REASON [ARCHIVE_ID] — 1a's hold with its reason (1.2): for
+# move the stub's text names the archive and --status.
+lc_hold_reason() {
+    local held
+    held=$(lc_tool hold --dir . --project "$LC_PROJECT" --reason "$1" --archive-id "${2:-}" \
+        --inst "$(lc_inst)" </dev/null)
+    lc_tool journal-set . "held=${held}" </dev/null
+}
+
+# lc_mv_start_failed SERVICE — lc_start_failed's Phase 2 ending: 0 when it
+# printed its message (the caller exits 4), 1 for every other op.
+lc_mv_start_failed() {
+    case "${LC_JOURNAL_OP:-}" in
+        import)
+            echo "The archive and the install it came from are unchanged." >&2
+            echo "  After a fix: $(lc_here_cmd --resume); or remove what the import restored: $(lc_here_cmd --abort) --confirm ${LC_PROJECT}" >&2
+            echo "Next: $(lc_here_cmd --status)" >&2
+            LC_MSG_DONE=1
+            return 0 ;;
+        upgrade)
+            [ "${LC_INSTALLER:-release}" = quickstart ] || return 1
+            lc_qs_not_rolled_back
+            LC_MSG_DONE=1
+            return 0 ;;
+        reactivate)
+            echo "Next: $(lc_here_cmd --status)" >&2
+            LC_MSG_DONE=1
+            return 0 ;;
+    esac
+    return 1
+}
+
+# lc_mv_resume_check — 5.2/10: before --resume runs a step that stops the
+# stack, an export or import whose pending steps still need the archive key
+# checks it (exit 3, M-AR-KEY-DAMAGED).
+lc_mv_resume_check() {
+    local op pending s need=0 args
+    op=$(lc_jget op)
+    pending=" $(lc_tool journal-pending . </dev/null | tr '\n' ' ') "
+    for s in ar-write ar-verify im-stage; do
+        case "$pending" in *" $s "*) need=1 ;; esac
+    done
+    # ar-stage finished (staged.json): the rest of im-stage needs no key.
+    if [ "$op" = import ] && [ -f "$(lc_mv_ops_dir)/staged.json" ]; then need=0; fi
+    [ "$need" = 1 ] || return 0
+    args=(ar-key-check --dir . --jid "$(lc_jget id)" --inst "$(lc_inst)")
+    [ "$op" != export ] || args+=(--export)
+    lc_st "${args[@]}" >/dev/null || exit "$?"
+}
+
+lc_mv_bool() {
+    [ "$(lc_jget "$1")" = 1 ] && echo 1 || echo 0
+}
+
+# ── --export FILE [--move] (6.1), the parent ────────────────────────────
+
+lc_export_main() {
+    local file engine rc=0 jid pending aid steps done="snapshot" moved_folder=0 cmd target
+    local extra excl srcdir="" was fs est free kept tool bridge_rel sv port note
+    cmd=$(lc_mv_cmd --export)
+    if [ "${LC_INSTALLER:-release}" = release ] && [ ! -e .env ] && ! lc_is_held; then
+        if [ -n "${LC_FROM_DIR:-}" ]; then
+            if ! cd "$LC_FROM_DIR" 2>/dev/null; then
+                lc_refuse "ls -ld $(printf %q "$LC_FROM_DIR")" "${LC_FROM_DIR} is not a folder this user can enter."
+            fi
+            srcdir=$LC_SELF_DIR
+        else
+            target=$(lc_tool export-target --self-dir "$(pwd -P)" --inst "$(lc_inst)" </dev/null) || exit "$?"
+            echo "==> Exporting the one release install on this host: ${target}"
+            cd "$target"
+            [ "$LC_SELF_DIR" = "$(pwd -P)" ] || srcdir=$LC_SELF_DIR
+        fi
+    fi
+    lc_lock_acquire . export
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then lc_qs_state_resolve; fi
+    lc_tool journal-busy . --req "--export" </dev/null
+    LC_MOVED_OK=1 lc_identity "${LC_INSTALLER:-release}"
+    [ "$LC_KIND" != moved ] || moved_folder=1
+    if [ "$moved_folder" = 1 ] && [ "${LC_MOVE:-0}" = 1 ]; then
+        lc_tool moved-refuse . --installer "${LC_INSTALLER:-release}" </dev/null
+    fi
+    if [ "${LC_HAS_DATA:-0}" != 1 ]; then
+        lc_refuse "$(lc_here_cmd --status)" "$(pwd -P) holds no install with data to export (project ${LC_PROJECT} has no bridge_data volume)."
+    fi
+    [ "${LC_DRY_RUN:-0}" = 1 ] || lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    engine=$(lc_mv_engine_image)
+    lc_facts_or_refuse "${engine:-none}" .env "${LC_BRIDGE_CONTAINER:-}"
+    LC_MOVED_OK=1 lc_check_restore_marker
+    if [ "$moved_folder" = 0 ]; then
+        lc_rb_leftovers
+        lc_secrets_check
+    fi
+    lc_check_foreign_mounts
+    # 3. FILE, 4. space (and FAT32's 4 GiB), 5. the plan
+    file=$(lc_tool ar-file-check --file "$LC_MV_FILE" --dir . --inst "$(lc_inst)" --cmd "$cmd" \
+        --project "$LC_PROJECT" </dev/null) || exit "$?"
+    excl=${LC_EXCLUDE:-}
+    lc_st space-plan --dir . --project "$LC_PROJECT" --image "$engine" --kind export --file "$file" \
+        ${excl:+--exclude "$excl"} --cmd "$cmd" || exit "$?"
+    est=$(lc_st_get rp)
+    free=$(lc_st_get archive_free)
+    fs=$(lc_st_get archive_fs)
+    kept=$(lc_st_get kept_out)
+    note=""
+    case "$fs" in vfat|msdos|exfat) note=" (${fs}: file modes are ignored, NOTE)" ;; esac
+    echo "==> Export plan$([ "${LC_DRY_RUN:-0}" = 1 ] && echo " (--dry-run: nothing was changed)")"
+    echo "  install   ${LC_PROJECT} (${LC_FROM_VERSION:-unknown}, ${LC_INSTALL_TYPE}), $(lc_mv_esc "$(pwd -P)")"
+    if [ "$moved_folder" = 1 ]; then
+        echo "  stop      nothing: the install is stopped and held since its move"
+    elif [ "${LC_MOVE:-0}" = 1 ]; then
+        echo "  stop      while the restore point is taken (~$(lc_human <<<"${est:-0}") est.); stays stopped (--move)"
+    else
+        echo "  stop      while the restore point is taken (~$(lc_human <<<"${est:-0}") est.); started again before the archive is written"
+    fi
+    echo "  archive   $(lc_mv_esc "$file"), ~$(lc_human <<<"$(lc_st_get archive)"); $(lc_human <<<"${free:-0}") free there${note}"
+    echo "  contains  the database, API keys (hashed), webhooks, the embedded CA, the TLS pair, the .env secrets; not included: Docker images, backups/ ($(lc_human <<<"$(lc_tool json-get backups_bytes <<<"${kept:-{\}}")")), exports/ ($(lc_human <<<"$(lc_tool json-get exports_bytes <<<"${kept:-{\}}")"))"
+    if [ "${LC_MOVE:-0}" = 1 ]; then
+        echo "  after     the old install held, its volumes marked moved; undo with $(lc_inst) --reactivate"
+    fi
+    if [ "${LC_DRY_RUN:-0}" = 1 ]; then
+        exit 0
+    fi
+    # 6. the passphrase (fd 4; the only reader), then the journal
+    trap lc_mv_pending_cleanup EXIT
+    tool=install-release.sh
+    LC_QS_SOURCE_FLAG=()
+    [ "${LC_INSTALLER:-release}" = release ] || { tool=quickstart.sh; LC_QS_SOURCE_FLAG=(--source); }
+    rc=0
+    lc_mv_pass_notice
+    lc_st ar-wrap --dir . --image "$engine" --passphrase-fd 4 --project "$LC_PROJECT" \
+        --archive-dir "$(dirname -- "$file")" \
+        --hostname "$(hostname 2>/dev/null || echo unknown)" --mem-log2 "$LC_AR_MEM_LOG2" --t "$LC_AR_T" \
+        --lanes "$LC_AR_LANES" --segment-size "$LC_AR_SEGMENT" --inst "$(lc_inst)" --cmd "$cmd" \
+        ${LC_QS_SOURCE_FLAG[@]+"${LC_QS_SOURCE_FLAG[@]}"} || rc=$?
+    lc_mv_pass_close
+    [ "$rc" -eq 0 ] || exit "$rc"
+    LC_MV_PENDING=$(lc_st_get pending)
+    aid=$(lc_st_get archive_id)
+    if ! lc_snapshot_files export >/dev/null; then
+        lc_refuse "$(lc_in_here ls -la "$(lc_state_path)/")" \
+            "could not save a restore point of this folder's files before changing them."
+    fi
+    if [ "${LC_MOVE:-0}" = 1 ]; then steps=$LC_MOVE_STEPS; else steps=$LC_EXPORT_STEPS; fi
+    [ -n "$srcdir" ] || steps=${steps/ installer/}
+    was=${LC_WAS_RUNNING:-0}
+    if [ "$moved_folder" = 1 ]; then
+        # 6.1: stop, hold, unhold and start-* are done at creation; the
+        # folder stays moved (its move stub stays).
+        done+=",stop,hold,unhold,start-bridge,start-rest"
+    elif [ "$was" != 1 ]; then
+        # unhold stays: the folder must not keep its stub.
+        done+=",start-bridge,start-rest"
+    fi
+    sv=${LC_FROM_VERSION:-unknown}
+    bridge_rel=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+        "$engine" 2>/dev/null) || bridge_rel=""
+    case "$bridge_rel" in ""|"<no value>") bridge_rel=unknown ;; esac
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then
+        sv=${LC_QS_HEAD:-unknown}
+        port=${UC_PORT:-$(lc_qs_env_value UC_PORT)}
+    else
+        port=$(lc_mv_release_port)
+    fi
+    extra=$(python3 -I -c 'import json, sys
+a = sys.argv
+print(json.dumps({"archive_id": a[1], "file": a[2], "flags": {"move": a[3] == "1", "exclude": a[4]},
+                  "from_dir": a[5] or None, "moved_folder": a[6] == "1", "engine_image": a[7],
+                  "archive_fs": a[8] or None,
+                  "ar": {"tool": a[9], "sigrift_version": a[10], "bridge_release": a[11],
+                         "port": a[12] or "8444"},
+                  "kept_out": json.loads(a[13] or "{}")}))' "$aid" "$file" "${LC_MOVE:-0}" "$excl" \
+        "$(pwd -P)" "$moved_folder" "$engine" "$fs" "$tool" "$sv" "$bridge_rel" "${port:-}" "${kept:-}")
+    jid=$(lc_tool journal-new-id . --op export </dev/null)
+    lc_st ops-adopt --from "$LC_MV_PENDING" --dir . --jid "$jid" >/dev/null || exit "$?"
+    LC_MV_PENDING=""
+    trap - EXIT
+    lc_journal_vars | lc_tool journal-new --dir . --op export --jid "$jid" --steps "${steps// /,}" \
+        --done "$done" --from "${LC_FROM_VERSION:-unknown}" --to "${LC_FROM_VERSION:-unknown}" \
+        --owner "${OWNER:-}" --project "$LC_PROJECT" --source-dir "$srcdir" --snapshot "$LC_SNAPSHOT_ID" \
+        --was-running "$was" --bridge "${LC_BRIDGE_CONTAINER:-}" --gateway "${LC_GATEWAY_CONTAINER:-}" \
+        --pin "${LC_PIN:-0}" --project-how "${LC_PROJECT_HOW:-}" --extra "$extra" >/dev/null
+    lc_tool lock-owner . --op export --log "$(lc_jget log)" --pid "$$" </dev/null
+    echo "==> Exporting ${LC_PROJECT} to $(lc_mv_esc "$file")$([ "${LC_MOVE:-0}" = 1 ] && echo " (--move)")"
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+# lc_mv_release_port — the port a release install's compose file (held or
+# not) publishes.
+lc_mv_release_port() {
+    local f=docker-compose.yml
+    if lc_is_held; then f="$(lc_state_path)/held/docker-compose.yml"; fi
+    sed -n 's/^[[:space:]]*-[[:space:]]*"\{0,1\}[0-9.:]*:\([0-9][0-9]*\):8444.*/\1/p' "$f" 2>/dev/null | head -1
+}
+
+# ── the export's steps ─────────────────────────────────────────────────
+
+lc_step_ar_write() {
+    local rp img args manifest
+    rp=$(lc_jget restore_point)
+    img=$(lc_jget engine_image)
+    manifest="$(lc_jget restore_point_root)/${rp}/manifest.json"
+    [ -f "$manifest" ] || manifest="$(lc_state_path)/snapshots/${rp}/manifest.json"
+    if [ -f "$manifest" ]; then
+        lc_jset_json ar.counts "$(lc_tool json-get counts <"$manifest" 2>/dev/null || echo '{}')" 2>/dev/null || true
+        lc_jset_json ar.keystore "$(lc_tool json-get security <"$manifest" 2>/dev/null | lc_tool json-get keystore 2>/dev/null || echo null)" 2>/dev/null || true
+    fi
+    args=(ar-write --dir . --jid "$(lc_jget id)" --image "$img" --rp "$rp" --out "$(lc_jget file)"
+        --project "$LC_PROJECT" --inst "$(lc_inst)" --tool "$(lc_jget ar.tool)"
+        --installer-release "${INSTALLER_RELEASE:-dev}" --sigrift-version "$(lc_jget ar.sigrift_version)"
+        --bridge-release "$(lc_jget ar.bridge_release)" --install-type "$LC_INSTALL_TYPE"
+        --port "$(lc_jget ar.port)" --moved "$(lc_mv_bool flags.move)")
+    if ! lc_st "${args[@]}"; then
+        LC_MSG_DONE=1
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_op_progress "archive written ($(lc_human <<<"$(lc_st_get archive_bytes)"), $(lc_st_get segments) segments; reading it back"
+}
+
+lc_step_ar_verify() {
+    local part
+    part=$(lc_jget partial)
+    if [ -z "$part" ] || [ ! -e "$part" ]; then
+        # A failed verify removed the partial: a fresh write first (3.3).
+        lc_step_ar_write
+        part=$(lc_jget partial)
+    fi
+    if ! lc_st ar-verify --dir . --jid "$(lc_jget id)" --image "$(lc_jget engine_image)" --file "$part" \
+            --rp "$(lc_jget restore_point)" --project "$LC_PROJECT" --inst "$(lc_inst)" \
+            --moved "$(lc_mv_bool flags.move)"; then
+        LC_MSG_DONE=1
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_op_progress "archive verified as read back from the medium ($(lc_st_get segments) segments, $(lc_st_get members) members)"
+}
+
+lc_step_ar_publish() {
+    local f part rc=0
+    f=$(lc_jget file)
+    part=$(lc_jget partial)
+    if [ ! -e "$f" ] && { [ -z "$part" ] || [ ! -e "$part" ]; }; then
+        lc_step_ar_write
+        lc_step_ar_verify
+        part=$(lc_jget partial)
+    fi
+    lc_st ar-publish --file "$f" --dir . --jid "$(lc_jget id)" ${part:+--partial "$part"} \
+        --inst "$(lc_inst)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        LC_MSG_DONE=1
+        exit "$rc"
+    fi
+    [ -z "$(lc_st_get mode_note)" ] || lc_note "$(lc_st_get mode_note)"
+    lc_op_progress "published $(lc_mv_esc "$f"); the archive key is gone"
+}
+
+lc_step_ar_drop_rp() {
+    local rp
+    rp=$(lc_jget restore_point)
+    [ -z "$rp" ] || lc_st rp-prune --dir . --id "$rp" >/dev/null || true
+    lc_op_progress "the export's restore point ${rp:-?} was deleted (the archive holds it)"
+}
+
+lc_mv_volumes_arg() {
+    if lc_mv_has_volume "$LC_PROJECT" edge_data; then printf -- '--volumes edge_data'; fi
+}
+
+lc_step_mv_mark() {
+    local aid vols
+    aid=$(lc_jget archive_id)
+    lc_hold_reason move "$aid"
+    vols=$(lc_mv_volumes_arg)
+    # shellcheck disable=SC2086
+    lc_st_step mark --dir . --project "$LC_PROJECT" --image "$(lc_jget engine_image)" --op move \
+        --id "$aid" $vols >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_tool moved-write . --archive-id "$aid" --file "$(lc_jget file)" --sha256 "$(lc_jget archive.sha256)" \
+        --project "$LC_PROJECT" --install-id "$(lc_jget install_id)" </dev/null
+    lc_op_progress "the stack stays stopped and held; its volumes are marked moved (archive ${aid:0:8})"
+}
+
+lc_step_ar_forget() {
+    lc_st ar-forget --dir . --jid "$(lc_jget id)" >/dev/null || true
+}
+
+# lc_mv_volume_record IMAGE FILE — the volume record lc_tool wrote into
+# FILE, into bridge_data (write-record in IMAGE).
+lc_mv_volume_record() {
+    if ! lc_engine_source | lc_tool engine-run --image "$1" --project "$LC_PROJECT" \
+            --op write-record --env-file .env --record-file "$2" >/dev/null; then
+        echo "WARNING: could not write the volume record (${LC_PROJECT}'s bridge_data/.sigrift-install.json); the next run checks this install again from its labels and data." >&2
+    fi
+}
+
+# lc_step_record of export, import and reactivate (lc_step_record calls it).
+lc_mv_record() {
+    local op volrec entry v img
+    op=$(lc_jget op)
+    v=$(lc_jget from_version)
+    volrec=$(mktemp "${TMPDIR:-/tmp}/sigrift-record.XXXXXX")
+    case "$op" in
+        export)
+            entry=$(python3 -I -c 'import json, sys
+print(json.dumps({"archive_id": sys.argv[1], "file": sys.argv[2], "bytes": int(sys.argv[3] or 0),
+                  "sha256": sys.argv[4], "moved": sys.argv[5] == "1"}))' "$(lc_jget archive_id)" \
+                "$(lc_jget file)" "$(lc_jget archive.bytes)" "$(lc_jget archive.sha256)" "$(lc_mv_bool flags.move)")
+            lc_tool write-host-record --dir . --op export --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+                --from "$v" --to "$v" --snapshot "$(lc_jget snapshot)" --with-journal \
+                --entry-extra "$entry" --last-op export \
+                --export-add "$(python3 -I -c 'import json, sys, time
+print(json.dumps({"archive_id": sys.argv[1], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "moved": sys.argv[2] == "1"}))' "$(lc_jget archive_id)" "$(lc_mv_bool flags.move)")" \
+                --volume-record "$volrec" </dev/null >/dev/null
+            if [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+                lc_tool moved-write . --add --archive-id "$(lc_jget archive_id)" --file "$(lc_jget file)" \
+                    </dev/null
+            fi
+            img=$(lc_jget engine_image) ;;
+        import)
+            lc_mv_record_import "$volrec"
+            img=$(lc_jget engine_image) ;;
+        reactivate)
+            lc_tool write-host-record --dir . --op reactivate --project "$LC_PROJECT" \
+                --install-type "$LC_INSTALL_TYPE" --from "$v" --to "$v" --with-journal \
+                --entry-extra "{\"archive_id\": $(lc_json_str "$(lc_jget archive_id)")}" \
+                --last-op reactivate --volume-record "$volrec" </dev/null >/dev/null
+            img=$(docker inspect --format '{{.Image}}' "$(lc_tool project-bridge "$LC_PROJECT" </dev/null)" 2>/dev/null) || img="" ;;
+    esac
+    [ -z "$img" ] || lc_mv_volume_record "$img" "$volrec"
+    rm -f -- "$volrec"
+    lc_op_progress "records written"
+}
+
+# lc_mv_result — M-EXPORTED, M-MOVED, M-IMPORTED, M-REACTIVATED (11.3),
+# from the journal (lc_op_result calls it).
+lc_mv_result() {
+    local op
+    op=$(lc_jget op)
+    case "$op" in
+        export) lc_mv_result_export ;;
+        import) lc_mv_result_import ;;
+        reactivate)
+            echo "${LC_PROJECT} runs again here. If archive $(lc_jget archive_id | cut -c1-8) was imported elsewhere, stop that install now." ;;
+    esac
+}
+
+lc_mv_result_export() {
+    local f hc sha size fs down k w ks base inst kb ke
+    inst=$(lc_inst)
+    f=$(lc_mv_esc "$(lc_jget file)")
+    base=$(lc_mv_esc "$(basename -- "$(lc_jget file)")")
+    hc=$(lc_jget archive.header_checksum | cut -c1-16)
+    sha=$(lc_jget archive.sha256 | cut -c1-16)
+    size=$(lc_human <<<"$(lc_jget archive.bytes)")
+    fs=$(lc_jget archive_fs)
+    k=$(lc_jget ar.counts.keys)
+    w=$(lc_jget ar.counts.webhooks)
+    ks=$(lc_jget ar.keystore)
+    if [ "$(lc_mv_bool flags.move)" = 1 ] || [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        down="the stack stays stopped (--move)"
+        [ "$(lc_mv_bool moved_folder)" = 0 ] || down="the stack was not running (moved folder)"
+    else
+        down="the stack was stopped for $(python3 -I -c 'import sys, time, calendar
+def t(s):
+    try:
+        return calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+a, b = t(sys.argv[1]), t(sys.argv[2])
+print("%d s" % (b - a) if a is not None and b is not None and b >= a else "an unknown time")' \
+            "$(lc_jget stopped_at)" "$(lc_jget started_again_at)")"
+    fi
+    case "$fs" in ""|unknown|"<no value>") fs="the medium" ;; esac
+    kb=$(lc_human <<<"$(lc_jget kept_out.backups_bytes)")
+    ke=$(lc_human <<<"$(lc_jget kept_out.exports_bytes)")
+    echo "==> Wrote ${f} (${size}, 0600, sha256 ${sha}…, archive ${hc}), verified as read back from ${fs}; ${down}."
+    echo "Contains: database, ${k:-?} API keys (hashed),${w:+ ${w} webhooks (with signing secrets),} the embedded CA private key, the gateway TLS key, the .env secrets, the MAC pseudonymisation key$([ "$ks" = 1 ] && echo ", protocol keys saved with BRIDGE_KEYSTORE_KEY"). Not included: Docker images, backups/ (${kb}) and exports/ (${ke})$([ "$ks" = 0 ] && echo ", protocol keys imported while BRIDGE_KEYSTORE_KEY was unset")."
+    echo "Anyone with this file and its passphrase can impersonate this gateway to your edge nodes."
+    echo "Import it with: ${inst} --import ${base} --expect ${hc}"
+    echo "    full sha256 (check a copy with sha256sum): $(lc_jget archive.sha256)"
+    if [ "$(lc_mv_bool flags.move)" = 1 ]; then
+        echo "${LC_PROJECT} in $(lc_mv_esc "$(pwd -P)") is stopped and held: docker compose up there starts only a placeholder, ${inst} refuses to start it, and its volumes are marked moved. Import on the new host: ${inst} --import ${base} --expect ${hc}, and wipe or reuse this host only after that import passed. Undo here: ${inst} --reactivate."
+    fi
+}
+
+# lc_abort_export — 6.1: before the archive is published, everything this
+# export made goes (the partial file, the restore point, the key) and the
+# stack is unheld and started as it was; afterwards M-ABORT-EXPORT-DONE.
+lc_abort_export() {
+    local part rp partial published=0
+    if [ "$(lc_jget published)" = 1 ] || [[ " $(lc_jget "done" | tr -d '[]",') " == *" ar-publish "* ]]; then
+        published=1
+    elif [ -n "$(lc_jget archive.sha256)" ] && [ -f "$(lc_jget file)" ] && [ "$(python3 -I -c 'import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())' "$(lc_jget file)" 2>/dev/null)" = "$(lc_jget archive.sha256)" ]; then
+        # A kill inside ar-publish after the link: the archive is out.
+        published=1
+    fi
+    if [ "$published" = 1 ]; then
+        lc_refuse "$(lc_here_cmd --resume)" "the archive is already written; --abort cannot undo that." \
+            "$([ "$(lc_mv_bool flags.move)" = 1 ] && echo "then, to start it here again: $(lc_inst) --reactivate")"
+    fi
+    if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would (--dry-run: nothing was changed): delete the partial archive and the export's restore point, remove the archive key, and put the stack back as it was."
+        return 0
+    fi
+    part=$(lc_jget partial)
+    [ -z "$part" ] || rm -f -- "$part"
+    partial=$(lc_jget rp_partial.id)
+    rp=$(lc_jget restore_point)
+    if [ -n "$partial" ] && [ "$partial" != "$rp" ]; then
+        lc_st rp-delete-partial --dir . --id "$partial" >/dev/null || true
+    fi
+    [ -z "$rp" ] || lc_st rp-prune --dir . --id "$rp" >/dev/null || true
+    lc_step_ar_forget
+    if [ "$(lc_mv_bool moved_folder)" = 0 ] && lc_is_held; then
+        lc_unhold
+        if [ "$(lc_jget was_running)" = 1 ]; then
+            LC_START_FAIL_NEXT=$(lc_in_here docker compose up -d)
+            lc_start_two_stage >/dev/null
+        fi
+    fi
+    lc_journal_state aborted
+    lc_tool lock-owner . --release </dev/null
+    echo "==> Aborted the export; ${LC_PROJECT} is as it was."
+}
+
+# ── --import FILE (6.2), the parent ────────────────────────────────────
+
+# lc_mv_kind_load — the acting folder (mv-kind) into MV_* variables.
+lc_mv_kind_load() {
+    local line key
+    while IFS= read -r line; do
+        key=${line%%=*}
+        case "$key" in
+            MV_KIND|MV_PROJECT|MV_HAS_DATA|MV_ACTIVE|MV_MOVED_ARCHIVE_ID|MV_MOVED_AT|MV_MOVED_FILE|MV_MOVED_INSTALL_ID|MV_MOVED_ARCHIVE_SHA256)
+                printf -v "$key" '%s' "${line#*=}" ;;
+        esac
+    done < <(lc_tool mv-kind . --installer "${LC_INSTALLER:-release}" ${LC_IMPORT_PROJECT:+--project "$LC_IMPORT_PROJECT"} </dev/null)
+}
+
+# lc_mv_replace_plan PENDING PROBE PLAN IMAGE CMD — the --replace part of
+# the import plan (phase2-notes F-D21), before any change. For the same
+# install: the relation of the current data and the archive from their
+# audit chains (1a's facts, read with the archive's head id; import-relate,
+# which refuses diverged or unknown unless --no-carry-revocations), then
+# 1b's compare of the current data against the archive's export point.
+# For another install: the compare against nothing (everything is
+# dropped). im-plan prints DISCARDS and KEEPS, runs 1b's guards when the
+# import carries, and decides on the typed confirmation (1b 2.3); the
+# compare dates what the bridge changes without an audit entry against the
+# last common entry (phase2-notes F-D22). Sets LC_MV_RELATE, LC_MV_RPLAN and
+# LC_MV_RPLAN_LINES.
+lc_mv_replace_plan() {
+    local pending=$1 probe=$2 planf=$3 img=$4 cmd=$5 moved=${6:-0} jid aid tmpd rc=0 opt=() flags=()
+    local common
+    jid=$(basename -- "$pending")
+    [ "$moved" = 0 ] || flags+=(--moved-folder)
+    tmpd=$(mktemp -d "${TMPDIR:-/tmp}/sigrift-rplan.XXXXXX")
+    [ "${LC_NO_CARRY:-0}" = 0 ] || flags+=(--no-carry-revocations)
+    [ "${LC_ACCEPT_SUMMARY_RESET:-0}" = 0 ] || flags+=(--accept-summary-reset)
+    [ "${LC_REVERT_CREDENTIALS:-0}" = 0 ] || flags+=(--revert-credentials)
+    [ "${LC_ACCEPT_UNVERIFIED:-0}" = 0 ] || flags+=(--accept-unverified)
+    if [ "$(lc_tool json-get same_install <"$planf")" = 1 ]; then
+        aid=$(lc_tool json-get manifest.audit.head_id <"$probe")
+        if ! lc_engine_source | lc_tool engine-run --image "$img" --project "$LC_PROJECT" --op facts \
+                --audit-at "$aid" >"${tmpd}/facts.json" 2>/dev/null; then
+            rm -rf -- "$tmpd"
+            lc_refuse "$(lc_here_cmd --status)" \
+                "could not read the audit chain of ${LC_PROJECT}'s current data (the engine run failed), so the import cannot tell which copy is newer."
+        fi
+        [ "${LC_NO_CARRY:-0}" = 0 ] || opt+=(--no-carry)
+        [ "${LC_DRY_RUN:-0}" = 0 ] || opt+=(--report)
+        lc_st import-relate --dir . --jid "$jid" --live "${tmpd}/facts.json" --project "$LC_PROJECT" \
+            --inst "$(lc_inst)" --cmd "$cmd" ${opt[@]+"${opt[@]}"} >/dev/null || rc=$?
+        if [ "$rc" -ne 0 ]; then rm -rf -- "$tmpd"; return "$rc"; fi
+        LC_MV_RELATE=$LC_ST_JSON
+        common=$(lc_st_get common_head)
+        lc_st compare --import-jid "$jid" --project "$LC_PROJECT" --image "$img" --dir . \
+            --common-head "${common:-none}" >/dev/null || rc=$?
+        opt=()
+    else
+        LC_MV_RELATE='{"relation": "other-install", "carry": false}'
+        lc_st compare --import-jid "$jid" --whole --project "$LC_PROJECT" --image "$img" --dir . >/dev/null || rc=$?
+        opt=(--other-install)
+    fi
+    if [ "$rc" -ne 0 ]; then
+        rm -rf -- "$tmpd"
+        lc_refuse "$(lc_here_cmd --status)" \
+            "could not compare ${LC_PROJECT}'s current data with the archive (the engine run failed), so the plan cannot list what the replace drops."
+    fi
+    lc_save_json "${tmpd}/compare.json" "$LC_ST_JSON"
+    lc_save_json "${tmpd}/relate.json" "$LC_MV_RELATE"
+    LC_MV_RPLAN_LINES=$(lc_tool im-plan --compare "${tmpd}/compare.json" --relate "${tmpd}/relate.json" \
+        --project "$LC_PROJECT" --cmd "$cmd" --dry-run "${LC_DRY_RUN:-0}" --out "${tmpd}/decision.json" \
+        ${opt[@]+"${opt[@]}"} ${flags[@]+"${flags[@]}"} </dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then rm -rf -- "$tmpd"; return "$rc"; fi
+    LC_MV_RPLAN=$(cat -- "${tmpd}/decision.json")
+    rm -rf -- "$tmpd"
+}
+
+lc_import_main() {
+    local cmd file img hc probe pending switch mtype rc=0 newest schema meta same
+    local jid extra steps done="snapshot" moved_folder=0 tt envres spacef planf kept port bind mode opt=()
+    local srcres
+    cmd=$(lc_mv_cmd --import)
+    file=$LC_MV_FILE
+    lc_lock_acquire . import
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then lc_qs_state_resolve; fi
+    lc_mv_kind_load
+    LC_PROJECT=${LC_IMPORT_PROJECT:-$MV_PROJECT}
+    if ! [[ "$LC_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        lc_refuse "$(lc_mv_cmd --import) --project <name>" "${LC_PROJECT} is not a valid Docker Compose project name."
+    fi
+    [ "${MV_ACTIVE:-0}" = 0 ] || lc_tool journal-busy . --req "--import" </dev/null
+    case "$MV_KIND" in
+        moved)
+            moved_folder=1
+            [ "${LC_REPLACE:-0}" = 1 ] || lc_tool moved-refuse . --installer "${LC_INSTALLER:-release}" </dev/null
+            ;;
+        held)
+            lc_tool journal-check . --to "${VERSION:-main}" --requested 0 --held 1 --req "--import" </dev/null >/dev/null
+            ;;
+        existing|partial)
+            if [ "${MV_HAS_DATA:-0}" = 1 ] && [ "${LC_REPLACE:-0}" = 0 ]; then
+                lc_refuse "$(lc_mv_cmd --import) --replace" \
+                    "$(lc_mv_esc "$(pwd -P)") already holds ${LC_PROJECT} with data ($(lc_tool installed-version . </dev/null)); --import fills an empty install." \
+                    "--replace keeps a pre-import restore point and the replaced copy, so the replaced data can come back with --rollback."
+            fi
+            if [ "${LC_REPLACE:-0}" = 1 ]; then
+                lc_identity "${LC_INSTALLER:-release}"
+            fi
+            ;;
+    esac
+    if [ "${LC_REPLACE:-0}" = 1 ] && [ "${MV_HAS_DATA:-0}" != 1 ]; then
+        lc_refuse "$(lc_mv_cmd --import | sed 's/ --replace//')" "--replace replaces an install's data, and $(lc_mv_esc "$(pwd -P)") holds none."
+    fi
+    # 3. the header (no passphrase yet)
+    lc_st ar-header --file "$file" ${LC_EXPECT:+--expect "$LC_EXPECT"} --inst "$(lc_inst)" --cmd "$cmd" >/dev/null || exit "$?"
+    hc=$(lc_st_get header_checksum)
+    # 4. the target images (pulled, or built from HEAD, before any change)
+    if [ "${LC_INSTALLER:-release}" = release ]; then
+        lc_pull_images
+        img=${LC_PULLED_ID_bridge:-}
+        tt=release
+    else
+        lc_qs_build_or_refuse
+        img=$(lc_qs_image_id bridge)
+        tt=source
+    fi
+    [ -n "$img" ] || lc_refuse "$(lc_here_cmd --status)" "no target bridge image is on this host to read the archive with."
+    # 5. the passphrase (fd 4) and the sealed metadata
+    trap lc_mv_pending_cleanup EXIT
+    rc=0
+    opt=()
+    [ "${LC_DRY_RUN:-0}" != 1 ] || opt+=(--no-key)
+    [ "$tt" != source ] || opt+=(--source)
+    lc_mv_pass_notice
+    lc_st ar-probe --file "$file" --image "$img" --dir . --passphrase-fd 4 ${LC_EXPECT:+--expect "$LC_EXPECT"} \
+        --project "$LC_PROJECT" --inst "$(lc_inst)" --cmd "$cmd" ${opt[@]+"${opt[@]}"} || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        lc_mv_pass_close
+        exit "$rc"
+    fi
+    pending=$(lc_st_get pending)
+    LC_MV_PENDING=$pending
+    if ! { [ "${LC_REPLACE:-0}" = 1 ] && [ -t 4 ] && [ "${LC_DRY_RUN:-0}" = 0 ]; }; then
+        lc_mv_pass_close
+    fi
+    probe="${pending}/probe.json"
+    mtype=$(lc_tool json-get metadata.install_type <"$probe")
+    switch=""
+    if [ "$mtype" = source ] && [ "$tt" = release ]; then switch=source-to-release; fi
+    if [ "$mtype" = release ] && [ "$tt" = source ]; then switch=release-to-source; fi
+    schema=$(lc_tool json-get metadata.schema_version <"$probe")
+    newest=$(lc_engine_image_info "$img" | lc_tool json-get newest_migration) || newest=""
+    if [[ "$schema" =~ ^[0-9]+$ ]] && [[ "$newest" =~ ^[0-9]+$ ]] && [ "$schema" -gt "$newest" ]; then
+        lc_refuse "the import with the newer release's installer" \
+            "the archive is schema ${schema}, newer than this installer's bridge (${newest})."
+    fi
+    if [ "$tt" = release ]; then
+        meta=$(lc_tool json-get metadata.sigrift_version <"$probe")
+        [ "$mtype" = release ] || meta=$(lc_tool json-get metadata.bridge_release <"$probe")
+        if [[ "$meta" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && [ "$(lc_tool version-cmp "$meta" "${VERSION:-}" </dev/null)" = 1 ]; then
+            lc_refuse "the import with the newer release's installer" \
+                "the archive is $(lc_mv_esc "$meta"), newer than this installer's release (${VERSION})."
+        fi
+    fi
+    if [ "$(lc_tool json-get metadata.db_encrypted <"$probe")" = 1 ] && [ "${LC_ACCEPT_UNVERIFIED:-0}" = 0 ]; then
+        lc_refuse "${cmd} --accept-unverified" \
+            "the archive's database is encrypted, so the import cannot check its audit chain, keys or summaries."
+    fi
+    if [ "$moved_folder" = 1 ] && [ "$(lc_tool json-get metadata.install_id <"$probe")" != "${MV_MOVED_INSTALL_ID:-}" ]; then
+        lc_tool moved-refuse . --installer "${LC_INSTALLER:-release}" </dev/null
+    fi
+    port=${UC_PORT:-}
+    bind=${SIGRIFT_BIND:-}
+    planf=$(mktemp "${TMPDIR:-/tmp}/sigrift-iplan.XXXXXX")
+    if [ "$moved_folder" = 1 ] || [ "${LC_REPLACE:-0}" = 1 ]; then same=--replace; else same=""; fi
+    opt=()
+    [ "${LC_REGEN_TLS:-0}" = 0 ] || opt=(--regenerate-tls)
+    lc_st import-plan --dir . --jid "$(basename -- "$pending")" --project "$LC_PROJECT" $same \
+        ${port:+--port "$port"} ${bind:+--bind "$bind"} ${LC_EXPECT:+--expected} \
+        ${opt[@]+"${opt[@]}"} --inst "$(lc_inst)" --cmd "$cmd" || { rc=$?; rm -f -- "$planf"; exit "$rc"; }
+    lc_save_json "$planf" "$LC_ST_JSON"
+    port=$(lc_tool json-get target.port <"$planf")
+    bind=$(lc_tool json-get target.bind <"$planf")
+    srcres='{"allowed": true}'
+    if [ "${LC_ALLOW_LIVE:-0}" = 0 ]; then
+        opt=(--skip-local)
+        [ "${LC_MV_PROBE_LOCAL:-0}" = 0 ] || opt=()
+        lc_st live-source-probe --probe "$probe" ${opt[@]+"${opt[@]}"} \
+            --inst "$(lc_inst)" --cmd "$cmd" >/dev/null || { rc=$?; rm -f -- "$planf"; exit "$rc"; }
+        srcres=$LC_ST_JSON
+    fi
+    # 6. .env (names only, from the sealed metadata), 7. space
+    mode=${LC_QS_IMPORT_MODE:-dashboard-only}
+    lc_st env-import --dir . --jid "$(basename -- "$pending")" --target "$tt" --mode "$mode" --port "$port" \
+        ${bind:+--bind "$bind"} --dry || { rc=$?; rm -f -- "$planf"; exit "$rc"; }
+    envres=$LC_ST_JSON
+    opt=()
+    [ -z "$same" ] || opt=(--replace)
+    lc_st space-plan --dir . --project "$LC_PROJECT" --image "$img" --kind import --probe "$probe" \
+        ${opt[@]+"${opt[@]}"} --cmd "$cmd" || { rc=$?; rm -f -- "$planf"; exit "$rc"; }
+    spacef=$LC_ST_JSON
+    # 7b. --replace (phase2-notes F-D21): which copy is newer, from the audit
+    # chains, and what the replace drops; 1b's guards. Before any change.
+    LC_MV_RELATE='{}' LC_MV_RPLAN='{"needs_confirm": true}' LC_MV_RPLAN_LINES=""
+    if [ -n "$same" ]; then
+        lc_mv_replace_plan "$pending" "$probe" "$planf" "$img" "$cmd" "$moved_folder" || { rc=$?; rm -f -- "$planf"; exit "$rc"; }
+    fi
+    # 8. the plan
+    echo "==> Import plan$([ "${LC_DRY_RUN:-0}" = 1 ] && echo " (--dry-run: nothing was changed)")"
+    python3 -I -c 'import json, sys
+def esc(t):
+    return "".join("\\x%02x" % ord(c) if ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f else c
+                   for c in str(t))
+plan = json.load(open(sys.argv[1]))
+later = plan.get("later_lines") or {}
+for line in plan.get("lines") or []:
+    print("  " + line)
+src = json.loads(sys.argv[4] or "{}")
+port = None
+try:
+    port = json.load(open(sys.argv[5])).get("metadata", {}).get("source", {}).get("port")
+except (OSError, ValueError):
+    pass
+if src.get("allowed"):
+    print("  source    not checked (--allow-live-source)")
+else:
+    parts = ["%s:%s unreachable (cannot check)" % (esc(t), port) for t in src.get("unreachable") or []]
+    parts += ["%s:%s answers with another certificate" % (esc(x.get("target")), x.get("port"))
+              for x in src.get("answered") or [] if not x.get("same_cert")]
+    parts += ["%s skipped (this host)" % esc(t) for t in src.get("skipped") or []]
+    print("  source    " + (", ".join(parts) if parts else "no address of the old host to check"))
+env = json.loads(sys.argv[2] or "{}")
+moved = [m.get("key") for m in env.get("moved") or []]
+print("  .env      kept %d keys%s" % (len(env.get("kept") or []), "; to .env.imported: " + ", ".join(moved)
+                                     if moved else ""))
+for k in ("files", "tls"):
+    if later.get(k):
+        print("  " + later[k])
+sp = json.loads(sys.argv[3] or "{}")
+def h(n):
+    n = float(n or 0)
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return ("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u))
+        n /= 1024.0
+if sp.get("need") is not None:
+    print("  space     staging plus the migration copy of the first start: %s; %s free" % (
+        h(sp.get("need")), h(sp.get("free"))))
+for k in ("edges", "replace"):
+    if later.get(k):
+        print("  " + later[k])' "$planf" "$envres" "$spacef" "$srcres" "$probe"
+    [ -z "$LC_MV_RPLAN_LINES" ] || printf '%s\n' "$LC_MV_RPLAN_LINES"
+    if [ -n "$switch" ]; then
+        echo "  switch    ${switch} (the install type changes; INSTALL.md \"Switch install type\")"
+    fi
+    if [ "${LC_DRY_RUN:-0}" = 1 ]; then
+        rm -f -- "$planf"
+        exit 0
+    fi
+    LC_CONFIRMED=0
+    if [ "${LC_REPLACE:-0}" = 1 ]; then
+        # 1b's rule (2.3; F-D21): typed when the plan discards or brings back
+        # anything, or an override flag is given; a --confirm given is
+        # checked whatever the plan.
+        if [ "$(lc_tool json-get needs_confirm <<<"$LC_MV_RPLAN")" != 0 ] || [ -n "${LC_CONFIRM:-}" ]; then
+            LC_CONFIRM_FD=0
+            { true >&4; } 2>/dev/null && LC_CONFIRM_FD=4
+            LC_CONFIRM_NOUN=project LC_CONFIRM_WHAT="import replaces" \
+            LC_CONFIRM_TEXT="--import --replace replaces the data of ${LC_PROJECT} with the archive's (kept as a pre-import restore point and the replaced copy) and its plan discards or brings back data, and there is no terminal to ask you to type the project." \
+            LC_CONFIRM_DECLINED="Not imported: you did not type ${LC_PROJECT}. Nothing was changed." \
+                lc_confirm "$LC_PROJECT" "replace its data with the archive" "$cmd"
+        fi
+        lc_mv_pass_close
+    fi
+    # 9. the journal, then the detached part
+    if ! lc_snapshot_files import >/dev/null; then
+        lc_refuse "$(lc_in_here ls -la "$(lc_state_path)/")" \
+            "could not save a restore point of this folder's files before changing them."
+    fi
+    if [ "${LC_REPLACE:-0}" = 1 ] || [ "$moved_folder" = 1 ]; then
+        steps=$LC_IMPORT_REPLACE_STEPS
+        [ "$moved_folder" = 0 ] || done+=",stop,hold"
+    else
+        steps=$LC_IMPORT_STEPS
+    fi
+    extra=$(python3 -I - "$probe" "$planf" "$file" "$hc" "$tt" "$switch" "$img" "${LC_REPLACE:-0}" \
+        "${LC_REGEN_TLS:-0}" "${LC_ALLOW_LIVE:-0}" "${LC_ACCEPT_UNVERIFIED:-0}" "${LC_ACCEPT_SUMMARY_RESET:-0}" \
+        "${LC_NO_CARRY:-0}" "${LC_REVERT_CREDENTIALS:-0}" "$moved_folder" "${LC_EXPECT:+1}" \
+        "$(lc_tool json-get docker_reserve <<<"$spacef")" "$mode" "${LC_CONFIRMED:-0}" "${MV_MOVED_ARCHIVE_ID:-}" \
+        "${LC_INSTALL_ID:-}" "$LC_MV_RELATE" "$LC_MV_RPLAN" "${LC_IMPORT_PROJECT:-}" "${LC_EXPECT:-}" \
+        "${LC_QS_IMPORT_MODE:-}" <<'PY'
+import hashlib, json, sys
+a = sys.argv
+probe = json.load(open(a[1]))
+plan = json.load(open(a[2]))
+rel = json.loads(a[22] or "{}")
+rplan = json.loads(a[23] or "{}")
+# The options as typed that a Next line of the detached part repeats
+# (lc_mv_child_cmd).
+typed = {"project": a[24] or None, "expect": a[25] or None, "mode": a[26] or None}
+meta = probe.get("metadata") or {}
+h = hashlib.sha256()
+with open(a[3], "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+flags = dict(zip(("replace", "regenerate_tls", "allow_live_source", "accept_unverified",
+                  "accept_summary_reset", "no_carry", "revert_credentials"),
+                 (x == "1" for x in a[8:15])))
+t = plan.get("target") or {}
+print(json.dumps({"archive_id": meta.get("archive_id"), "file": a[3],
+                  "archive_sha256": h.hexdigest(), "header_checksum": a[4],
+                  "target": {"type": a[5], "project": t.get("project"), "port": t.get("port"),
+                             "bind": t.get("bind")},
+                  "switch": a[6] or None, "same_install": bool(plan.get("same_install")),
+                  "moved_folder": a[15] == "1", "moved_archive_id": a[20] or None,
+                  "flags": flags, "engine_image": a[7], "plan": {"lines": plan.get("lines")},
+                  "moved_away": plan.get("moved_away") or [], "expected": a[16] == "1",
+                  "reserve": int(a[17] or 0), "mode": a[18], "confirmed": a[19] == "1",
+                  "source_install_id": meta.get("install_id"), "pre_install_id": a[21] or None,
+                  "meta": {"hostname": meta.get("source", {}).get("hostname"),
+                           "created_at": meta.get("created_at"),
+                           "sigrift_version": meta.get("sigrift_version"),
+                           "install_type": meta.get("install_type"), "moved": meta.get("moved"),
+                           "schema_version": meta.get("schema_version"),
+                           "arch": meta.get("source", {}).get("arch"),
+                           "tls_cert_sha256": meta.get("source", {}).get("tls_cert_sha256"),
+                           "working_dir": meta.get("source", {}).get("working_dir"),
+                           "project": meta.get("project"),
+                           "audit_source": (meta.get("audit") or {}).get("source"),
+                           "parts": [p.get("name") for p in meta.get("parts") or []]},
+                  "relation": rel.get("relation"), "other_install": rel.get("relation") == "other-install",
+                  "common_head": rel.get("common_head"), "typed": typed,
+                  "replace_plan": rplan.get("plan") or {},
+                  "created_volumes": [], "created_network": None}))
+PY
+)
+    rm -f -- "$planf"
+    jid=$(lc_tool journal-new-id . --op import </dev/null)
+    lc_st ops-adopt --from "$pending" --dir . --jid "$jid" >/dev/null || exit "$?"
+    LC_MV_PENDING=""
+    trap - EXIT
+    lc_journal_vars | lc_tool journal-new --dir . --op import --jid "$jid" --steps "${steps// /,}" \
+        --done "$done" --from "$(lc_tool installed-version . </dev/null)" --to "${VERSION:-${LC_QS_HEAD:-main}}" \
+        --owner "${OWNER:-}" --project "$LC_PROJECT" --snapshot "$LC_SNAPSHOT_ID" \
+        --was-running "${LC_WAS_RUNNING:-0}" --bridge "${LC_BRIDGE_CONTAINER:-}" \
+        --gateway "${LC_GATEWAY_CONTAINER:-}" --pin 1 --project-how pinned \
+        --install-id "$(lc_tool json-get "$([ -n "$same" ] && [ -n "${LC_INSTALL_ID:-}" ] && echo pre_install_id || echo source_install_id)" <<<"$extra")" \
+        --extra "$extra" >/dev/null
+    lc_tool lock-owner . --op import --log "$(lc_jget log)" --pid "$$" </dev/null
+    echo "==> Importing $(lc_mv_esc "$file") into ${LC_PROJECT}"
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+# ── the import's steps ─────────────────────────────────────────────────
+
+lc_mv_img() {
+    lc_jget engine_image
+}
+
+# lc_mv_parts_json — ar-stage's parts (6.2 im-stage): the data volumes
+# staged; edge_data staged into a source target, else verified; the pki
+# part to the host (source) or verified.
+lc_mv_parts_json() {
+    python3 -I -c 'import json, sys
+parts = sys.argv[1].split(",")
+src = sys.argv[2] == "source"
+out = [{"name": "bridge_secrets", "action": "stage"}, {"name": "bridge_data", "action": "stage"}]
+if "edge_data" in parts:
+    out.append({"name": "edge_data", "action": "stage" if src else "verify"})
+if "opt-sigrift-pki" in parts:
+    out.append({"name": "opt-sigrift-pki", "action": "host" if src else "verify"})
+print(json.dumps(out))' "$(lc_jget meta.parts | tr -d '[]" ')" "$(lc_jget target.type)"
+}
+
+lc_mv_edge_staged() {
+    [ "$(lc_jget target.type)" = source ] && [[ "$(lc_jget meta.parts)" == *edge_data* ]]
+}
+
+# lc_mv_import_undo REASON_LINE — the undo of im-stage (6.2): every
+# staging, the volumes and network this import created, the folder from
+# its files-only point, the key and the host part; the journal aborted.
+lc_mv_import_undo() {
+    local v net vols="" kept=""
+    ! lc_mv_edge_staged || vols="--volumes edge_data"
+    # shellcheck disable=SC2086
+    lc_st discard-staging --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --rb-id "$(lc_jget id)" \
+        $vols >/dev/null 2>&1 || true
+    if [ -n "$(lc_jget created_volumes | tr -d '[]", ')" ]; then
+        # The containers this import made hold its volumes (6.2 --abort).
+        docker compose -p "$LC_PROJECT" --project-directory . -f "$(lc_mv_compose_file)" \
+            rm -f -s >/dev/null 2>&1 || true
+    fi
+    for v in $(lc_jget created_volumes | tr -d '[]",'); do
+        if LC_ST_QUIET=1 lc_st volume-lifecycle-only --volume "$v" >/dev/null 2>&1 \
+                && [ "$(lc_st_get only_lifecycle)" = 1 ]; then
+            docker volume rm "$v" >/dev/null 2>&1 || kept+=" ${v}"
+        else
+            kept+=" ${v}"
+        fi
+    done
+    [ -z "$kept" ] || echo "NOTE: kept volume(s)${kept}: they hold more than this import's staging (data written since it started?); remove them with docker volume rm${kept} once you no longer need them." >&2
+    net=$(lc_jget created_network)
+    [ -z "$net" ] || docker network rm "$net" >/dev/null 2>&1 || true
+    lc_mv_files_undo
+    if [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        # The folder's files back (6.2 --abort, --all; the folder stays held,
+        # so its files-only point holds the stub), the held compose file
+        # im-files rendered over, then it stays moved: its markers and stub
+        # back from moved.json.
+        lc_tool snapshot-restore . "$(lc_jget snapshot)" </dev/null >/dev/null 2>&1 || true
+        if [ -f "$(lc_mv_jdir)/held-compose.orig" ]; then
+            cp -p -- "$(lc_mv_jdir)/held-compose.orig" "$(lc_state_path)/held/docker-compose.yml"
+        fi
+        [ ! -e tls/cert.pem ] || [ ! -e tls/key.pem ] || secure_tls_files tls/cert.pem tls/key.pem
+        lc_mv_remark_moved
+    elif [ "$(lc_mv_bool flags.replace)" = 1 ]; then
+        if lc_is_held; then lc_unhold; fi
+        lc_tool snapshot-restore . "$(lc_jget snapshot)" </dev/null >/dev/null 2>&1 || true
+        [ ! -e tls/cert.pem ] || [ ! -e tls/key.pem ] || secure_tls_files tls/cert.pem tls/key.pem
+        if [ "$(lc_jget was_running)" = 1 ]; then
+            LC_START_FAIL_NEXT=$(lc_in_here docker compose up -d)
+            docker compose up -d --pull never ${LC_UP_EXTRA[@]+"${LC_UP_EXTRA[@]}"} --no-recreate --remove-orphans >/dev/null 2>&1 || true
+        fi
+    else
+        lc_tool snapshot-restore . "$(lc_jget snapshot)" </dev/null >/dev/null 2>&1 || true
+        rm -rf -- "$(lc_state_path)/held"
+    fi
+    lc_step_ar_forget
+    LC_JOURNAL_KEEP=1
+    lc_journal_state aborted "${LC_STEP:-?}: $1"
+}
+
+# lc_mv_compose_file — the compose file of the import's project: the held
+# one while held, else the folder's.
+lc_mv_compose_file() {
+    if [ -f "$(lc_state_path)/held/docker-compose.yml" ]; then
+        printf '%s' "$(lc_state_path)/held/docker-compose.yml"
+    else
+        printf 'docker-compose.yml'
+    fi
+}
+
+lc_mv_undone_text() {
+    if [ "$(lc_mv_bool flags.replace)" = 1 ] || [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        printf 'Undone: the staging and the files it wrote; the current install was put back as it was.'
+    else
+        printf 'Undone: the staging, the volumes this import created, the files it wrote.'
+    fi
+}
+
+# lc_mv_late REFUSAL_TEXT — print a late refusal after the undo; exit 3.
+lc_mv_late() {
+    printf '%s\n' "$1" | grep -v '^Nothing was changed\.$' >&2 || true
+    lc_tool lock-owner . --release </dev/null >/dev/null 2>&1 || true
+    echo "Nothing was changed." >&2
+    LC_MSG_DONE=1
+    exit "$LC_EXIT_REFUSED"
+}
+
+lc_mv_jdir() {
+    lc_mv_ops_dir "$(lc_jget id)"
+}
+
+lc_step_im_volumes() {
+    local jdir held envb v vols="bridge_data bridge_secrets" created=() line
+    jdir=$(lc_mv_jdir)
+    held="$(lc_state_path)/held/docker-compose.yml"
+    envb="${jdir}/env.backend"
+    [ -e "$envb" ] || (umask 077 && : >"$envb")
+    ! lc_mv_edge_staged || vols+=" edge_data"
+    for v in $vols; do
+        lc_mv_has_volume "$LC_PROJECT" "$v" || created+=("${LC_PROJECT}_${v}")
+    done
+    if [ "${#created[@]}" -eq 0 ]; then
+        lc_op_progress "the volumes exist (created by an earlier run)"
+        return 0
+    fi
+    ensure_backend_subnet "$envb" -p "$LC_PROJECT" --project-directory . --env-file "$envb" -f "$held" >/dev/null
+    lc_jset_json backend "$(python3 -I -c 'import json, sys
+out = {"subnet": None, "ip_range": None, "gateway_ip": None}
+names = {"SIGRIFT_BACKEND_SUBNET": "subnet", "SIGRIFT_BACKEND_IP_RANGE": "ip_range",
+         "SIGRIFT_GATEWAY_BACKEND_IP": "gateway_ip"}
+for line in open(sys.argv[1]):
+    k, _, v = line.strip().partition("=")
+    if k in names:
+        out[names[k]] = v
+print(json.dumps(out))' "$envb")"
+    lc_jset_json created_volumes "$(python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${created[@]}")"
+    lc_jset_json created_network "$(lc_json_str "${LC_PROJECT}_backend")"
+    docker compose -p "$LC_PROJECT" --project-directory . --env-file "$envb" -f "$held" \
+        create --no-build --pull never bridge >/dev/null
+    if lc_mv_edge_staged && ! lc_mv_has_volume "$LC_PROJECT" edge_data; then
+        # Not `create scan`: that would need the images of scan's
+        # dependencies too. The two labels make it the project's volume.
+        docker volume create --label "com.docker.compose.project=${LC_PROJECT}" \
+            --label com.docker.compose.volume=edge_data "${LC_PROJECT}_edge_data" >/dev/null
+    fi
+    docker compose -p "$LC_PROJECT" --project-directory . --env-file "$envb" -f "$held" \
+        rm -f >/dev/null 2>&1 || true
+    for v in $vols; do
+        if ! lc_mv_has_volume "$LC_PROJECT" "$v"; then
+            echo "Error: docker compose create did not leave volume ${LC_PROJECT}_${v} with the labels com.docker.compose.project=${LC_PROJECT} and com.docker.compose.volume=${v}, so the import cannot stage into it." >&2
+            echo "Next: docker volume ls --filter label=com.docker.compose.project=${LC_PROJECT}" >&2
+            LC_MSG_DONE=1
+            exit "$LC_EXIT_STOPPED"
+        fi
+    done
+    while IFS= read -r line; do
+        [ -z "$line" ] || echo "    ${line}"
+    done < <(grep -h '^SIGRIFT_BACKEND_SUBNET=' "$envb" 2>/dev/null || true)
+    lc_op_progress "volumes created by Docker Compose for project ${LC_PROJECT}"
+}
+
+lc_step_im_stage() {
+    local jdir rc=0 args backend cur="" err
+    jdir=$(lc_mv_jdir)
+    if [ -f "${jdir}/staged.json" ] && [ -f "${jdir}/payload/manifest.json" ]; then
+        # Resumed after ar-stage finished (its key is gone): the env-import.
+        LC_ST_JSON=$(cat -- "${jdir}/staged.json")
+    else
+        # An E archive, a damaged key (E integrity) or a reserve stop are
+        # exit 3 or 7: the undo of 6.2 im-stage.
+        LC_ST_QUIET=1 lc_st ar-stage --dir . --jid "$(lc_jget id)" --image "$(lc_mv_img)" --file "$(lc_jget file)" \
+            --parts "$(lc_mv_parts_json)" --reserve "$(lc_jget reserve)" --project "$LC_PROJECT" \
+            --inst "$(lc_inst)" --cmd "$(lc_inst) --import $(printf %q "$(lc_jget file)")" \
+            --undone "$(lc_mv_undone_text)" || rc=$?
+    fi
+    if [ "$rc" -eq 3 ] || [ "$rc" -eq 7 ]; then
+        err=$LC_ST_ERR
+        lc_mv_import_undo "the archive did not verify"
+        lc_mv_late "$err"
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$LC_ST_ERR" | grep -v '^Nothing was changed\.$' >&2 || true
+        LC_MSG_DONE=1
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_jset_json staged "$(lc_tool json-get staged <<<"$LC_ST_JSON")"
+    lc_tool journal-set . "staged_segments=$(lc_st_get segments)" </dev/null
+    backend=$(lc_jget backend)
+    [ -n "$backend" ] || backend='{}'
+    backend=$(python3 -I -c 'import json, sys
+b = json.loads(sys.argv[1] or "{}")
+names = {"subnet": "SIGRIFT_BACKEND_SUBNET", "ip_range": "SIGRIFT_BACKEND_IP_RANGE",
+         "gateway_ip": "SIGRIFT_GATEWAY_BACKEND_IP"}
+print(json.dumps(dict((names[k], v) for k, v in b.items() if k in names and v)))' "$backend")
+    [ ! -e .env ] || cur=.env
+    args=(env-import --dir . --jid "$(lc_jget id)" --target "$(lc_jget target.type)" --mode "$(lc_jget mode)"
+        --port "$(lc_jget target.port)" --backend "$backend" --undone "$(lc_mv_undone_text)")
+    [ -z "$(lc_jget target.bind)" ] || args+=(--bind "$(lc_jget target.bind)")
+    [ -z "$cur" ] || args+=(--current-env "$cur")
+    rc=0
+    LC_ST_QUIET=1 lc_st "${args[@]}" || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        err=$LC_ST_ERR
+        lc_mv_import_undo "the archive's .env cannot be imported"
+        lc_mv_late "$err"
+    elif [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$LC_ST_ERR" >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_jset_json env_result "$(python3 -I -c 'import json, sys
+r = json.loads(sys.argv[1] or "{}")
+print(json.dumps({"moved": r.get("moved") or [], "promoted": r.get("promoted"),
+                  "generated": r.get("generated") or [], "switch": r.get("switch")}))' "$LC_ST_JSON")"
+    lc_op_progress "archive authenticated whole and staged ($(lc_jget staged_segments) segments); .env merged"
+}
+
+# lc_mv_relate_late LIVE STAGED — the relation (phase2-notes F-D21) of the
+# current data (LIVE: 1a's facts, or the quiesced state, read with the
+# archive's head id) and the staged copy (STAGED: read with the current
+# head id), against the plan's; journaled as `relation`. Diverged, unknown
+# or a change the plan does not allow: the late refusal with the undo.
+lc_mv_relate_late() {
+    local live=$1 staged=$2 rc=0 err args
+    args=(import-relate --dir . --jid "$(lc_jget id)" --live "$live" --staged "$staged"
+        --planned "$(lc_jget relation)" --project "$LC_PROJECT" --inst "$(lc_inst)"
+        --cmd "$(lc_mv_child_cmd)" --undone "$(lc_mv_undone_text)")
+    [ "$(lc_mv_bool flags.no_carry)" = 0 ] || args+=(--no-carry)
+    LC_ST_QUIET=1 lc_st "${args[@]}" >/dev/null || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        err=$LC_ST_ERR
+        lc_mv_import_undo "the current data and the archive: $(lc_st_get relation)"
+        lc_mv_late "$err"
+    elif [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$LC_ST_ERR" >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_jset_json relation "$(lc_json_str "$(lc_st_get relation)")"
+    lc_jset_json common_head "$(c=$(lc_st_get common_head); printf '%s' "${c:-null}")"
+}
+
+# lc_mv_child_cmd — the import as the operator typed it, rebuilt from the
+# journal for the detached part's Next lines (lc_mv_cmd's order and flags:
+# a pinned --expect or --regenerate-tls is never dropped).
+lc_mv_child_cmd() {
+    local cmd p e
+    p=$(lc_jget typed.project)
+    e=$(lc_jget typed.expect)
+    cmd="$(lc_inst) --import $(printf %q "$(lc_jget file)")"
+    [ -z "$p" ] || cmd+=" --project $(printf %q "$p")"
+    cmd+=" --replace"
+    [ "$(lc_mv_bool flags.regenerate_tls)" = 0 ] || cmd+=" --regenerate-tls"
+    [ "$(lc_mv_bool flags.allow_live_source)" = 0 ] || cmd+=" --allow-live-source"
+    [ "$(lc_mv_bool flags.accept_unverified)" = 0 ] || cmd+=" --accept-unverified"
+    [ "$(lc_mv_bool flags.no_carry)" = 0 ] || cmd+=" --no-carry-revocations"
+    [ "$(lc_mv_bool flags.accept_summary_reset)" = 0 ] || cmd+=" --accept-summary-reset"
+    [ "$(lc_mv_bool flags.revert_credentials)" = 0 ] || cmd+=" --revert-credentials"
+    [ -z "$e" ] || cmd+=" --expect $(printf %q "$e")"
+    [ "$(lc_jget typed.mode)" != auto ] || cmd+=" --scanners=auto"
+    printf '%s' "$cmd"
+}
+
+# lc_step_im_relate — F-D21: before the stop, the staged copy against the
+# current data's audit chain (an archive the plan found newer must hold
+# the current head entry), so a refusal leaves the stack serving.
+lc_step_im_relate() {
+    local jdir aid lid why
+    jdir=$(lc_mv_jdir)
+    case "$(lc_jget relation)" in
+        ""|other-install)
+            lc_op_progress "another install is replaced: nothing of it is carried"
+            return 0 ;;
+    esac
+    aid=$(lc_tool json-get manifest.audit.head_id <"${jdir}/probe.json")
+    if ! lc_engine_source | lc_tool engine-run --image "$(lc_mv_img)" --project "$LC_PROJECT" --op facts \
+            --audit-at "$aid" >"${jdir}/relate-live.json" 2>/dev/null; then
+        echo "Error: could not read the audit chain of the current data (the engine run failed)." >&2
+        exit "$LC_EXIT_FAILED"
+    fi
+    lid=$(lc_tool json-get audit_chain.head_id <"${jdir}/relate-live.json")
+    if ! LC_ST_QUIET=1 lc_st state --project "$LC_PROJECT" --image "$(lc_mv_img)" --root "staging:$(lc_jget id)" \
+            ${lid:+--audit-at "$lid"} --dir . >/dev/null; then
+        printf '%s\n' "$LC_ST_ERR" | grep -v '^Nothing was changed\.$' >&2 || true
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_save_json "${jdir}/relate-staged.json" "$LC_ST_JSON"
+    lc_mv_relate_late "${jdir}/relate-live.json" "${jdir}/relate-staged.json"
+    why=$(lc_st_get why)
+    # F-D22: what the current data has that the staged copy lacks (rows both
+    # copies wrote after they parted) and what changed without an audit
+    # entry, against the plan, while the current stack still serves.
+    lc_mv_guard_compare "${jdir}/compare-staged.json" "the staged copy did not match the plan"
+    lc_op_progress "the current data and the archive: $(lc_jget relation) (${why})"
+}
+
+# lc_mv_guard_compare OUT UNDO_REASON — compare --import-jid against the
+# staged copy (rows) and the last common audit entry (what changes without
+# one), then lc_tool im-guard-check against the journaled plan (1b
+# rb-guard's rules, phase2-notes F-D21, F-D22): a refusal is late, with the
+# undo.
+lc_mv_guard_compare() {
+    local out=$1 res staged=(--staged)
+    # The moved folder is frozen since the move: every row it holds, the
+    # archive's copy held then; a row that copy changed or removed since is
+    # its own newer state, not data of this folder (the export point's marks
+    # stand, as before F-D22).
+    [ "$(lc_mv_bool moved_folder)" = 0 ] || staged=()
+    LC_ST_QUIET=1 lc_st compare --import-jid "$(lc_jget id)" --project "$LC_PROJECT" --image "$(lc_mv_img)" \
+        --dir . ${staged[@]+"${staged[@]}"} --common-head "$(lc_jget common_head)" >/dev/null || {
+        printf '%s\n' "$LC_ST_ERR" >&2
+        exit "$LC_EXIT_FAILED"
+    }
+    lc_save_json "$out" "$LC_ST_JSON"
+    res=$(lc_tool im-guard-check . --compare "$out" --relation "$(lc_jget relation)" \
+        --cmd "$(lc_mv_child_cmd)" </dev/null)
+    if [ "$res" != ok ]; then
+        lc_mv_import_undo "$(lc_tool json-get code <<<"$res"): $2"
+        lc_mv_late "Error: $(lc_tool json-get error <<<"$res")
+  $(lc_mv_undone_text)
+Next: $(lc_tool json-get next <<<"$res")"
+    fi
+}
+
+lc_step_im_guard() {
+    local jdir res lid="" rel cmpf
+    jdir=$(lc_mv_jdir)
+    rel=$(lc_jget relation)
+    if [ "$(lc_mv_bool flags.replace)" = 1 ] || [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        if ! LC_ST_QUIET=1 lc_st quiesce --project "$LC_PROJECT" --image "$(lc_mv_img)" --mode report --dir . \
+                --audit-at "$(lc_tool json-get manifest.audit.head_id <"${jdir}/probe.json")"; then
+            res=$(grep -v '^Nothing' <<<"$LC_ST_ERR" | sed 's/^kind=[a-z]*: //' | head -1)
+            lc_mv_import_undo "the current data could not be checked"
+            lc_mv_late "Error: the installer could not check the current data before replacing it (${res:-quiesce failed}).
+  $(lc_mv_undone_text)"
+        fi
+        lc_save_json "${jdir}/live-quiesced.json" "$LC_ST_JSON"
+        lid=$(lc_tool json-get audit.head_id <"${jdir}/live-quiesced.json")
+    fi
+    if ! LC_ST_QUIET=1 lc_st state --project "$LC_PROJECT" --image "$(lc_mv_img)" --root "staging:$(lc_jget id)" \
+            --env-file "${jdir}/env.new" ${lid:+--audit-at "$lid"} --dir .; then
+        res=$(grep -v '^Nothing' <<<"$LC_ST_ERR" | head -1)
+        lc_mv_import_undo "the staged data could not be read"
+        lc_mv_late "Error: the installer could not read the staged data (${res}).
+  $(lc_mv_undone_text)"
+    fi
+    lc_save_json "${jdir}/state.json" "$LC_ST_JSON"
+    res=$(python3 -I - "${jdir}/state.json" "${jdir}/payload/manifest.json" "${jdir}/nodes.json" \
+        "$(lc_engine_image_info "$(lc_mv_img)" | lc_tool json-get newest_migration 2>/dev/null)" <<'PY'
+import json, os, sys
+st = json.load(open(sys.argv[1]))
+m = json.load(open(sys.argv[2]))
+newest = sys.argv[4]
+why = []
+sch = st.get("schema")
+if isinstance(sch, int) and newest.isdigit() and sch > int(newest):
+    why.append("schema")
+au, ma = st.get("audit") or {}, m.get("audit") or {}
+fps = st.get("fingerprints") or {}
+mfp = m.get("fingerprints") or {}
+def fp(x, k):
+    v = x.get(k)
+    return v.get("fp") if isinstance(v, dict) else v
+# A verdict passes, or the candidate key is the one the prechecks of the export
+# proved (the same fingerprint).
+same_audit = bool(fp(fps, "audit")) and fp(fps, "audit") == fp(mfp, "audit")
+if ma.get("result") == "ok" and au.get("result") not in ("ok", "unchecked", None) \
+        and not same_audit:
+    why.append("audit chain")
+if ma.get("head_id") is not None and au.get("head_id") is not None and \
+        au.get("head_id") != ma.get("head_id"):
+    why.append("audit chain")
+# The head entry itself (its chain value's tag, phase2-notes F-D22), when
+# the manifest names one.
+if ma.get("head_tag") and au.get("head_id") == ma.get("head_id") and \
+        au.get("head_tag") != ma.get("head_tag"):
+    why.append("audit head entry")
+mfa = st.get("mfa")
+same_mfa = bool(fps.get("mfa")) and fps.get("mfa") == mfp.get("mfa")
+if ((m.get("counts") or {}).get("totp_fernet") or 0) > 0 and \
+        mfa not in ("ok", "unchecked", "n/a", None) and not same_mfa:
+    why.append("MFA key")
+if fps.get("keystore") and mfp.get("keystore") and fps["keystore"] != mfp["keystore"]:
+    why.append("keystore key")
+nodes = st.get("nodes") or []
+fd = os.open(sys.argv[3], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"nodes": nodes}, f)
+print(" | ".join(sorted(set(why))) or "ok")
+PY
+)
+    if [ "$res" = "audit head entry" ]; then
+        lc_mv_import_undo "the staged copy's audit head entry is not the archive's"
+        lc_mv_late "Error: the staged copy's audit head entry is not the one the archive's manifest names (its chain value differs), so the staging is not the archive's data.
+  $(lc_mv_undone_text)"
+    elif [ "$res" != ok ]; then
+        lc_mv_import_undo "M-IMPORT-KEYS: ${res}"
+        lc_mv_late "Error: the archive's .env does not match its own data (${res}); the export was made from a .env that the running bridge did not use.
+  $(lc_mv_undone_text)"
+    fi
+    lc_jset_json nodes "$(cat -- "${jdir}/nodes.json")"
+    if [ "$(lc_mv_bool flags.replace)" = 1 ] || [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        # F-D21: the relation on the quiesced data (more may have arrived
+        # while the current stack served), then 1b rb-guard's late rules
+        # against the confirmed plan, on a compare of the quiesced data.
+        cmpf="${jdir}/compare-late.json"
+        case "$rel" in
+            other-install)
+                LC_ST_QUIET=1 lc_st compare --import-jid "$(lc_jget id)" --whole --project "$LC_PROJECT" \
+                    --image "$(lc_mv_img)" --dir . >/dev/null || { printf '%s\n' "$LC_ST_ERR" >&2; exit "$LC_EXIT_FAILED"; }
+                lc_save_json "$cmpf" "$LC_ST_JSON"
+                res=$(lc_tool im-guard-check . --compare "$cmpf" --relation "$(lc_jget relation)" \
+                    --cmd "$(lc_mv_child_cmd)" </dev/null)
+                if [ "$res" != ok ]; then
+                    lc_mv_import_undo "$(lc_tool json-get code <<<"$res")"
+                    lc_mv_late "Error: $(lc_tool json-get error <<<"$res")
+  $(lc_mv_undone_text)
+Next: $(lc_tool json-get next <<<"$res")"
+                fi ;;
+            *)
+                [ -z "$rel" ] || lc_mv_relate_late "${jdir}/live-quiesced.json" "${jdir}/state.json"
+                lc_mv_guard_compare "$cmpf" "the current data changed after the plan" ;;
+        esac
+    fi
+    lc_op_progress "the staged data verifies with the merged .env (schema $(lc_tool json-get schema <"${jdir}/state.json"))"
+}
+
+lc_step_im_carry() {
+    local args=(import-rules --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --rb-id "$(lc_jget id)")
+    case "$(lc_jget switch)" in
+        source-to-release) args+=(--revoke local-edge) ;;
+        release-to-source) args+=(--drop local-edge) ;;
+    esac
+    # carry_from_live (1b) carries what the live side lacks as deleted, so
+    # it runs only when the audit chains showed the current data to be the
+    # newer copy (im-relate and im-guard journaled `relation`, F-D21):
+    # never for an archive that continues it (the moved folder's switch
+    # back, a folder exported from without --move and replaced later), nor
+    # with --no-carry-revocations (sessions only).
+    if [ "$(lc_mv_bool flags.no_carry)" = 1 ]; then
+        args+=(--no-carry)
+    elif [ "$(lc_jget same_install)" = 1 ] && [ "$(lc_jget relation)" = live-newer ]; then
+        args+=(--carry-from-live)
+    fi
+    lc_st_step "${args[@]}" >/dev/null || exit "$LC_EXIT_FAILED"
+    local counts
+    counts=$(python3 -I -c 'import json, sys
+r = json.loads(sys.argv[1] or "{}")
+kinds = ("api_keys_removed", "api_keys_revoked", "api_keys_disabled", "api_keys_role_lowered",
+         "api_keys_expiry_earlier", "api_keys_bound", "api_keys_rotated", "ca_serials_revoked",
+         "ca_replaced", "users_disabled", "users_role_lowered", "backup_codes_invalidated",
+         "crypto_keys_deleted", "crypto_keys_revoked", "webhooks_removed", "webhooks_disabled",
+         "mfa_required_on")
+def n(v):
+    return int(v) if isinstance(v, bool) else (sum(n(x) for x in v.values()) if isinstance(v, dict)
+                                               else len(v) if isinstance(v, list) else 0)
+print(json.dumps(dict((k, n(r.get(k))) for k in kinds if n(r.get(k)))))' "$LC_ST_JSON")
+    lc_jset_json carried "$(python3 -I -c 'import json, sys
+r = json.loads(sys.argv[1] or "{}")
+print(json.dumps({"revoked": r.get("revoked") or [], "dropped": r.get("dropped") or [],
+                  "from_live": json.loads(sys.argv[2] or "{}")}))' "$LC_ST_JSON" "$counts")"
+    if [ "$counts" != "{}" ] && [ "$(lc_jget relation)" = live-newer ]; then
+        lc_mv_audit_import "$counts"
+    fi
+    lc_op_progress "every session ended on the staged copy$([ "$(lc_jget switch)" = source-to-release ] && echo "; the in-stack scanner key local-edge revoked")"
+}
+
+# lc_mv_audit_import COUNTS — F-D22: the carry recorded in the staged copy's
+# audit chain (installer_import, the import id its target; idempotent), so
+# its head moves past the archive's and a later import of the same archive
+# finds the current data the newer copy and carries again. Without an audit
+# key in the imported .env nothing is written; the unrecorded check of the
+# next import's plan is the backstop then.
+lc_mv_audit_import() {
+    local why
+    if ! LC_ST_QUIET=1 lc_st audit-append --dir . --project "$LC_PROJECT" --rp-image "$(lc_mv_img)" \
+            --import-jid "$(lc_jget id)" --relation "$(lc_jget relation)" --carried "$1" \
+            --operator "$([ "${LC_INSTALLER:-release}" = quickstart ] && echo quickstart.sh || echo install-release.sh)" >/dev/null; then
+        printf '%s\n' "$LC_ST_ERR" | grep -v '^Nothing was changed\.$' >&2 || true
+        exit "$LC_EXIT_FAILED"
+    fi
+    if [ "$(lc_st_get written)" = 1 ]; then
+        lc_jset_json import_audit "{\"written\": true, \"id\": $(c=$(lc_st_get id); printf '%s' "${c:-null}")}"
+        lc_op_progress "the carry recorded in the imported audit chain (entry $(lc_st_get id))"
+    else
+        why=$(lc_st_get why)
+        lc_jset_json import_audit "{\"written\": false, \"why\": $(lc_json_str "${why:-unknown}")}"
+        lc_op_progress "the carry is not in the imported audit chain (${why:-unknown})"
+    fi
+}
+
+lc_step_im_mark() {
+    local vols="" mvols=""
+    ! lc_mv_edge_staged || vols="--volumes edge_data"
+    if [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        # The move marked edge_data whenever the project had it, whatever
+        # this archive's parts (a release archive has none).
+        ! lc_mv_has_volume "$LC_PROJECT" edge_data || mvols="--volumes edge_data"
+        # shellcheck disable=SC2086
+        lc_st unmark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op move \
+            --id "$(lc_jget moved_archive_id)" $mvols >/dev/null || true
+    fi
+    # shellcheck disable=SC2086
+    lc_st_step mark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op import --id "$(lc_jget id)" \
+        $vols >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "restore marker (import) written in every target volume"
+}
+
+lc_step_im_swap() {
+    local vols=""
+    ! lc_mv_edge_staged || vols="--volumes bridge_secrets,edge_data,bridge_data"
+    # shellcheck disable=SC2086
+    if ! lc_st_step swap --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --rb-id "$(lc_jget id)" $vols; then
+        exit "$LC_EXIT_FAILED"
+    fi
+    lc_jset_json swap_phases "{\"bridge_data\": \"$(lc_st_get bridge_data.phase)\", \"bridge_secrets\": \"$(lc_st_get bridge_secrets.phase)\"}"
+    lc_op_progress "the archive's data swapped in"
+}
+
+# lc_mv_created FILE [BACKUP] — FILE (outside the files-only point's set)
+# was made by this import, or (with BACKUP) an older FILE was moved to
+# BACKUP: the undo of the import (lc_mv_files_undo) removes it, or moves the
+# backup back. Recorded once, before the write.
+lc_mv_created() {
+    local list
+    list="$(lc_mv_jdir)/created-files"
+    grep -qxF -- "${2:+m }${2:-c} ${1}" "$list" 2>/dev/null && return 0
+    if [ -n "${2:-}" ]; then
+        printf 'm %s %s\n' "$2" "$1" >>"$list"
+    else
+        printf 'c %s\n' "$1" >>"$list"
+    fi
+}
+
+# lc_mv_files_undo — the import's own files go (.env.imported, *.imported,
+# .env.bak.*~), an older .env.imported comes back; the files-only point puts
+# the rest back.
+lc_mv_files_undo() {
+    local list kind a b
+    list="$(lc_mv_jdir)/created-files"
+    [ -f "$list" ] || return 0
+    while read -r kind a b; do
+        case "$a" in ""|/*|*..*|*/*) continue ;; esac
+        case "$kind" in
+            c) rm -f -- "$a" ;;
+            m) case "$b" in ""|/*|*..*|*/*) continue ;; esac
+               [ ! -e "$a" ] || mv -f -- "$a" "$b" ;;
+        esac
+    done <"$list"
+}
+
+# lc_mv_put FILE SRC MODE — FILE from SRC by temp + rename (sha256 skip).
+lc_mv_put() {
+    local tmp
+    if [ -e "$1" ] && cmp -s "$2" "$1"; then return 0; fi
+    tmp=$(mktemp "$(dirname -- "$1")/.$(basename -- "$1").sigrift-new.XXXXXX")
+    cat -- "$2" >"$tmp"
+    chmod "$3" "$tmp"
+    mv -f -- "$tmp" "$1"
+}
+
+lc_step_im_files() {
+    local jdir pay f name ts held
+    jdir=$(lc_mv_jdir)
+    pay="${jdir}/payload/files"
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    if [ -e .env ] && [ ! -e "${jdir}/.env-backed-up" ] && ! cmp -s .env "${jdir}/env.new"; then
+        lc_mv_created ".env.bak.${ts}~"
+        cp -p -- .env ".env.bak.${ts}~"
+        : >"${jdir}/.env-backed-up"
+    fi
+    lc_mv_put .env "${jdir}/env.new" 0600
+    if [ -s "${jdir}/env.imported.new" ]; then
+        if [ -e .env.imported ] && ! cmp -s .env.imported "${jdir}/env.imported.new"; then
+            lc_mv_created .env.imported ".env.imported.bak.${ts}~"
+            mv -f -- .env.imported ".env.imported.bak.${ts}~"
+        elif [ ! -e .env.imported ]; then
+            lc_mv_created .env.imported
+        fi
+        lc_mv_put .env.imported "${jdir}/env.imported.new" 0600
+    fi
+    lc_tool pin .env "$LC_PROJECT" --no-backup --note "==> Pinned COMPOSE_PROJECT_NAME=${LC_PROJECT} in .env." </dev/null >/dev/null
+    mkdir -p tls
+    chmod 0755 tls
+    if [ "$(lc_mv_bool flags.regenerate_tls)" = 1 ]; then
+        if [ ! -e "${jdir}/.tls-regenerated" ]; then
+            rm -f tls/cert.pem tls/key.pem
+            tls_ensure_cert tls/cert.pem tls/key.pem localhost "${SIGRIFT_TLS_SANS:-}" >/dev/null
+            : >"${jdir}/.tls-regenerated"
+        fi
+    else
+        [ ! -f "${pay}/tls/cert.pem" ] || lc_mv_put tls/cert.pem "${pay}/tls/cert.pem" 0644
+        [ ! -f "${pay}/tls/key.pem" ] || lc_mv_put tls/key.pem "${pay}/tls/key.pem" 0600
+    fi
+    [ ! -e tls/cert.pem ] || [ ! -e tls/key.pem ] || secure_tls_files tls/cert.pem tls/key.pem
+    for name in docker-compose.override.yml docker-compose.override.yaml; do
+        if [ -f "${pay}/${name}" ]; then
+            [ -e "${name}.imported" ] || lc_mv_created "${name}.imported"
+            lc_mv_put "${name}.imported" "${pay}/${name}" 0644
+            lc_note "the archive's ${name} was written as ${name}.imported (inactive): an import never runs an archive's compose files."
+        fi
+    done
+    [ ! -f "${pay}/.sigrift-scanners.yml" ] || lc_mv_put .sigrift-scanners.yml "${pay}/.sigrift-scanners.yml" 0644
+    if [ "$LC_INSTALLER" = quickstart ] && declare -F qs_write_override >/dev/null \
+            && [ ! -e docker-compose.override.yml ] && [ ! -L docker-compose.override.yml ] \
+            && [ ! -e "$(lc_state_path)/held/docker-compose.override.yml" ]; then
+        # 7.1: quickstart writes its own override for the mode (the ./tls
+        # mount of the gateway among them); the archive's stays .imported.
+        qs_write_override "$(lc_jget mode)" >/dev/null
+    fi
+    if [ "$(lc_jget target.type)" = source ] && [[ "$(lc_jget meta.parts)" == *opt-sigrift-pki* ]]; then
+        lc_note "the archive's PKI part (/opt/sigrift/pki, the scanners' mTLS client certificate) was not restored; with docker-compose.pki.yml, run scripts/bootstrap-staging.sh with SIGRIFT_ENABLE_PKI=1 again, which issues a new one from the imported CA."
+    fi
+    if [ "$LC_INSTALLER" = release ]; then
+        held="$(lc_state_path)/held/docker-compose.yml"
+        if [ "$(lc_mv_bool moved_folder)" = 1 ] && [ -f "$held" ] && [ ! -e "${jdir}/held-compose.orig" ]; then
+            cp -p -- "$held" "${jdir}/held-compose.orig"
+        fi
+        release_render_compose --port "$(lc_jget target.port)" --owner "${OWNER}" --version "${VERSION}" "$held"
+        [ -f "${pay}/docker-compose.yml" ] && [ "$(lc_compose_canon "${pay}/docker-compose.yml" | cut -d' ' -f1)" = custom ] \
+            && { [ -e docker-compose.yml.imported ] || lc_mv_created docker-compose.yml.imported;
+                 lc_mv_put docker-compose.yml.imported "${pay}/docker-compose.yml" 0644;
+                 lc_note "the archive's docker-compose.yml is not an installer template: kept as docker-compose.yml.imported (inactive)."; }
+        lc_write_version "${VERSION}"
+    fi
+    lc_op_progress ".env, .env.imported, tls/ and the inactive *.imported files written"
+}
+
+lc_step_im_unmark() {
+    local jdir vols=""
+    jdir=$(lc_mv_jdir)
+    rm -f -- "${jdir}/payload/files/.env" "${jdir}/payload/files/tls/key.pem" "${jdir}/env.new" \
+        "${jdir}/env.imported.new" "${jdir}/payload/volumes/opt-sigrift-pki.tar.gz" \
+        "${jdir}/payload/volumes/opt-sigrift-pki.members.json"
+    rm -rf -- "${jdir}/payload/promote"
+    ! lc_mv_edge_staged || vols="--volumes edge_data"
+    # shellcheck disable=SC2086
+    lc_st_step unmark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op import --id "$(lc_jget id)" \
+        $vols >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "the decrypted secrets removed from the state directory; restore marker removed"
+}
+
+lc_step_im_verify() {
+    local out img jdir
+    jdir=$(lc_mv_jdir)
+    img=$(docker inspect --format '{{.Image}}' "$(lc_tool project-bridge "$LC_PROJECT" </dev/null)" 2>/dev/null) || img=""
+    [ -n "$img" ] || img=$(lc_mv_img)
+    if ! LC_ST_QUIET=1 lc_st state --project "$LC_PROJECT" --image "$img" --env-file .env --dir . \
+            --rf-rows "${jdir}/payload/rf_rows.json"; then
+        lc_mv_verify_failed "the installer could not read the imported data"
+    fi
+    out=$(python3 -I - "$LC_ST_JSON" "${jdir}/payload/manifest.json" "$(lc_jget meta.tls_cert_sha256)" \
+        "$(lc_mv_bool flags.regenerate_tls)" <<'PY'
+import hashlib, json, sys
+st = json.loads(sys.argv[1] or "{}")
+m = json.load(open(sys.argv[2]))
+why = []
+au = st.get("audit") or {}
+if au.get("result") not in ("ok", "unchecked", "n/a", None):
+    why.append("the audit chain does not verify (%s)" % au.get("result"))
+if any((st.get("markers") or {}).values()):
+    why.append("a restore marker is still there")
+if sys.argv[4] != "1" and sys.argv[3]:
+    try:
+        with open("tls/cert.pem", "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != sys.argv[3]:
+                why.append("tls/cert.pem is not the archive's")
+    except OSError:
+        why.append("tls/cert.pem is missing")
+print("; ".join(why) or "ok")
+PY
+)
+    [ "$out" = ok ] || lc_mv_verify_failed "$out"
+    if [ "$(lc_mv_bool flags.regenerate_tls)" = 0 ] && [ -n "$(lc_jget meta.tls_cert_sha256)" ]; then
+        # The served certificate (11.4, 4.3), not only the file: a gateway
+        # without the ./tls mount serves another one. Unreachable: the file
+        # check above stands, with a note.
+        if LC_ST_QUIET=1 lc_st tls-served --port "$(lc_jget target.port)" \
+                --sha256 "$(lc_jget meta.tls_cert_sha256)" >/dev/null; then
+            if [ "$(lc_st_get answered)" = 1 ] && [ "$(lc_st_get same)" != 1 ]; then
+                lc_mv_verify_failed "the gateway on port $(lc_jget target.port) serves another certificate than the archive's tls/cert.pem"
+            fi
+            [ "$(lc_st_get answered)" = 1 ] || lc_note "the certificate the gateway serves could not be read on 127.0.0.1:$(lc_jget target.port); tls/cert.pem is the archive's."
+        fi
+    fi
+    lc_tool journal-set . "verified_audit=$(lc_st_get audit.result)" "verified_head=$(lc_st_get audit.head_id)" </dev/null
+    lc_op_progress "imported data checked: audit chain $(lc_st_get audit.result), schema $(lc_st_get schema)"
+}
+
+lc_mv_verify_failed() {
+    lc_journal_state verify_failed "$1"
+    echo "" >&2
+    echo "The import is up, but a check failed: $1. The journal records it." >&2
+    echo "The archive and the install it came from are unchanged." >&2
+    echo "  After a fix: $(lc_here_cmd --resume); or remove what the import restored: $(lc_here_cmd --abort) --confirm ${LC_PROJECT}" >&2
+    echo "Next: $(lc_here_cmd --status)" >&2
+    LC_MSG_DONE=1
+    exit "$LC_EXIT_STOPPED"
+}
+
+lc_mv_record_import() {
+    local volrec="$1" imported entry replaced="" jdir
+    jdir=$(lc_mv_jdir)
+    imported=$(python3 -I - "$(lc_jget archive_id)" "$(lc_tool journal-get . meta </dev/null)" \
+        "${jdir}/payload/files/.sigrift/install.json" "${jdir}/nodes.json" \
+        "$([ "${LC_INSTALLER:-release}" = quickstart ] && lc_qs_head)" <<'PY'
+import json, sys, time
+meta = json.loads(sys.argv[2] or "{}")
+try:
+    hist = (json.load(open(sys.argv[3])).get("history") or [])[-5:]
+except (OSError, ValueError):
+    hist = []
+try:
+    nodes = json.load(open(sys.argv[4])).get("nodes") or []
+except (OSError, ValueError):
+    nodes = []
+src = {"hostname": meta.get("hostname"), "working_dir": meta.get("working_dir"),
+       "install_type": meta.get("install_type"), "version": meta.get("sigrift_version"),
+       "project": meta.get("project")}
+edges = {"summary": [n.get("node_id") for n in nodes if n.get("summary")],
+         "other": [n.get("node_id") for n in nodes if not n.get("summary")]}
+out = {"imported_from": {"archive_id": sys.argv[1],
+                         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                         "moved": bool(meta.get("moved")), "source": src,
+                         "history_tail": hist},
+       "imported_edges": edges}
+if sys.argv[5]:
+    out["git_commit"] = sys.argv[5]
+print(json.dumps(out))
+PY
+)
+    if [ "$(lc_mv_bool flags.replace)" = 1 ]; then
+        replaced=$(python3 -I -c 'import json, sys
+hr = {}
+try:
+    hr = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    pass
+print(json.dumps({"replaced": {"install_id": sys.argv[2] or hr.get("install_id"),
+                               "imported_from": hr.get("imported_from"),
+                               "restore_point": sys.argv[3] or None}}))' \
+            "$(lc_state_path)/install.json" "$(lc_jget pre_install_id)" "$(lc_jget restore_point)")
+    fi
+    entry=$(python3 -I -c 'import json, sys
+e = {"archive_id": sys.argv[1], "switch": sys.argv[2] or None}
+e.update(json.loads(sys.argv[3] or "{}"))
+print(json.dumps(e))' "$(lc_jget archive_id)" "$(lc_jget switch)" "${replaced:-}")
+    lc_tool write-host-record --dir . --op import --project "$LC_PROJECT" --install-type "$LC_INSTALL_TYPE" \
+        --from "$(lc_jget from_version)" --to "$(lc_jget to_version)" --snapshot "$(lc_jget snapshot)" \
+        --with-journal --set-install-id "$(lc_jget source_install_id)" --entry-extra "$entry" \
+        --record-extra "$imported" --last-op import \
+        ${replaced:+--finish-pending-add "$(lc_jget id):0:$(lc_jget from_version)"} \
+        --volume-record "$volrec" </dev/null >/dev/null
+    if [ "$(lc_mv_bool moved_folder)" = 1 ]; then
+        lc_tool moved-archive . </dev/null
+    fi
+}
+
+lc_mv_result_import() {
+    local jdir edges
+    jdir=$(lc_mv_jdir)
+    echo "==> Header authenticated; archive $(lc_jget header_checksum | cut -c1-16), made $(lc_mv_esc "$(lc_jget meta.created_at)") on $(lc_mv_esc "$(lc_jget meta.hostname)"): $(lc_mv_esc "$(lc_jget meta.sigrift_version)"), $(lc_jget meta.install_type) install, schema $(lc_jget meta.schema_version), $(lc_mv_esc "$(lc_jget meta.arch)") -> this host $(uname -m)"
+    echo "==> $(python3 -I -c 'import json, sys
+try:
+    s = json.loads(sys.argv[1] or "[]")
+except ValueError:
+    s = []
+print(sum(int(x.get("members") or 0) for x in s if isinstance(x, dict)))' "$(lc_jget staged)") members verified in staging; TLS $([ "$(lc_mv_bool flags.regenerate_tls)" = 1 ] && echo regenerated || echo "kept byte-identical")"
+    case "$(lc_jget verified_audit)" in
+        ok) echo "==> Restored, then started ${LC_PROJECT}; audit chain valid, the archive's head entry $(lc_jget verified_head) in place" ;;
+        *) echo "==> Restored, then started ${LC_PROJECT}; audit chain $(lc_jget verified_audit) (not checked by this host's engine), head entry $(lc_jget verified_head)" ;;
+    esac
+    edges=$(python3 -I -c 'import json, sys
+try:
+    nodes = json.load(open(sys.argv[1])).get("nodes") or []
+except (OSError, ValueError):
+    nodes = []
+s = [n.get("node_id") for n in nodes if n.get("summary")]
+o = [n.get("node_id") for n in nodes if not n.get("summary")]
+if s:
+    print("Edges in summary mode (keep their URL: point the name they use at this host, or give this host the old address): " + ", ".join(s))
+if o:
+    print("Other edges (the same, or set MLRF_API_URL in /etc/sigrift-edge.env to a name of this host that the certificate lists, then systemctl restart sigrift-edge): " + ", ".join(o))' \
+        <(lc_jget nodes) 2>/dev/null) || edges=""
+    [ -z "$edges" ] || printf '%s\n' "$edges"
+    [ "$(lc_mv_bool expected)" = 1 ] || echo "NOTE: the archive was not checked against its export (--expect)"
+    if [ "$(lc_jget switch)" = source-to-release ]; then
+        echo "NOTE: Revoked the in-stack scanner key local-edge: a release install runs no in-stack scanner. Its node record and data stay."
+    fi
+    [ ! -e .env.imported ] || echo "NOTE: values of the old host or the other install type are in .env.imported (not used here)."
+    python3 -I -c 'import json, sys
+for x in json.loads(sys.argv[1] or "[]"):
+    print("NOTE: the old volumes of %s are still on this host: %s" % (x.get("project"), x.get("rm")))' \
+        "$(lc_jget moved_away | tr -d '\n' || echo '[]')" 2>/dev/null || true
+}
+
+# lc_abort_import — 6.2 --abort: before im-swap the staging, the volumes
+# this import created and the folder's files; from im-swap on the swap is
+# undone first (unswap), with --confirm once the bridge started.
+lc_abort_import() {
+    local steps_done started vols=""
+    steps_done=" $(lc_jget "done" | tr -d '[]",') "
+    started=$(lc_jget bridge_started_at)
+    if [[ "$steps_done" == *" ar-forget "* ]]; then
+        lc_refuse "$(lc_here_cmd --status)" "the import is complete; --abort cannot undo it."
+    fi
+    if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would (--dry-run: nothing was changed): undo the swap if it began, remove the staging and the volumes this import created, put this folder's files back and remove the archive key and the decrypted files."
+        return 0
+    fi
+    if [ -n "$started" ]; then
+        LC_CONFIRM_NOUN=project LC_CONFIRM_WHAT="abort removes" \
+        LC_CONFIRM_TEXT="the imported bridge started at ${started}; --abort removes what the import restored, and there is no terminal to ask you to type the project." \
+        LC_CONFIRM_DECLINED="Not undone: you did not type ${LC_PROJECT}. Nothing was changed." \
+            lc_confirm "$LC_PROJECT" "remove what the import restored" "$(lc_here_cmd --abort)"
+        docker compose stop >/dev/null 2>&1 || true
+    fi
+    ! lc_mv_edge_staged || vols="--volumes bridge_secrets,edge_data,bridge_data"
+    if [[ "$steps_done" == *" im-mark "* ]] || [[ "$steps_done" == *" im-swap "* ]]; then
+        if ! lc_is_held; then lc_hold; fi
+        # shellcheck disable=SC2086
+        lc_st unswap --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --rb-id "$(lc_jget id)" $vols >/dev/null || {
+            echo "Error: the swap of this import could not be undone; nothing else was changed." >&2
+            echo "Next: $(lc_here_cmd --status)" >&2
+            exit "$LC_EXIT_STOPPED"
+        }
+        # shellcheck disable=SC2086
+        lc_st unmark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op import --id "$(lc_jget id)" \
+            ${vols:+--volumes edge_data} >/dev/null || true
+    elif [ "$(lc_mv_bool flags.replace)" = 1 ] && [ "$(lc_mv_bool moved_folder)" = 0 ]; then
+        # Killed inside im-mark (not yet done): bridge_secrets may hold this
+        # import's marker already, which keeps the replaced install from
+        # starting (10, im-mark row: unmark, then as im-stage).
+        # shellcheck disable=SC2086
+        lc_st unmark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op import --id "$(lc_jget id)" \
+            ${vols:+--volumes edge_data} >/dev/null 2>&1 || true
+    fi
+    if [ "$(lc_mv_bool flags.replace)" = 1 ] && [ "$(lc_mv_bool moved_folder)" = 0 ]; then
+        if lc_is_held; then lc_unhold; fi
+    fi
+    lc_mv_import_undo "aborted"
+    lc_journal_state aborted
+    lc_tool lock-owner . --release </dev/null
+    echo "==> Aborted the import; $(lc_mv_esc "$(pwd -P)") is as it was before it."
+}
+
+# lc_mv_remark_moved — the undo of an import into the moved folder: the
+# move markers and the move stub back from moved.json (it stays moved).
+lc_mv_remark_moved() {
+    local aid vols=""
+    aid=$(lc_jget moved_archive_id)
+    [ -n "$aid" ] || return 0
+    lc_tool moved-restore . --archive-id "$aid" </dev/null
+    lc_hold_reason move "$aid"
+    lc_mv_has_volume "$LC_PROJECT" edge_data && vols="--volumes edge_data"
+    lc_st unmark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op import --id "$(lc_jget id)" \
+        $vols >/dev/null 2>&1 || true
+    # shellcheck disable=SC2086
+    lc_st mark --dir . --project "$LC_PROJECT" --image "$(lc_mv_img)" --op move --id "$aid" $vols >/dev/null 2>&1 || true
+}
+
+# ── --reactivate (6.3) ─────────────────────────────────────────────────
+
+lc_reactivate_main() {
+    local engine rc=0 bad aid
+    lc_lock_acquire . reactivate
+    if [ "${LC_INSTALLER:-release}" = quickstart ]; then lc_qs_state_resolve; fi
+    lc_mv_kind_load
+    if [ "$MV_KIND" != moved ]; then
+        echo "Nothing to reactivate: $(lc_mv_esc "$(pwd -P)") was not moved."
+        exit 0
+    fi
+    lc_tool journal-busy . --req "--reactivate" </dev/null
+    LC_MOVED_OK=1 lc_identity "${LC_INSTALLER:-release}"
+    aid=$MV_MOVED_ARCHIVE_ID
+    engine=$(lc_mv_engine_image)
+    lc_facts_or_refuse "${engine:-none}"
+    bad=$(python3 -I -c 'import json, sys
+f = json.loads(sys.argv[1] or "{}")
+for v, m in sorted((f.get("markers") or {}).items()):
+    if not m or m.get("op") != "move" or m.get("id") != sys.argv[2]:
+        print("%s holds %s" % (v, "no move marker" if not m else ".sigrift-restore-incomplete (%s %s)" % (m.get("op"), m.get("id"))))
+        break' "${LC_FACTS_JSON:-}" "$aid")
+    if [ -n "$bad" ]; then
+        lc_refuse "$(lc_here_cmd --status)" "${bad}, not the move marker of archive ${aid:0:8}, so this run does not touch the data."
+    fi
+    # 7.4: the imported copy of this install may run on this host (a
+    # same-host switch): two live gateways of one install, refused.
+    if [ -n "${MV_MOVED_INSTALL_ID:-}" ]; then
+        lc_st same-install-running --install-id "$MV_MOVED_INSTALL_ID" --project "$LC_PROJECT" >/dev/null || exit "$?"
+        bad=$(python3 -I -c 'import json, sys
+r = json.loads(sys.argv[1] or "{}").get("running") or []
+if r:
+    print("%s\t%s" % (r[0].get("project") or "?", r[0].get("working_dir") or ""))' "$LC_ST_JSON")
+        if [ -n "$bad" ]; then
+            lc_refuse "cd $(printf %q "${bad#*$'\t'}") && $(lc_inst) --export <file> --move" \
+                "$(lc_mv_esc "${bad%%$'\t'*}") (in $(lc_mv_esc "${bad#*$'\t'}")), the same install (it was imported from this folder's archive), runs on this host; reactivating here would start a second live gateway of one install." \
+                "Move that copy out first (its --export --move), then --reactivate here."
+        fi
+    fi
+    echo "==> Reactivate plan$([ "${LC_DRY_RUN:-0}" = 1 ] && echo " (--dry-run: nothing was changed)")"
+    echo "  Reactivates ${LC_PROJECT} in $(lc_mv_esc "$(pwd -P)"), moved on ${MV_MOVED_AT} into archive ${aid:0:8} ($(lc_mv_esc "$MV_MOVED_FILE")). If that archive was imported on another host, both will serve the same keys, CA and certificate: stop that one first."
+    [ "${LC_DRY_RUN:-0}" = 0 ] || exit 0
+    LC_CONFIRM_NOUN=project LC_CONFIRM_WHAT="reactivate starts" \
+    LC_CONFIRM_TEXT="--reactivate starts ${LC_PROJECT} here again (a second live gateway if its archive was imported elsewhere), and there is no terminal to ask you to type the project." \
+    LC_CONFIRM_DECLINED="Not reactivated: you did not type ${LC_PROJECT}. Nothing was changed." \
+        lc_confirm "$LC_PROJECT" "start it again here" "$(lc_inst) --reactivate"
+    lc_journal_vars | lc_tool journal-new --dir . --op reactivate --steps "${LC_REACTIVATE_STEPS// /,}" \
+        --done "" --from "${LC_FROM_VERSION:-unknown}" --to "${LC_FROM_VERSION:-unknown}" --owner "${OWNER:-}" \
+        --project "$LC_PROJECT" --was-running 0 --bridge "${LC_BRIDGE_CONTAINER:-}" \
+        --gateway "${LC_GATEWAY_CONTAINER:-}" --pin "${LC_PIN:-0}" --project-how "${LC_PROJECT_HOW:-}" \
+        --extra "{\"archive_id\": $(lc_json_str "$aid"), \"confirmed\": $([ "${LC_CONFIRMED:-0}" = 1 ] && echo true || echo false), \"engine_image\": $(lc_json_str "$engine")}" >/dev/null
+    lc_tool lock-owner . --op reactivate --log "$(lc_jget log)" --pid "$$" </dev/null
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+lc_step_rv_unmark() {
+    local vols=""
+    lc_mv_has_volume "$LC_PROJECT" edge_data && vols="--volumes edge_data"
+    # shellcheck disable=SC2086
+    lc_st_step unmark --dir . --project "$LC_PROJECT" --image "$(lc_jget engine_image)" --op move \
+        --id "$(lc_jget archive_id)" $vols >/dev/null || exit "$LC_EXIT_FAILED"
+    lc_op_progress "the move markers removed"
+}
+
+lc_step_rv_moved() {
+    lc_tool moved-archive . </dev/null
+    lc_op_progress "moved.json kept as $(lc_state_path)/logs/moved-$(lc_jget archive_id).json"
+}
+
+lc_abort_reactivate() {
+    local vols=""
+    if [ -n "$(lc_jget bridge_started_at)" ]; then
+        lc_refuse "$(lc_inst) --export <file> --move" "the reactivated stack has started; --abort cannot undo that."
+    fi
+    if [ "${LC_ABORT_DRY_RUN:-0}" = 1 ]; then
+        echo "==> --abort would (--dry-run: nothing was changed): write the move markers and moved.json back (the folder stays moved)."
+        return 0
+    fi
+    lc_tool moved-restore . --archive-id "$(lc_jget archive_id)" </dev/null
+    if ! lc_is_held; then lc_hold_reason move "$(lc_jget archive_id)"; fi
+    lc_mv_has_volume "$LC_PROJECT" edge_data && vols="--volumes edge_data"
+    # shellcheck disable=SC2086
+    lc_st mark --dir . --project "$LC_PROJECT" --image "$(lc_jget engine_image)" --op move \
+        --id "$(lc_jget archive_id)" $vols >/dev/null || true
+    lc_journal_state aborted
+    lc_tool lock-owner . --release </dev/null
+    echo "==> Aborted the --reactivate; $(lc_mv_esc "$(pwd -P)") stays moved."
+}
+
+# ── quickstart (8): state dir, the guarded upgrade, rollback ───────────
+
+# lc_qs_state_resolve — 8.1: LC_STATE_DIR (the pointer, else the XDG path
+# of this checkout's project); the state block of every lifecycle call.
+lc_qs_state_resolve() {
+    local p sd
+    [ -z "${LC_QS_STATE_RESOLVED:-}" ] || return 0
+    p=$(lc_qs_project)
+    sd=$(lc_tool qs-state --checkout . ${p:+--project "$p"} </dev/null) || exit "$?"
+    export LC_STATE_DIR="$sd"
+    LC_STATE_DIRNAME=$sd
+    LC_QS_STATE_RESOLVED=1
+}
+
+# lc_qs_project — the checkout's project: the .env pin, else the name
+# Docker Compose derives from the folder.
+lc_qs_project() {
+    # No docker call here: lc_tool qs-state derives the folder's name itself.
+    lc_qs_env_value COMPOSE_PROJECT_NAME
+}
+
+# lc_qs_env_value KEY — KEY's last plain value in .env (bash only: a
+# quickstart run may have a minimal PATH before its prerequisite checks).
+lc_qs_env_value() {
+    local line v="" re="^[[:space:]]*(export[[:space:]]+)?$1=(.*)$"
+    [ -f .env ] && [ -r .env ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [[ "$line" =~ $re ]]; then v=${BASH_REMATCH[2]}; fi
+    done <.env
+    v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+    printf '%s' "$v"
+}
+
+# lc_qs_state_init — at the first journal: the state dir (0700, parents
+# too) and the pointer .sigrift-state in the checkout.
+lc_qs_state_init() {
+    lc_qs_state_resolve
+    [ -d "$LC_STATE_DIR" ] || (umask 077 && mkdir -p -- "$LC_STATE_DIR")
+    chmod 0700 "$LC_STATE_DIR"
+    lc_tool qs-pointer --checkout . --state "$LC_STATE_DIR" </dev/null
+}
+
+lc_qs_head() {
+    git -C . rev-parse --verify -q HEAD 2>/dev/null || true
+}
+
+# lc_qs_image_id SERVICE — the id of the image `docker compose build` made
+# for SERVICE (<project>-<service>).
+lc_qs_image_id() {
+    lc_image_id "${LC_PROJECT}-$1"
+}
+
+lc_qs_build_or_refuse() {
+    # Under the import's project (the image names are <project>-<service>),
+    # and every service: the start and im-volumes need them all.
+    if ! docker compose -p "$LC_PROJECT" build >/dev/null; then
+        lc_refuse "docker compose build" "docker compose build failed; the running stack was not touched."
+    fi
+}
+
+# lc_qs_tag_prev — 8.2 step 1: every image a container of this project
+# runs (scanners and stopped ones included) gets the tag
+# sigrift-prev-<c12> of the recorded commit (unknown without one).
+lc_qs_tag_prev() {
+    local c12="$1" cid row id ref base
+    while IFS= read -r cid; do
+        [ -n "$cid" ] || continue
+        row=$(docker inspect --format '{{.Image}} {{.Config.Image}}' "$cid" 2>/dev/null) || continue
+        id=${row%% *}
+        ref=${row#* }
+        base=${ref%:*}
+        [ "$base" != "$ref" ] || base=$ref
+        [ -n "$id" ] && [ -n "$base" ] || continue
+        docker tag "$id" "${base}:sigrift-prev-${c12}" >/dev/null 2>&1 || true
+    done < <(docker ps -a -q --filter "label=com.docker.compose.project=${LC_PROJECT}" 2>/dev/null)
+}
+
+# lc_qs_decide — 8.2 step 3: 0 when this run is a re-run (HEAD is the
+# recorded commit and every built image is the one its container runs),
+# 1 for a guarded upgrade. LC_QS_IMAGES gets {service: {ref, id, prev_tag}}.
+lc_qs_decide() {
+    local rec="$1" head="$2" cid row id ref svc built same=1 json="{" c12
+    c12=${rec:0:12}
+    [ -n "$c12" ] || c12=unknown
+    while IFS= read -r cid; do
+        [ -n "$cid" ] || continue
+        row=$(docker inspect --format '{{.Image}} {{.Config.Image}} {{index .Config.Labels "com.docker.compose.service"}}' "$cid" 2>/dev/null) || continue
+        read -r id ref svc <<<"$row"
+        [ -n "$svc" ] || svc=${ref##*-}
+        svc=${svc%%:*}
+        built=$(lc_image_id "${ref%:*}")
+        [ -z "$built" ] || [ "$built" = "$id" ] || same=0
+        json+="$(lc_json_str "$svc"): {\"ref\": $(lc_json_str "${ref%:*}"), \"id\": $(lc_json_str "$id"), \"prev_tag\": $(lc_json_str "sigrift-prev-${c12}")},"
+    done < <(docker ps -a -q --filter "label=com.docker.compose.project=${LC_PROJECT}" 2>/dev/null)
+    LC_QS_IMAGES="${json%,}}"
+    [ "$json" != "{" ] || LC_QS_IMAGES="{}"
+    [ -n "$rec" ] && [ "$rec" = "$head" ] && [ "$same" = 1 ]
+}
+
+# lc_qs_upgrade_main — 8.2: after quickstart's file writes and its build,
+# before any `up`: a re-run returns 0 (quickstart's own path follows);
+# otherwise the guarded upgrade runs detached and this exits with its code.
+lc_qs_upgrade_main() {
+    local rec head rc=0 done="snapshot" was extra
+    [ "${LC_HAS_DATA:-0}" = 1 ] || return 0
+    head=$(lc_qs_head)
+    if [ -z "$head" ]; then
+        lc_note "this checkout is not a git work tree, so its upgrade is not guarded (no commit to roll back to)."
+        return 0
+    fi
+    LC_QS_HEAD=$head
+    rec=""
+    [ ! -f "$(lc_state_path)/install.json" ] || rec=$(lc_tool json-get git_commit <"$(lc_state_path)/install.json") || rec=""
+    if lc_qs_decide "$rec" "$head"; then
+        return 0
+    fi
+    lc_qs_state_init
+    echo "==> Guarded upgrade of ${LC_PROJECT}: ${rec:0:12}${rec:+ -> }${head:0:12}"
+    if [ -z "$rec" ]; then
+        echo "  NOTE      no commit is recorded for this install yet (its first guarded run): this run cannot be rolled back by --rollback."
+    fi
+    if [ "${LC_NO_SNAPSHOT:-0}" = 0 ]; then
+        lc_st space-plan --dir . --project "$LC_PROJECT" --image "$(lc_mv_engine_image)" --kind upgrade \
+            --cmd "scripts/quickstart.sh" ${LC_EXCLUDE:+--exclude "$LC_EXCLUDE"} --auto-rollback 0 || exit "$?"
+        LC_SPACE_JSON=$LC_ST_JSON
+    fi
+    was=${LC_WAS_RUNNING:-0}
+    extra=$(python3 -I -c 'import json, sys
+print(json.dumps({"images": json.loads(sys.argv[1] or "{}"), "git_commit_from": sys.argv[2] or None,
+                  "git_commit_to": sys.argv[3], "flags": {"exclude": sys.argv[4], "no_snapshot": sys.argv[5] == "1",
+                                                          "no_auto_rollback": True},
+                  "rp_plan": json.loads(sys.argv[6] or "null")}))' "${LC_QS_IMAGES:-{\}}" "$rec" "$head" \
+        "${LC_EXCLUDE:-}" "${LC_NO_SNAPSHOT:-0}" "${LC_SPACE_JSON:-}")
+    local steps=$LC_QS_UPGRADE_STEPS
+    [ "${LC_NO_SNAPSHOT:-0}" = 0 ] || steps=${steps/ restore-point/}
+    lc_journal_vars | lc_tool journal-new --dir . --op upgrade --steps "${steps// /,}" --done "$done" \
+        --from "${rec:-unknown}" --to "$head" --project "$LC_PROJECT" --snapshot "${LC_SNAPSHOT_ID:-}" \
+        --was-running "$was" --bridge "${LC_BRIDGE_CONTAINER:-}" --gateway "${LC_GATEWAY_CONTAINER:-}" \
+        --pin "${LC_PIN:-0}" --project-how "${LC_PROJECT_HOW:-}" --extra "$extra" >/dev/null
+    lc_tool lock-owner . --op upgrade --log "$(lc_jget log)" --pid "$$" </dev/null
+    lc_run_detached || rc=$?
+    exit "$rc"
+}
+
+# lc_step_qs_switch — quickstart's file writes for this run (the .env
+# merge, the override for the mode, TLS, the scanner config) were made by
+# the parent before its build, after the files-only point that the
+# restore point carries (phase2-notes, B-D3); the step records them.
+lc_step_qs_switch() {
+    lc_tool journal-set . "qs_switched_at=@now" </dev/null
+    lc_progress 7 "this checkout's files for ${LC_QS_HEAD:0:12} in place (written before the build)"
+}
+
+# lc_qs_not_rolled_back — M-QS-NOT-ROLLED-BACK (G12).
+lc_qs_not_rolled_back() {
+    local c12
+    c12=$(lc_jget git_commit_from | cut -c1-12)
+    echo "Quickstart does not roll back by itself. To go back to ${c12:-the previous commit}: git -C $(printf %q "$(pwd -P)") checkout ${c12:-<commit>} && scripts/quickstart.sh --rollback" >&2
+    echo "Next: $(lc_here_cmd --status)" >&2
+}
+
+# lc_qs_rp_args — rp-create's arguments for a source install (G11).
+lc_qs_rp_args() {
+    local vols="bridge_secrets,bridge_data" commit
+    LC_QS_RP_ARGS=(--install-type source)
+    if lc_mv_has_volume "$LC_PROJECT" edge_data; then
+        vols+=",edge_data"
+        LC_QS_RP_ARGS+=(--exempt-nodes "$(lc_qs_env_value MLRF_NODE_ID | grep . || echo local-edge)")
+    fi
+    if lc_st pki-detect --project "$LC_PROJECT" >/dev/null 2>&1 && [ "$(lc_st_get pki)" = 1 ]; then
+        vols+=",pki"
+    fi
+    LC_QS_RP_ARGS+=(--volumes "$vols")
+    commit=$(lc_jget git_commit_from)
+    [ -z "$commit" ] || LC_QS_RP_ARGS+=(--git-commit "$commit")
+}
+
+# lc_qs_rb_token RESOLVE — the rollback's confirmation token (2.3): the
+# point's git_commit[:12].
+lc_qs_rb_token() {
+    local c
+    c=$(lc_tool json-get git_commit <"$1" 2>/dev/null) || c=""
+    [ -n "$c" ] || c=$(lc_qs_rp_manifest_get "$1" git_commit)
+    LC_QS_RB_COMMIT=$c
+    LC_QS_RB_TOKEN=${c:0:12}
+}
+
+lc_qs_rp_manifest_get() {
+    local root id
+    root=$(lc_tool json-get root <"$1" 2>/dev/null) || root=""
+    id=$(lc_tool json-get id <"$1" 2>/dev/null) || id=""
+    lc_tool json-get "$2" <"${root}/${id}/manifest.json" 2>/dev/null || true
+}
+
+# lc_qs_head_gate RESOLVE — 8.3: HEAD must be the point's commit and the
+# tracked compose files unmodified (M-QS-RB-HEAD, -NO-COMMIT, -DIRTY).
+lc_qs_head_gate() {
+    local head c12 files=() f dirty=""
+    if [ -z "${LC_QS_RB_COMMIT:-}" ]; then
+        lc_refuse "scripts/quickstart.sh --list-snapshots" "that restore point does not know the commit its images came from."
+    fi
+    c12=${LC_QS_RB_COMMIT:0:12}
+    head=$(lc_qs_head)
+    if [ "$head" != "$LC_QS_RB_COMMIT" ]; then
+        lc_refuse "git -C $(printf %q "$(pwd -P)") checkout ${c12} && scripts/quickstart.sh --rollback $(lc_tool json-get id <"$1")" \
+            "the checkout is at ${head:0:12}, the restore point at ${c12}."
+    fi
+    for f in docker-compose.yml docker-compose.pki.yml docker-compose.staging.yml; do
+        [ -e "$f" ] && files+=("$f")
+    done
+    if [ "${#files[@]}" -gt 0 ] && ! git -C . diff --quiet HEAD -- "${files[@]}" 2>/dev/null; then
+        dirty="${files[*]}"
+        lc_refuse "git -C $(printf %q "$(pwd -P)") stash" "${dirty} differ from commit ${c12}."
+    fi
+}
+
+# lc_qs_rb_images RESOLVE — 8.3 parent step 6: each kept image present, or
+# rebuilt from the checkout (HEAD is the point's commit) before any change.
+lc_qs_rb_images() {
+    local svc id
+    while read -r svc id; do
+        [ -n "$svc" ] || continue
+        if [ -z "$(docker image inspect --format '{{.Id}}' "$id" 2>/dev/null)" ]; then
+            [ "${LC_DRY_RUN:-0}" = 0 ] || continue
+            if ! docker compose build "$svc" >/dev/null; then
+                lc_refuse "docker compose build" "the images of ${LC_QS_RB_COMMIT:0:12} are gone and building them failed."
+            fi
+            lc_note "rebuilt ${svc} from ${LC_QS_RB_COMMIT:0:12}: its kept image was gone"
+        fi
+    done < <(python3 -I -c 'import json, sys
+for s, x in sorted((json.load(open(sys.argv[1])).get("images") or {}).items()):
+    if isinstance(x, dict) and x.get("id"):
+        print(s, x["id"])' "$1" 2>/dev/null)
+}
+
+# lc_qs_retag_images — rb-qs-images: `docker tag <id> <ref>` per service of
+# the point (a rebuilt one is already tagged).
+lc_qs_retag_images() {
+    local svc ref id
+    while read -r svc ref id; do
+        [ -n "$id" ] || continue
+        docker tag "$id" "$ref" >/dev/null 2>&1 || docker compose build "$svc" >/dev/null
+    done < <(python3 -I -c 'import json, sys
+m = json.load(open(sys.argv[1]))
+for s, x in sorted((m.get("images") or {}).items()):
+    if isinstance(x, dict) and x.get("id") and x.get("ref"):
+        print(s, x["ref"], x["id"])' "$(lc_rb_manifest_path)" 2>/dev/null)
+}
+
+# lc_qs_prune_prev — record (8.2): prev tags of commits no COMPLETE full
+# point of this install names are untagged.
+lc_qs_prune_prev() {
+    local keep tag
+    keep=$(LC_FACTS_JSON='{}' lc_state_tool rp-list --dir . --json --result /dev/null </dev/null 2>/dev/null | python3 -I -c 'import json, sys
+try:
+    rps = json.loads(sys.stdin.read() or "{}").get("restore_points") or []
+except ValueError:
+    rps = []
+print(" ".join(sorted(set("sigrift-prev-" + (p.get("git_commit") or "")[:12] for p in rps
+                         if p.get("kind") == "full" and p.get("complete") and p.get("git_commit")))))') || keep=""
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        case " $keep " in *" ${tag##*:} "*) continue ;; esac
+        docker rmi "$tag" >/dev/null 2>&1 || true
+    done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "^${LC_PROJECT}-[a-z-]*:sigrift-prev-" || true)
+}
+
+# lc_mv_rb_identity_args — rb-record of a rollback to a pre-import point
+# restores the identity the import replaced (1.2 rp-resolve, E23).
+lc_mv_rb_identity_args() {
+    local iid
+    LC_MV_RB_ARGS=()
+    iid=$(lc_tool json-get replaced.install_id <<<"$(lc_jget replaced | grep . || echo '{}')" 2>/dev/null) || iid=""
+    [ -z "$iid" ] || LC_MV_RB_ARGS=(--set-install-id "$iid"
+        --record-extra "{\"imported_from\": $(lc_jget replaced.imported_from | grep . || echo null)}")
+}
+# <<< shared: move
 
 # Release installs keep files-only restore points (lifecycle block).
 LC_SNAPSHOTS=1
@@ -6756,7 +23988,8 @@ EOF
     # Files from before BRIDGE_KEYSTORE_KEY: the bridge then keeps the
     # protocol decryption keys imported in the console in memory only.
     # Only the bridge holds them; the internet-facing gateway never should.
-    if ! grep -qE '^[[:space:]]*(-[[:space:]]*)?"?BRIDGE_KEYSTORE_KEY[=:]' <<<"$bridge_block"; then
+    if [ "${LC_KEYSTORE_NOTE:-1}" = 1 ] \
+            && ! grep -qE '^[[:space:]]*(-[[:space:]]*)?"?BRIDGE_KEYSTORE_KEY[=:]' <<<"$bridge_block"; then
         cat >&2 <<EOF
 NOTE: the bridge service in $1 does not get BRIDGE_KEYSTORE_KEY, so
       imported protocol decryption keys stay in memory only and are lost on
@@ -6947,8 +24180,15 @@ PY
 }
 
 # release_write_compose — the installer-managed docker-compose.yml of a
-# new install, pinned to VERSION, OWNER and PORT.
+# new install, pinned to VERSION, OWNER and PORT. A release tag pulls an
+# image only when it is missing (it never changes under its tag; every
+# start uses --pull never anyway, after an explicit pull); a main build
+# always pulls.
 release_write_compose() {
+    local LC_PULL_POLICY=always
+    if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+        LC_PULL_POLICY=missing
+    fi
     cat > docker-compose.yml <<EOF
 # Generated by install-release.sh @ ${VERSION}.
 # Pinned to the immutable release image tags. Do not edit these tags
@@ -6956,7 +24196,7 @@ release_write_compose() {
 services:
   bridge:
     image: ghcr.io/${OWNER}/sigrift-bridge:${VERSION}
-    pull_policy: always
+    pull_policy: ${LC_PULL_POLICY:-always}
     expose:
       - "8001"
     # Reachable only from the gateway (the only other container on
@@ -6976,6 +24216,10 @@ services:
       # Key for the protocol decryption keys the bridge keeps (imported in
       # the console). Without it they stay in memory only.
       - BRIDGE_KEYSTORE_KEY=\${BRIDGE_KEYSTORE_KEY:-}
+      # "1" lets the bridge apply new migrations without its
+      # detections.db.pre-migration copy (it refuses when that copy fails,
+      # usually a full disk). Only with your own backup; unset it after.
+      - BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=\${BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP:-}
       - BRIDGE_ADMIN_PASSWORD=\${BRIDGE_ADMIN_PASSWORD:-}
       - BRIDGE_SESSION_BINDING=\${BRIDGE_SESSION_BINDING:-none}
       - BRIDGE_SECRETS_DIR=/app/secrets
@@ -6999,11 +24243,14 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # The bridge applies pending database migrations before it answers
+      # its first health check; an upgrade can take minutes on a large
+      # database, and the gateway waits for this check.
+      start_period: 10m
 
   gateway:
     image: ghcr.io/${OWNER}/sigrift-gateway:${VERSION}
-    pull_policy: always
+    pull_policy: ${LC_PULL_POLICY:-always}
     # 127.0.0.1 = this machine only (the default); SIGRIFT_BIND=0.0.0.0 in
     # .env publishes it on every interface (the LAN, remote edge nodes).
     ports:
@@ -7069,6 +24316,153 @@ volumes:
   bridge_secrets:
 EOF
     echo "==> Wrote docker-compose.yml (pinned to ${VERSION})"
+}
+
+# id:canonical-sha256 of every installer template this installer can
+# regenerate from; the last one is the template above (a test checks).
+# Editing the heredoc above means appending its new entry here: the old
+# ones stay, so installs made with them can still be regenerated.
+LC_COMPOSE_TEMPLATES="t0-v0.1.0:2d35a89844b9343cabe9133be052a20871d80e1534366efa3925f5006bd8a740 t1:ee442fa0cdae764b80e4fca765588635c541f8e500c2409dab7ad7543268f8fe"
+# The first release that ships the last template (the owner's tag for the
+# held release). release.yml refuses a release tag below it.
+LC_TEMPLATE_SINCE=v0.2.0
+
+# release_render_compose [--port P] [--owner O] [--version V] OUT [OWNER PORT]
+# — the current template rendered for VERSION (or V) into OUT (0644), in a
+# temporary folder: release_write_compose writes ./docker-compose.yml and
+# prints a line, neither of which may touch the install folder or the
+# caller's output. An import renders with the archive's port and owner
+# (phase 2, 4.3), so both are checked first: a port of 1-65535 and a
+# ghcr.io account name; anything else returns 2 and writes nothing.
+release_render_compose() {
+    local out port="$PORT" owner="$OWNER" version="$VERSION" d rc
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --port) port="${2:-}"; shift 2 || return 2 ;;
+            --owner) owner="${2:-}"; shift 2 || return 2 ;;
+            --version) version="${2:-}"; shift 2 || return 2 ;;
+            *) break ;;
+        esac
+    done
+    out="${1:-}"
+    [ -z "${2:-}" ] || owner="$2"
+    [ -z "${3:-}" ] || port="$3"
+    if [ -z "$out" ] || ! [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$port" -gt 65535 ] \
+            || ! [[ "$owner" =~ ^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?$ ]] \
+            || ! [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+        return 2
+    fi
+    d=$(mktemp -d) || return 1
+    (cd "$d" && VERSION="$version" OWNER="$owner" PORT="$port" release_write_compose >/dev/null) \
+        && cp "$d/docker-compose.yml" "$out" && chmod 0644 "$out"
+    rc=$?
+    rm -rf -- "$d"
+    return "$rc"
+}
+
+# release_switch_compose FILE [--check] — an upgrade's compose change.
+# When FILE is an unedited copy of a template this installer knows and the
+# target release ships the current one (LC_TEMPLATE_SINCE, -rcN ignored),
+# FILE is regenerated from the current template with its owner and port
+# kept (validated like update_release_images; the old file kept as
+# FILE.bak.<time>~); otherwise only its image tags are updated
+# (update_release_images), with the would-be file and a diff in the log for
+# a hand-edited one. --check runs every check and writes nothing. Exports
+# LC_COMPOSE_TEMPLATE_SHA256 (the canonical hash now in place) for record.
+release_switch_compose() {
+    local file="$1" check="${2:-}" res fields tmpl="" owner="" port="" new backup diff jid floor=0
+    res=$(mktemp "${TMPDIR:-/tmp}/sigrift-canon.XXXXXX") || return 1
+    if lc_state_tool compose-canon "$file" --result "$res" </dev/null >/dev/null; then
+        fields=$(python3 -I -c 'import json, sys
+r = json.load(open(sys.argv[1]))
+print(r.get("template") or "-", r.get("owner") or "-", r.get("port") or "-")' "$res")
+        read -r tmpl owner port <<<"$fields"
+    fi
+    rm -f -- "$res"
+    [ "$owner" != - ] || owner=""
+    [ "$port" != - ] || port=""
+    if lc_state_tool version-meets "$VERSION" "$LC_TEMPLATE_SINCE" </dev/null >/dev/null; then
+        floor=1
+    fi
+    if [ "$floor" = 1 ] && [ -n "$tmpl" ] && [ "$tmpl" != - ] && [ "$tmpl" != custom ] \
+            && [ "$tmpl" != not-installer ]; then
+        if [ "$owner" != "$OWNER" ]; then
+            echo "Error: $file names the image owner $owner, not $OWNER; Compose was not changed." >&2
+            return 1
+        fi
+        new="$(dirname -- "$file")/.docker-compose.yml.sigrift-new"
+        if ! release_render_compose "$new" "$owner" "${port:-$PORT}" \
+                || ! release_validate_compose "$new" "$(dirname -- "$file")"; then
+            rm -f -- "$new"
+            echo "Error: the $VERSION compose template could not be rendered and validated; Compose was not changed." >&2
+            return 1
+        fi
+        if [ "$check" = --check ]; then
+            rm -f -- "$new"
+            return 0
+        fi
+        backup="${file}.bak.$(date +%Y%m%d-%H%M%S)~"
+        cp -p -- "$file" "$backup"
+        mv -f -- "$new" "$file"
+        res=$(mktemp "${TMPDIR:-/tmp}/sigrift-canon.XXXXXX") || return 1
+        lc_state_tool compose-canon "$file" --result "$res" </dev/null >/dev/null || true
+        LC_COMPOSE_TEMPLATE_SHA256=$(python3 -I -c 'import json, sys
+print(json.load(open(sys.argv[1])).get("sha256") or "")' "$res" 2>/dev/null || true)
+        rm -f -- "$res"
+        export LC_COMPOSE_TEMPLATE_SHA256
+        echo "==> docker-compose.yml regenerated from the $VERSION template (owner $owner, port ${port:-$PORT} kept); previous file: $backup"
+    else
+        update_release_images "$file" "$check" || return 1
+        if [ "$tmpl" = custom ] && [ "$floor" = 1 ] && [ "$check" != --check ]; then
+            jid=$(lc_tool journal-get . id </dev/null 2>/dev/null || true)
+            diff=".sigrift/logs/compose-template-${jid:-run}.diff"
+            new=$(mktemp "${TMPDIR:-/tmp}/sigrift-compose.XXXXXX") || return 0
+            if release_render_compose "$new" "${owner:-$OWNER}" "${port:-$PORT}"; then
+                mkdir -p .sigrift/logs
+                (umask 077 && { diff -u "$file" "$new" || true; } | head -n 200 > "$diff")
+                echo "NOTE: docker-compose.yml differs from every template this installer knows, so only its image tags were updated; what the $VERSION template would change: $(pwd)/$diff" >&2
+            fi
+            rm -f -- "$new"
+        fi
+    fi
+    if [ "$check" != --check ]; then
+        # An older bridge than the template's first release cannot use the
+        # keystore key, so the NOTE that asks for it stays silent then.
+        if [ "$floor" = 1 ]; then
+            check_compose_gateway_env "$file"
+        else
+            LC_KEYSTORE_NOTE=0 check_compose_gateway_env "$file"
+        fi
+    fi
+}
+
+# release_validate_compose CANDIDATE DIR — CANDIDATE validates with Compose
+# in DIR (with DIR's override, as update_release_images checks) and names
+# the requested bridge and gateway images.
+release_validate_compose() {
+    python3 -I - "$1" "$2" "$OWNER" "$VERSION" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+candidate, folder, owner, version = sys.argv[1:5]
+expected = {name: f"ghcr.io/{owner}/sigrift-{name}:{version}" for name in ("bridge", "gateway")}
+if os.environ.get("COMPOSE_FILE"):
+    sys.exit("Error: COMPOSE_FILE overrides the installer stack; Compose was not changed.")
+command = ["docker", "compose", "--project-directory", folder, "-f", candidate]
+for filename in ("docker-compose.override.yml", "docker-compose.override.yaml"):
+    override = os.path.join(folder, filename)
+    if os.path.exists(override):
+        command += ["-f", override]
+        break
+result = subprocess.run(command + ["config", "--format", "json"], capture_output=True, text=True)
+if result.returncode:
+    sys.exit("Error: the regenerated docker-compose.yml does not validate with Compose; no files changed. Check docker compose config --quiet.")
+services = json.loads(result.stdout)["services"]
+if any(services.get(name, {}).get("image") != image for name, image in expected.items()):
+    sys.exit("Error: a Compose override changes a requested release image; update it manually. No files changed.")
+PY
 }
 
 # read_admin_password — asks for the bootstrap admin's password (twice,
@@ -7200,10 +24594,22 @@ release_switch() {
         lc_secrets_check
         lc_unhold
     fi
-    if [ "$VERSION_REQUESTED" -eq 1 ]; then
-        update_release_images docker-compose.yml
+    if [ "${LC_CRITICAL:-0}" = 1 ] && [ "${LC_JOURNAL_OP:-}" = upgrade ]; then
+        # An upgrade: regenerated from the current template when the file
+        # is an unedited installer template (it runs check_compose_gateway_env).
+        release_switch_compose docker-compose.yml
+    else
+        if [ "$VERSION_REQUESTED" -eq 1 ]; then
+            update_release_images docker-compose.yml
+        fi
+        # Below the template's first release (a re-run at v0.1.0 after a
+        # rollback) the bridge cannot use the keystore key: no NOTE for it.
+        if lc_state_tool version-meets "$VERSION" "$LC_TEMPLATE_SINCE" </dev/null >/dev/null 2>&1; then
+            check_compose_gateway_env docker-compose.yml
+        else
+            LC_KEYSTORE_NOTE=0 check_compose_gateway_env docker-compose.yml
+        fi
     fi
-    check_compose_gateway_env docker-compose.yml
     if [ "$VERSION_REQUESTED" -eq 1 ]; then
         lc_write_version "$VERSION"
     fi
@@ -7226,7 +24632,13 @@ release_summary() {
     echo ""
     if [ "$mode" = upgrade ]; then
         echo "SigRift ${VERSION} is up in $(pwd -P)."
-        echo "    Restore points (files only): $(pwd -P)/${LC_STATE_DIRNAME}/snapshots/   Status: $(lc_here_cmd --status)"
+        lc_rp=$(lc_tool journal-get . restore_point </dev/null 2>/dev/null) || lc_rp=""
+        if [ -n "$lc_rp" ]; then
+            echo "    Undo it: $(lc_in_here bash install-release.sh --rollback)   (restore point ${lc_rp}; restore points are not off-host backups)"
+        else
+            echo "    Restore points (files only): $(pwd -P)/${LC_STATE_DIRNAME}/snapshots/"
+        fi
+        echo "    Status:  $(lc_here_cmd --status)"
     else
         echo "SigRift ${VERSION} is up."
     fi
@@ -7278,18 +24690,76 @@ case "$LC_COMMAND" in
     abort)
         lc_goto_install "$LC_COMMAND_DIR"
         LC_ABORT_DRY_RUN=$LC_DRY_RUN
-        lc_abort
-        exit 0
+        rc=0
+        lc_abort || rc=$?
+        exit "$rc"
+        ;;
+    rollback)
+        lc_goto_install "$LC_COMMAND_DIR"
+        lc_rb_main
+        ;;
+    finish)
+        lc_goto_install "$LC_COMMAND_DIR"
+        lc_finish_main
+        ;;
+    snapshot)
+        lc_goto_install "$LC_COMMAND_DIR"
+        lc_snapshot_main
+        ;;
+    list-snapshots)
+        lc_goto_install "$LC_COMMAND_DIR"
+        rc=0
+        lc_list_snapshots || rc=$?
+        exit "$rc"
+        ;;
+    export)
+        lc_export_main
+        ;;
+    import)
+        lc_import_main
+        ;;
+    reactivate)
+        lc_reactivate_main
         ;;
     continue)
-        # The detached part of an upgrade runs in the install folder (the
+        # The detached part of an operation runs in the install folder (the
         # folder this was started in), not in this installer's own.
         cd "$LC_CALLER_DIR"
         lc_continue "$LC_CONTINUE_ID"
-        release_summary upgrade
-        exit 0
+        # Only a finished upgrade prints the upgrade's summary; a rollback,
+        # restore point or undo prints its own result.
+        if [ "$LC_ABORT_RUN" = 0 ] && [ "$(lc_tool journal-get . op </dev/null)" = upgrade ] \
+                && [ "$(lc_tool journal-get . state </dev/null)" = "done" ]; then
+            release_summary upgrade
+            exit 0
+        fi
+        rc=0
+        lc_op_result || rc=$?
+        exit "$rc"
         ;;
 esac
+
+# release_typed_cmd — this run's command rebuilt from its parsed flags
+# (the folder to upgrade and every upgrade option), for a Next: line.
+release_typed_cmd() {
+    local cmd="bash install-release.sh"
+    if [ -n "${LC_SELF_DIR:-}" ] && [ -n "${LC_CALLER_DIR:-}" ] && [ "$LC_SELF_DIR" != "$LC_CALLER_DIR" ]; then
+        cmd="bash $(printf %q "$LC_SELF_DIR")/install-release.sh"
+    fi
+    [ -z "$LC_UPGRADE_DIR" ] || cmd+=" --upgrade $(printf %q "$LC_UPGRADE_DIR")"
+    [ "$LC_NEW_INSTANCE" = 0 ] || cmd+=" --new-instance"
+    [ -z "$LC_ADOPT_PROJECT" ] || cmd+=" --adopt-project $(printf %q "$LC_ADOPT_PROJECT")"
+    [ "$LC_KEEP_RUNNING_SECRETS" = 0 ] || cmd+=" --keep-running-secrets"
+    [ -z "$LC_EXCLUDE" ] || cmd+=" --exclude $(printf %q "$LC_EXCLUDE")"
+    [ "$LC_NO_AUTO_ROLLBACK" = 0 ] || cmd+=" --no-auto-rollback"
+    printf '%s' "$cmd"
+}
+
+if [ "$LC_NO_SNAPSHOT" = 1 ] && [ "${SIGRIFT_I_HAVE_A_BACKUP:-}" != 1 ]; then
+    lc_refuse "SIGRIFT_I_HAVE_A_BACKUP=1 $(release_typed_cmd) --no-snapshot" \
+        "--no-snapshot upgrades without a restore point, so nothing could roll this upgrade back; it needs SIGRIFT_I_HAVE_A_BACKUP=1 to say you keep your own copy of both data volumes, .env and tls/."
+fi
+lc_check_installer_release
 
 # ── Which install this run acts on ───────────────────────────────────
 # lc_identity decides from the Compose labels on this host: this folder;
@@ -7331,8 +24801,8 @@ if [ "$LC_VERSION_FROM" = env ] || { [ "$LC_VERSION_FROM" = file ] && [ "$LC_SEL
 fi
 lc_held=0
 [ "$LC_KIND" != held ] || lc_held=1
-lc_journal=$(lc_tool journal-check . --to "$VERSION" --requested "$lc_requested" --held "$lc_held" </dev/null) \
-    || exit "$?"
+lc_journal=$(lc_tool journal-check . --to "$VERSION" --requested "$lc_requested" --held "$lc_held" \
+    --req "$VERSION" </dev/null) || exit "$?"
 if [ "$lc_journal" = resume ]; then
     if [ "$LC_DRY_RUN" -eq 1 ]; then
         echo "==> An upgrade to $(lc_tool journal-get . to_version </dev/null) was interrupted here; a run without --dry-run resumes it (--dry-run: nothing was changed)."
@@ -7344,12 +24814,20 @@ if [ "$lc_journal" = resume ]; then
     exit "$rc"
 fi
 if [ "$VERSION_REQUESTED" -eq 1 ] && [ -f docker-compose.yml ]; then
-    if ! update_release_images docker-compose.yml --check; then
+    if [ -e .env ] && [ "$LC_FROM_VERSION" != "$VERSION" ]; then
+        lc_compose_check() { release_switch_compose docker-compose.yml --check; }
+    else
+        lc_compose_check() { update_release_images docker-compose.yml --check; }
+    fi
+    if ! lc_compose_check; then
         printf 'Next: %s\nNothing was changed.\n' "$(lc_in_here docker compose config --quiet)" >&2
         exit "$LC_EXIT_REFUSED"
     fi
 fi
 lc_preflight
+# No staging, replaced copy (unless finished) or marker of an earlier
+# restore that no journal names (M-RB-LEFTOVER).
+[ "${LC_HAS_DATA:-0}" = 0 ] || lc_rb_leftovers
 # What this run is, as far as it is known before the pull (a moving :main
 # tag can still turn a re-run into an upgrade, lc_decide_mode).
 if [ ! -e .env ]; then
@@ -7360,6 +24838,44 @@ else
     LC_OP=upgrade lc_plan_mode=upgrade
 fi
 [ "$LC_OP" = install ] || [ "$LC_PROJECT_HOW" != adopted ] || LC_OP=adopt
+if [ "$lc_plan_mode" != upgrade ] && { [ "$LC_NO_AUTO_ROLLBACK$LC_NO_SNAPSHOT" != 00 ] || [ -n "$LC_EXCLUDE" ]; }; then
+    lc_note "--no-auto-rollback, --exclude and --no-snapshot apply to an upgrade only; this run ignores them."
+fi
+# Phase 1b, before anything changes: the full restore point must fit
+# (M-SPACE), in a safe place (M-SNAPSHOT-DIR-UNSAFE).
+LC_SPACE_JSON=""
+lc_compose_tmpl=""
+lc_space_plan_upgrade() {
+    local img args
+    img=$(docker inspect --format '{{.Image}}' "${LC_BRIDGE_CONTAINER:-none}" 2>/dev/null) || img=""
+    [ -n "$img" ] || img=$(lc_image_id "$(lc_tool engine-image --installer release --project "$LC_PROJECT" \
+        --dir . --bridge "" --owner "$OWNER" --version "$LC_FROM_VERSION" </dev/null)")
+    [ -n "$img" ] || img=$(lc_image_id "ghcr.io/${OWNER}/sigrift-bridge:${VERSION}")
+    [ -n "$img" ] || return 0
+    args=(space-plan --dir . --project "$LC_PROJECT" --image "$img" --kind upgrade
+        --migrations-pending "$1" --cmd "$(lc_rerun_cmd)"
+        --auto-rollback "$([ "$LC_NO_AUTO_ROLLBACK" = 1 ] && echo 0 || echo 1)")
+    [ -z "$LC_EXCLUDE" ] || args+=(--exclude "$LC_EXCLUDE")
+    lc_st "${args[@]}" || exit "$?"
+    LC_SPACE_JSON=$LC_ST_JSON
+}
+if [ "$lc_plan_mode" = upgrade ] && [ "${LC_HAS_DATA:-0}" = 1 ]; then
+    [ "$LC_DRY_RUN" -eq 1 ] || lc_st lc-clean --project "$LC_PROJECT" --dir . >/dev/null || true
+    if [ "$LC_NO_SNAPSHOT" = 0 ]; then
+        lc_tool snapshot-dir-check . --project "$LC_PROJECT" --cmd "$(lc_rerun_cmd)" </dev/null
+        lc_space_plan_upgrade 0
+    fi
+fi
+if [ "$lc_plan_mode" = upgrade ] && [ -f docker-compose.yml ] && ! lc_is_held; then
+    lc_canon=$(mktemp "${TMPDIR:-/tmp}/sigrift-canon.XXXXXX")
+    lc_state_tool compose-canon docker-compose.yml --result "$lc_canon" </dev/null >/dev/null 2>&1 || true
+    lc_compose_tmpl=$(lc_tool json-get template <"$lc_canon" 2>/dev/null) || lc_compose_tmpl=""
+    rm -f -- "$lc_canon"
+    if [ -n "$lc_compose_tmpl" ] && [ "$lc_compose_tmpl" != custom ] && [ "$lc_compose_tmpl" != not-installer ] \
+            && ! lc_state_tool version-meets "$VERSION" "$LC_TEMPLATE_SINCE" </dev/null >/dev/null 2>&1; then
+        lc_compose_tmpl=below-floor
+    fi
+fi
 # The plan: with --dry-run (then nothing changes), and before an automatic
 # upgrade, which a terminal can still decline.
 if [ "$LC_DRY_RUN" -eq 1 ] || [ "$LC_AUTO" = 1 ]; then
@@ -7368,10 +24884,15 @@ if [ "$LC_DRY_RUN" -eq 1 ] || [ "$LC_AUTO" = 1 ]; then
     else
         echo "==> Plan"
     fi
+    lc_space_file=$(mktemp "${TMPDIR:-/tmp}/sigrift-space.XXXXXX")
+    printf '%s' "${LC_SPACE_JSON:-{\}}" >"$lc_space_file"
     lc_tool plan --dir . --project "$LC_PROJECT" --pin "$LC_PIN" --from "$LC_FROM_VERSION" \
         --to "$VERSION" --env-result "${LC_ENV_RESULT:-}" --others "${LC_OTHERS:-}" \
         --mode "$lc_plan_mode" --source-dir "$LC_SELF_DIR" --newest "${LC_TARGET_SCHEMA:-}" \
-        --tls "$(lc_tls_plan)" --owner "$OWNER" </dev/null
+        --tls "$(lc_tls_plan)" --owner "$OWNER" --space "$lc_space_file" \
+        --no-snapshot "$LC_NO_SNAPSHOT" --auto-rollback "$([ "$LC_NO_AUTO_ROLLBACK" = 1 ] && echo 0 || echo 1)" \
+        --compose "$lc_compose_tmpl" ${LC_EXCLUDE:+--exclude "$LC_EXCLUDE"} </dev/null
+    rm -f -- "$lc_space_file"
     [ "$LC_DRY_RUN" -eq 0 ] || exit 0
 fi
 [ "$LC_AUTO" != 1 ] || lc_confirm_auto_target
@@ -7379,14 +24900,29 @@ fi
 # ── Pull first ───────────────────────────────────────────────────────
 # While the old stack runs and before any file changes: a failed pull
 # leaves everything as it was (exit 3).
-LC_STEPS_TOTAL=7
-[ "$LC_SELF_DIR" = "$(pwd -P)" ] || LC_STEPS_TOTAL=8
+LC_STEPS_TOTAL=9
+[ "$LC_SELF_DIR" = "$(pwd -P)" ] || LC_STEPS_TOTAL=10
 [ "$lc_plan_mode" != upgrade ] || lc_progress 1 "preflight ok"
 lc_pull_images
 lc_decide_mode
 lc_check_target_schema
 if [ "$LC_MODE" = upgrade ] && [ "$LC_OP" = rerun ]; then
     LC_OP=upgrade
+fi
+# The space need again once the target's migrations are known (the new
+# bridge's own pre-migration copy needs room in the volume too); a moving
+# :main tag that turned a re-run into an upgrade gets its plan now.
+if [ "$LC_MODE" = upgrade ] && [ "${LC_HAS_DATA:-0}" = 1 ] && [ "$LC_NO_SNAPSHOT" = 0 ]; then
+    lc_live_schema=$(lc_tool facts-get db.schema </dev/null)
+    if [ -z "$LC_SPACE_JSON" ] || { [[ "${LC_TARGET_SCHEMA:-}" =~ ^[0-9]+$ ]] && [[ "$lc_live_schema" =~ ^[0-9]+$ ]] \
+            && [ "$LC_TARGET_SCHEMA" -gt "$lc_live_schema" ]; }; then
+        lc_mig=0
+        if [[ "${LC_TARGET_SCHEMA:-}" =~ ^[0-9]+$ ]] && [[ "$lc_live_schema" =~ ^[0-9]+$ ]] \
+                && [ "$LC_TARGET_SCHEMA" -gt "$lc_live_schema" ]; then
+            lc_mig=1
+        fi
+        lc_space_plan_upgrade "$lc_mig"
+    fi
 fi
 # The detached part of an upgrade cannot ask for a password.
 if [ "$LC_MODE" = upgrade ] && [ "$(lc_tool json-get needs_password <<<"${LC_ENV_RESULT:-"{}"}")" = 1 ]; then

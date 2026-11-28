@@ -85,7 +85,8 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 | FK safety | `PRAGMA foreign_keys=OFF` during migration execution to prevent spurious validation errors from table recreation patterns |
 | FK re-enabled | `PRAGMA foreign_keys=ON` after each migration completes |
 | Commit per migration | Each migration is committed individually, so partial progress is preserved if a later migration fails |
-| Restore marker (reserved) | `.sigrift-restore-incomplete` at the root of the `bridge_data` volume (`/app/src/sigrift/bridge/data/` in the bridge container) means a restore was interrupted and the data is half restored. The installers never start a stack while it exists; see "Restore marker" under [Release Install Upgrade](#release-install-upgrade-install-releasesh) |
+| Restore marker (written by `install-release.sh --rollback`) | `.sigrift-restore-incomplete` at the root of the `bridge_data` volume (`/app/src/sigrift/bridge/data/` in the bridge container) and of `bridge_secrets` means a restore was interrupted and the data is half restored. The installers never start a stack while it exists; see "Restore marker" under [Release Install Upgrade](#release-install-upgrade-install-releasesh) |
+| Restore point (release installs) | Every `install-release.sh` upgrade takes a full restore point of both data volumes once the stack is stopped, after a `PRAGMA quick_check` and a WAL checkpoint; `install-release.sh --rollback` restores it (INSTALL.md, "Rolling back"). It is not an off-host backup |
 | Newer-schema refusal | The bridge refuses to start on a database containing migrations newer than its own newest one, before the base schema or any migration runs. The Rust gateway, which opens the same database, does the same against the newest bridge migration it was built with, before it changes anything in the database (it adds its own tables and the `sessions.scope` column). It checks again when its wait for the bridge ends (the bridge answered, or 60 s passed), before it listens; a migration committed after that is refused only at the gateway's next start. Both exit with an error naming the unknown migrations |
 
 ### Startup Sequence
@@ -206,17 +207,26 @@ release install on the host (or the one `--upgrade DIR` names) and:
 5. stops every container of the stack (the gateway has the database open
    too) and holds it: `docker-compose.yml` becomes a placeholder that
    declares no volume, the real files wait in `.sigrift/held/`;
-6. switches the image tags, `VERSION` and `.env` (an existing `.env` is
-   never replaced; a missing key is added only where nothing depends on
-   it);
-7. starts the bridge alone and waits while it migrates (at least 10
+6. `prechecks`: `PRAGMA quick_check` and a WAL checkpoint on the stopped
+   database, read in the old bridge image; a failed check undoes the run;
+7. `restore-point`: a full restore point of both volumes,
+   `.sigrift/snapshots/<time>-<version>-full/` (or `SIGRIFT_SNAPSHOT_DIR`),
+   every member hashed, sealed with a MAC; a failure (full disk, a file
+   that still changes) undoes the run;
+8. switches the compose file (regenerated from the new template when it
+   is an unedited installer template, else its image tags), `VERSION` and
+   `.env` (an existing `.env` is never replaced; a missing key is added
+   only where nothing depends on it);
+9. starts the bridge alone and waits while it migrates (at least 10
    minutes, longer while `Migration N applied` lines appear), then the
-   gateway;
-8. checks the schema, the TOTP secrets, the audit chain and the newest
-   detection against the values from before the stop, and writes its
-   records.
+   gateway. When the new version never becomes healthy and took no data
+   (checked live and again on the stopped data), the run rolls back to
+   the restore point by itself (exit status 5);
+10. checks the schema, the TOTP secrets, the audit chain, the newest
+    detection and the RF summary fences against the values from before the
+    stop, and writes its records.
 
-Steps 4 to 8 run detached from the terminal and are journaled in
+Steps 4 to 10 run detached from the terminal and are journaled in
 `.sigrift/journal.json`, so an upgrade that stopped (exit status 4) can
 be resumed or, before the new bridge started, undone. Run these in the
 install folder, in the release folder the upgrade was started from, or
@@ -236,22 +246,48 @@ An upgrade that is up but failed its checks is resumed (the checks run
 again) or closed as it is with `--resume --accept`, which the host
 record's history keeps as `accepted`.
 
-**The data volume is not copied by the installer yet.** Keep a copy of
-the database first: step 2 of Docker Upgrade below works in a release
-install folder too. The bridge's own `.pre-migration` copy (see Safety
-Features) is a second line of defence, not a backup.
+**Restore points and rollback.** The full restore point leaves out
+`backups/`, `exports/`, the `-shm` and the bridge's own `.pre-migration`
+copy, which stays a second line of defence, not a backup.
+`bash install-release.sh --rollback` restores it in this order: the
+restore point is staged beside the live data (`.sigrift-restore-<id>/` in
+each volume, every member checked), the stack is stopped and held, the
+staged copy is checked again, the revocations made since (API keys,
+client certificates, users, backup codes, webhooks, protocol keys; a CA
+replaced since stays) are carried onto it, the rollback is recorded in the
+restored audit chain, then the marker is written and the restored tree
+swapped in by renames; the state before stays in `.sigrift-replaced-<id>/`
+until `--rollback --finish` or the next upgrade. Only then are the files
+restored, the images tagged and the marker removed; the held compose file
+starts the restored version (`--pull never --force-recreate`). Passwords,
+TOTP secrets and webhook secrets changed since are listed, not carried,
+and need `--revert-credentials`.
 
-**Restore marker.** `.sigrift-restore-incomplete` is reserved for the
-restore that comes with full restore points: the installer writes it at
-the root of each volume it restores (`bridge_data`, and `bridge_secrets`
-when it restores that one too) before it moves restored data into place,
-and removes it last. The content is the installer's (JSON with the
-operation and its id); only its existence counts, in either volume, even
-as a dangling symlink. While one exists, `install-release.sh` and
-`scripts/quickstart.sh` refuse to start a stack (`--status` reports it
-and the volume), and a bridge that knows the marker refuses to start.
+**Restore marker.** `.sigrift-restore-incomplete` is written by
+`install-release.sh --rollback` at the root of both volumes
+(`bridge_secrets` first) immediately before the first rename of live
+data, and removed (`bridge_data` last) once the swap, the files and the
+images are done, before any container starts; an `--abort` of the
+rollback writes it again while it reverses the swap. The content is the
+installer's (JSON with the operation and its id); only its existence
+counts, in either volume, even as a dangling symlink. While one exists,
+`install-release.sh` and `scripts/quickstart.sh` refuse to start a stack
+(`--status` reports it and the volume), and a bridge that knows the
+marker refuses to start; the gateway does not check it, so never `docker
+start` a container or run the held compose file by hand while it exists.
 The installer creates and removes it; remove it by hand only if you
-restored that volume yourself and know the restore is complete.
+restored that volume yourself and know the restore is complete
+(TROUBLESHOOTING.md, "A restore marker without a journal").
+
+### Source Install Upgrade (scripts/quickstart.sh)
+
+`git pull && scripts/quickstart.sh` in a checkout with data is a guarded
+upgrade since v0.2.0 (QUICKSTART.md, "Restore points and rollback"): the
+current images are tagged `sigrift-prev-<commit>`, the new ones are built
+while the stack serves, and the stack is stopped and held while a full
+restore point is taken; it includes `edge_data` (and `/opt/sigrift/pki`
+when the PKI overlay is used). Quickstart does not roll back by itself:
+`git checkout <commit> && scripts/quickstart.sh --rollback`.
 
 ### Docker Upgrade
 
@@ -342,6 +378,10 @@ bridge:/app/src/sigrift/bridge/data/detections.db.pre-upgrade backups/`).
 > database. See
 > [docs/rf-summary-recovery.md](../../../docs/rf-summary-recovery.md), "Downgrade
 > restriction".
+
+A release install (one made with `install-release.sh`) rolls back with
+`bash install-release.sh --rollback` instead, which applies the RF check
+above by itself and restores both volumes from its restore point.
 
 Run these in the same directory, with the same compose options, as the
 upgrade. They need the copy from step 2 of [Docker Upgrade](#docker-upgrade);

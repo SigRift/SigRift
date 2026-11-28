@@ -202,7 +202,10 @@ needs_compose = pytest.mark.skipif(not has_compose(), reason="Compose CLI requir
 
 def override_block():
     text = QUICKSTART.read_text()
-    return (
+    # The override's writer is a function (phase 2: an --import writes it
+    # too), defined before quickstart's dispatch; the block calls it.
+    writer = re.search(r"(?ms)^qs_write_override\(\) \{\n.*?^\}\n", text).group(0)
+    return writer + (
         text.split("# ── Compose override:", 1)[1]
         .split("# ── Model for the `scan` service", 1)[0]
         .partition("\n")[2]
