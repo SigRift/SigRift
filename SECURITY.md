@@ -153,6 +153,7 @@ the internet-facing container.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `BRIDGE_KEYSTORE_KEY` | (none: memory-only) | Bridge only (never the gateway). Fernet key (same rule and generator as `BRIDGE_MFA_KEY`, but its own value: the gateway holds `BRIDGE_MFA_KEY` and `BRIDGE_AUDIT_KEY`, and `/api/health` warns on a repeat) that encrypts the protocol decryption keys imported in Admin → Crypto Keys, which are then saved in `detections.db` (`crypto_keys`: a Fernet token and a keyed fingerprint, never the raw key) and survive restarts; without it they stay in memory only. Bound to the data: once keys are saved, never change or remove it — the bridge then leaves them in the database unloaded (it never deletes them) and warns in `/api/health`. The installers write it into `.env` |
 | `UC_TLS_CERT` | (none) | TLS certificate path |
 | `UC_TLS_KEY` | (none) | TLS private key path |
 | `BRIDGE_SESSION_BINDING` | `none`¹ | Session binding mode: `strict`, `ip`, `warn`, `none` |

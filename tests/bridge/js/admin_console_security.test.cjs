@@ -1647,3 +1647,105 @@ test('crypto keys: sparse records, bodiless replies and unexpected decrypt answe
         'DELETE /api/crypto/keys/k1', 'DELETE /api/crypto/keys/k2', 'POST /api/crypto/keys', 'POST /api/crypto/decrypt', 'POST /api/crypto/decrypt',
     ]);
 });
+
+/* Saved protocol keys (GET /api/crypto/status, `persisted`) */
+
+test('crypto keys: the persistence line shows the server message as text, red unless every key is saved', async () => {
+    let status = { persistence: 'disabled', loaded: 0, not_loaded: 0, memory_only: 1, message: MARKUP };
+    const page = await adminPage({
+        routes: {
+            'GET /api/crypto/status': () => reply(200, status),
+            'GET /api/crypto/keys': () => reply(200, []),
+        },
+    });
+    const line = page.byId('crypto-keys-persistence');
+    assert.equal(line.style.display, 'none', 'hidden until the tab opens');
+    assert.ok(!page.requests.some(r => r.url === '/api/crypto/status'), 'nothing is asked before the tab opens');
+    await page.tab('crypto');
+    assert.equal(line.textContent, MARKUP);
+    assertInert(line, 'crypto persistence line');
+    assert.equal(line.children.length, 0);
+    assert.equal(line.style.display, '');
+    assert.equal(line.style.color, 'var(--accent-red,#ef4444)');
+    for (const [persistence, notLoaded, color] of [
+        ['enabled', 0, 'var(--text-secondary)'],
+        ['enabled', 2, 'var(--accent-red,#ef4444)'],
+        ['wrong_key', 3, 'var(--accent-red,#ef4444)'],
+        ['invalid_key', 0, 'var(--accent-red,#ef4444)'],
+    ]) {
+        status = { persistence, loaded: 1, not_loaded: notLoaded, memory_only: 0, message: persistence };
+        await page.tab('keys');
+        await page.tab('crypto');
+        assert.equal(line.textContent, persistence);
+        assert.equal(line.style.color, color, persistence + ' / ' + notLoaded);
+    }
+});
+
+test('crypto keys: the persistence line is hidden when the bridge cannot say (404, network error, no message)', async () => {
+    const answers = [() => reply(404, { detail: 'Not Found' }), () => { throw new TypeError('Failed to fetch'); }, () => reply(200, { persistence: 'enabled' })];
+    let answer = () => reply(200, { persistence: 'enabled', not_loaded: 0, message: 'saved' });
+    const page = await adminPage({
+        routes: { 'GET /api/crypto/status': () => answer(), 'GET /api/crypto/keys': () => reply(200, [CRYPTO_KEY]) },
+    });
+    const line = page.byId('crypto-keys-persistence');
+    await page.tab('crypto');
+    assert.equal(line.style.display, '');
+    for (const next of answers) {
+        answer = next;
+        await page.tab('keys');
+        await page.tab('crypto');
+        assert.equal(line.style.display, 'none');
+        assert.equal(page.byId('crypto-keys-tbody').querySelectorAll('tr').length, 1, 'the key list still loads');
+    }
+});
+
+test('crypto keys: rows have 8 cells, with the created time and whether the key is saved', async () => {
+    const page = await adminPage({
+        routes: {
+            'GET /api/crypto/keys': () => reply(200, [
+                { ...CRYPTO_KEY, key_id: 'saved', source: 'import', persisted: true },
+                { ...CRYPTO_KEY, key_id: 'builtin', source: 'builtin', persisted: false },
+                { ...CRYPTO_KEY, key_id: 'memory', source: 'import', persisted: false },
+                { ...CRYPTO_KEY, key_id: 'older-bridge' },
+            ]),
+        },
+    });
+    await page.tab('crypto');
+    const rows = page.byId('crypto-keys-tbody').querySelectorAll('tr');
+    const headers = page.doc.querySelectorAll('#crypto-keys-table th').map(th => th.textContent);
+    assert.deepEqual(headers, ['Protocol', 'Name', 'Algorithm', 'Source', 'Length', 'Created', 'Status', 'Actions']);
+    for (const row of rows) assert.equal(row.querySelectorAll('td').length, 8);
+    assert.deepEqual(rows.map(row => row.querySelectorAll('td')[6].textContent), ['Saved', 'Built-in', 'Memory only', 'Memory only']);
+    assert.ok(rows[0].querySelectorAll('td')[5].textContent, 'cell 6 is the created time');
+    assert.ok(rows[0].querySelectorAll('td')[7].querySelector('[data-revoke]'), 'cell 8 holds the revoke button');
+});
+
+test('crypto keys: a failed listing spans all 8 columns', async () => {
+    const page = await adminPage({ routes: { 'GET /api/crypto/keys': () => reply(503, { detail: 'down' }) } });
+    await page.tab('crypto');
+    assert.equal(page.byId('crypto-keys-tbody').querySelector('td').getAttribute('colspan'), '8');
+});
+
+test('crypto key import says whether the key was saved, and reloads the persistence line', async () => {
+    const answers = [
+        reply(201, { key_id: 'k-saved', persisted: true }),
+        reply(201, { key_id: 'k-memory', persisted: false }),
+    ];
+    const page = await adminPage({
+        routes: {
+            'POST /api/crypto/keys': () => answers.shift(),
+            'GET /api/crypto/status': () => reply(200, { persistence: 'enabled', not_loaded: 0, message: 'saved' }),
+        },
+    });
+    await page.tab('crypto');
+    const result = page.byId('crypto-import-result');
+    const statusRequests = () => page.requests.filter(r => r.url === '/api/crypto/status').length;
+    assert.equal(statusRequests(), 1);
+    for (const expected of ['Key imported and saved: k-saved', 'Key imported (memory only, lost when the bridge restarts): k-memory']) {
+        page.byId('crypto-import-name').value = 'site';
+        page.byId('crypto-import-hex').value = '00ff';
+        await page.click(page.byId('crypto-import-btn'));
+        assert.equal(result.textContent, expected);
+    }
+    assert.equal(statusRequests(), 3, 'each import reloads the status line');
+});

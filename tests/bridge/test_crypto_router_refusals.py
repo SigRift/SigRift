@@ -104,6 +104,7 @@ def ops_key_id(client: TestClient) -> str:
         ),
         ("DELETE", "/api/crypto/keys/some-id", None),
         ("POST", "/api/crypto/decrypt", {"payload_hex": "aabb", "protocol": "p25"}),
+        ("GET", "/api/crypto/status", None),
     ],
 )
 def test_every_endpoint_fails_closed_without_a_key_store(
@@ -122,7 +123,7 @@ def test_every_endpoint_fails_closed_without_a_key_store(
 
 @pytest.mark.parametrize(
     "raw_key_hex",
-    ["a0a1a2a3a4a5a6a7a8a9aaabacadaeafzz", "abc", "0x0102", "0g"],
+    ["a0a1a2a3a4a5a6a7a8a9aaabacadaeafzz", "abc", "0x0102", "0g", "  ", "::"],
 )
 def test_import_refuses_malformed_hex_before_storing_anything(
     client: TestClient, store: KeyStore, raw_key_hex: str
@@ -134,6 +135,8 @@ def test_import_refuses_malformed_hex_before_storing_anything(
     )
     assert resp.status_code == 400
     assert resp.json()["detail"].startswith("Invalid hex key material")
+    # The detail never echoes the submitted value (it can be most of a key).
+    assert raw_key_hex not in resp.json()["detail"]
     assert store.list_keys() == before
 
 

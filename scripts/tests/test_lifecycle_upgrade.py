@@ -1040,12 +1040,13 @@ def test_docs_describe_the_guarded_upgrade():
                    "`BRIDGE_KEYSTORE_KEY`", "SIGRIFT_UPGRADE_PROMPT_SECONDS"):
         assert needle in section, needle
     # F12: edge_data is the scan service's; the edge-install unit has no
-    # StateDirectory; re-running edge-install.sh installs main.
+    # StateDirectory; re-running edge-install.sh installs the server's release (Phase 3).
     stopping = flat(install.split("\n### Stopping, resetting, upgrading\n", 1)[1].split("\n### ", 1)[0])
     assert "mounts on the in-stack `scan` service (not on `edge`)" in stopping
     assert "where the in-stack `edge` service persists" not in stopping
     assert "declares no `StateDirectory`" in stopping
-    assert "resets the node's checkout to GitHub `main`" in flat(install)
+    assert "checks out the release the server runs" in flat(install)
+    assert "resets the node's checkout to GitHub `main`" not in flat(install)
     # The release compose file has the port written in (INSTALL.md:648-649).
     reach = flat(install.split("\n### Who can reach the dashboard\n", 1)[1].split("\n### ", 1)[0])
     assert "and the one `install-release.sh` writes) publish" not in reach

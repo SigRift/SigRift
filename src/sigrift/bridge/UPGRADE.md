@@ -14,6 +14,22 @@
    df -h $(dirname data/detections.db)
    ```
    Ensure at least 2x the current database size is free (for pre-migration backup + potential VACUUM).
+   The bridge **refuses to migrate** when it cannot make
+   `detections.db.pre-migration` (usually a full disk): it logs how much the
+   copy needs and how much is free, and starts no migration. The free space
+   is checked before the copy is written (the database and its WAL, plus
+   max(64 MB, 2%)), so a copy that cannot fit writes nothing, however often
+   Compose restarts the refused bridge.
+   `BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1` in the bridge's environment
+   overrides that (only with a backup of your own; remove it afterwards:
+   `/api/health` warns, and every start logs a WARNING, while it is set). A
+   release install generated before v0.2.0 lists the bridge's environment
+   without it: add it under `services: bridge: environment:` in
+   `docker-compose.override.yml` too.
+   After a successful upgrade the copy is kept for 7 days while at least
+   max(1 GB, the database's size) stays free and the disk is under 80% used,
+   so plan for it on large databases; the periodic cleanup removes it
+   earlier (WARNING) once that stops being true.
 
 3. **Create manual backup**
    ```bash
@@ -63,7 +79,8 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 
 | Feature | Description |
 |---------|-------------|
-| Pre-migration backup | Database copied to `detections.db.pre-migration` before any pending migration runs |
+| Pre-migration backup | Database copied to `detections.db.pre-migration` (SQLite online backup, WAL included) before any pending migration runs. A copy that cannot be made stops the run before any migration (`RuntimeError`, with a CRITICAL line giving the space the copy needs and the space free, and naming an older copy if one is there), unless `BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1` (an `/api/health` warning while it is set). The free space is checked first, so a copy that cannot fit is refused without writing anything. The bridge never deletes an older copy to make room. After a successful upgrade the copy is **kept** (the database as it was just before the migrations) while at least max(1 GB, the database's size) stays free and the disk is under 80% used; otherwise it is removed at once with a WARNING. A new database keeps none. Kept copies are swept 7 days after they were made, at startup and on every periodic cleanup (`BRIDGE_CLEANUP_INTERVAL`, first in each cycle), which also removes a kept copy early, with a WARNING, once the space rule above fails, and a `detections.db.pre-migration.XXXXXX` left by a copy that was interrupted, 7 days after it was written |
+| Restore marker | The bridge, and `python3 -m sigrift.bridge.ca migrate-key` before it, refuse to touch the volumes while `.sigrift-restore-incomplete` exists at the root of `bridge_data` or `bridge_secrets` (a restore by `install-release.sh` / `quickstart.sh` that did not finish). One CRITICAL line names the file and the next step (`install-release.sh --status`); the bridge never reads, creates or removes the marker |
 | Fail-fast | `RuntimeError` raised on any migration failure. Service does not start with a partially-migrated schema |
 | FK safety | `PRAGMA foreign_keys=OFF` during migration execution to prevent spurious validation errors from table recreation patterns |
 | FK re-enabled | `PRAGMA foreign_keys=ON` after each migration completes |
@@ -79,6 +96,9 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 │                                                              │
 │  Start                                                       │
 │    │                                                         │
+│    ▼                                                         │
+│  Restore marker present? ── YES ──► refuse (RuntimeError)    │
+│    │ NO                                                      │
 │    ▼                                                         │
 │  ┌─ Encryption key configured? ─┐                            │
 │  │ YES                    NO    │                            │
@@ -115,8 +135,8 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 │  Pending migrations? ── NO ──► Normal startup                │
 │         │ YES                                                │
 │         ▼                                                    │
-│  Copy .pre-migration backup                                  │
-│         │                                                    │
+│  Copy .pre-migration ── FAIL ──► RuntimeError, unless        │
+│         │ OK      BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1    │
 │         ▼                                                    │
 │  ┌─ For each migration ──────────────────┐                   │
 │  │  FK OFF → SQL → FK ON → commit        │                   │
@@ -124,6 +144,10 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 │  │  ├── OK ──► next migration            │                   │
 │  │  └── FAIL ──► RuntimeError (crash)    │                   │
 │  └───────────────────────────────────────┘                   │
+│         │                                                    │
+│         ▼                                                    │
+│  Keep the copy 7 days (removed at once:                      │
+│  new database / low space)                                   │
 │         │                                                    │
 │         ▼                                                    │
 │  PRAGMA foreign_keys=ON                                      │
@@ -415,6 +439,10 @@ Edge nodes with SAF buffering continue collecting data during the upgrade window
 
 If the service fails to start due to a migration error:
 
+When migrations ran, `detections.db.pre-migration` now always exists: the
+bridge does not migrate without it (unless
+`BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1` was set).
+
 ```bash
 # 1. Check the error log for the failing migration number
 journalctl -u sigrift-bridge --no-pager | grep "Migration.*failed"
@@ -496,6 +524,14 @@ sudo systemctl start sigrift-bridge
 
 Note: Data ingested between the upgrade and rollback will be lost. Edge nodes with SAF buffering will re-send data that was not acknowledged.
 
+The `detections.db.pre-migration` a successful upgrade keeps (for 7 days,
+while space allows) is the database as it was just before the migrations
+ran: the database only. Use it instead of a manual backup only together
+with the baselines and `keys.json` of that same moment, and never once an
+RF summary row exists (the check above). It also still holds any protocol
+decryption key revoked since: restoring it brings such a key back (revoke
+it again).
+
 ### Baseline Files (Radio Text as Heard)
 
 From this release the bridge stores the text radios send (Wi-Fi SSIDs,
@@ -535,7 +571,11 @@ ones, decoding their Wi-Fi baselines as it does a schema 1 file.
 ### API Versioning
 
 The bridge uses API version headers:
-- `GET /api/version` returns `api_version`, `server_version`, `supported_versions`
+- `GET /api/version` returns `api_version`, `server_version` (the API
+  server's version, unchanged at 4.0.0 across releases), `release` (the
+  image's release tag such as `v0.2.0`, `main-<sha12>` for a main build, or
+  `dev` for any other build) and `supported_versions`. `/api/health` reports
+  `release` too
 - Response header `X-API-Version` on all responses
 - Edge nodes negotiate version on connect
 
@@ -636,6 +676,42 @@ When upgrading, check for:
 - New optional variables (e.g., `BRIDGE_DB_ENCRYPTION_KEY` for SQLCipher — not yet supported end to end in this release; see [SQLCipher Encryption Compatibility](#sqlcipher-encryption-compatibility))
 - Changed defaults (e.g., `BRIDGE_SESSION_BINDING` changed from `warn` to `ip`)
 - Deprecated variables (logged at WARNING level on startup)
+
+New in v0.2.0:
+- `BRIDGE_KEYSTORE_KEY` (new, optional, bridge only): the Fernet key that
+  encrypts the protocol decryption keys saved in the database (see
+  [Protocol decryption keys across upgrades](#protocol-decryption-keys-across-upgrades)).
+  Bound to the data: never change or remove it once keys are saved.
+- `BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP` (new override): `1` lets the
+  bridge migrate when it cannot make `detections.db.pre-migration`. For one
+  upgrade only: `/api/health` warns while it is set.
+- `SIGRIFT_RELEASE` (set in the image by the release workflows; do not set
+  it by hand): the release `/api/version` reports.
+
+### Protocol decryption keys across upgrades
+
+With `BRIDGE_KEYSTORE_KEY` set, every key imported in Admin → Crypto Keys
+(`POST /api/crypto/keys`) is saved in `detections.db` (table
+`crypto_keys`), encrypted with it, and loaded again at every start, after
+the built-in defaults and before any decode job, under the same `key_id`.
+An upgrade, a restart or a move with `detections.db` plus `.env` therefore
+keeps them. Revoking a key deletes its row (with `secure_delete`); copies
+made before the revoke (the kept `.pre-migration`, backups) still hold it.
+The built-in keys are never saved. `BRIDGE_KEYSTORE_KEY` must not repeat
+`BRIDGE_MFA_KEY` or `BRIDGE_AUDIT_KEY`, which the gateway holds
+(`/api/health` warns). Without the variable keys stay memory-only, as before, and are lost
+at every restart.
+
+A missing, invalid or different `BRIDGE_KEYSTORE_KEY` never deletes a row:
+the saved keys stay in the database, unloaded, new imports stay
+memory-only, and `/api/health` (`crypto_key_persistence`, a
+`Protocol decryption keys: ...` warning) and the console's Crypto Keys tab
+say why. Restore the value they were saved with and restart the bridge to
+load them again. If that value is lost for good,
+`python3 -m sigrift.bridge.storage.crypto_keys forget-unreadable --yes`
+(in the bridge container) deletes the rows the current value cannot read;
+restart and import those keys again. See INSTALL.md, "Protocol decryption
+keys".
 
 ---
 

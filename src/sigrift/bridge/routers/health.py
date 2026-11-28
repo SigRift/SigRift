@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sigrift.bridge import API_VERSION, SUPPORTED_API_VERSIONS, WS_PROTOCOL, __version__
 from sigrift.bridge.constants import LOCAL_SCANNER_KEY_ID
 from sigrift.bridge.dependencies import Role, require_role
+from sigrift.bridge.release_info import current_release
 from sigrift.bridge.models import (
     BridgeHealthResponse,
     BridgeSystemStatus,
@@ -40,10 +41,16 @@ _utcnow = utcnow
 
 @router.get("/version")
 def api_version() -> dict:
-    """Version discovery endpoint (no authentication required)."""
+    """Version discovery endpoint (no authentication required).
+
+    ``server_version`` is the API server's version (unchanged across
+    releases); ``release`` is the image's release tag (``main-<sha12>``
+    or ``dev`` for other builds).
+    """
     return {
         "api_version": API_VERSION,
         "server_version": __version__,
+        "release": current_release(),
         "ws_protocol": WS_PROTOCOL,
         "supported_versions": SUPPORTED_API_VERSIONS,
     }
@@ -189,6 +196,15 @@ def health_check(
                     "to repair."
                 )
 
+    # Saved protocol decryption keys: a missing, invalid or wrong
+    # BRIDGE_KEYSTORE_KEY, unreadable rows, or imports that a restart loses.
+    crypto_key_persistence = "unknown"
+    vault = getattr(request.app.state, "crypto_key_vault", None)
+    key_store = getattr(request.app.state, "crypto_key_store", None)
+    if vault is not None and key_store is not None:
+        warnings.extend(vault.health_warnings(key_store))
+        crypto_key_persistence = vault.state.value
+
     # Collect nodes still using raw (non-aggregated) ingest endpoints
     raw_ingest_node_ids: list[str] = []
     try:
@@ -201,6 +217,8 @@ def health_check(
     resp = BridgeHealthResponse(
         status="ok",
         version=__version__,
+        release=current_release(),
+        crypto_key_persistence=crypto_key_persistence,
         timestamp=_utcnow(),
         security_warnings=warnings,
         raw_ingest_nodes=raw_ingest_node_ids,
@@ -231,6 +249,17 @@ def _collect_security_warnings() -> list[str]:
     # If SQLCipher is active, no warning needed.  Otherwise check for the
     # filesystem-level encryption acknowledgement flag.
     from sigrift.bridge.storage.encryption import encryption_status
+
+    # The pre-migration copy guard is off: meant for one upgrade only.
+    from sigrift.bridge.storage.base import allow_migration_without_backup
+
+    if allow_migration_without_backup():
+        warnings.append(
+            "Pre-migration copy guard disabled: BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP "
+            "is set, so the next upgrade migrates the database without its "
+            "detections.db.pre-migration recovery copy when that copy cannot be "
+            "made. Remove it once the upgrade it was set for is done."
+        )
 
     enc = encryption_status()
     if not enc["enabled"]:

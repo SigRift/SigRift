@@ -260,11 +260,13 @@ bridge issued is useless. Removing them deletes everything stored there:
 `-v` also removes the `edge_data` volume, which `docker-compose.yml`
 mounts on the in-stack `scan` service (not on `edge`): its learned
 anomaly baselines and its RF summary journal (`MLRF_DATA_DIR=/app/data`).
-Standalone edge nodes are unaffected by compose teardowns. The unit
+Standalone edge nodes are unaffected by compose teardowns. The scanner
+units `rf-edge` and `wifi-scan` (see
+[src/sigrift/edge/README.md](src/sigrift/edge/README.md)) keep their state
+in `/var/lib/sigrift-edge` (their `StateDirectory=sigrift-edge`); the unit
 that `edge-install.sh` writes runs the heartbeat agent with no
 `MLRF_DATA_DIR` and declares no `StateDirectory`, so it keeps no learned
-state on disk; only `src/sigrift/edge/rf-edge.service` declares one,
-`/var/lib/sigrift-edge` (its `MLRF_DATA_DIR`).
+state on disk.
 
 Plain `docker compose down` (no `-v`) stops the containers but
 preserves the volume — detections, keys, audit history, and
@@ -806,13 +808,52 @@ background, so a slow receiver delays nothing else. While the bridge is
 down or restarting and the gateway keeps running, a hand-over that fails
 3 times is dropped, not spooled (see "Upgrading" below).
 
-**Upgrading an edge node.** Re-running the dashboard's edge installer
-(`/api/edge/install.sh`, `edge-install.sh`) resets the node's checkout to
-GitHub `main`, whatever release the server runs, and rewrites
-`/etc/sigrift-edge.env`, so it needs the same `--api-key`, `--node-id`
-and `--ca-cert` again. A server upgrade itself needs nothing on the
-nodes: their API keys and the CA carry over, and the gateway
-certificate is kept unless it lacks a name or expires within 30 days.
+#### Installing and upgrading with the one-line installer
+
+A server upgrade itself needs nothing on the nodes: their API keys and
+the CA carry over, and the gateway certificate is kept unless it lacks a
+name or expires within 30 days.
+
+The command the dashboard shows while no edge agent reports ("No edge
+agents are reporting yet") pipes the bridge's `/api/edge/install.sh` into
+`sudo bash` on the edge host, with `--api-url`, `--api-key` and
+`--ca-cert`; it installs the heartbeat agent as `sigrift-edge.service`.
+
+- **Re-runs keep the settings.** `/etc/sigrift-edge.env` (API URL, API
+  key, node ID, gateway trust) and the CA certificate in
+  `/etc/sigrift-edge/ca.pem` are reused, so `--api-key` and `--node-id`
+  need not be given again; a flag given replaces its value, and lines the
+  installer does not manage (your own `MLRF_*` settings, comments) are
+  kept. A changed file is kept as `/etc/sigrift-edge.env.bak` (0600).
+- **Moving an edge to another gateway:** a new `--api-url` needs
+  `--api-key` too (the kept key belongs to the old gateway), and the kept
+  gateway trust (`--ca-cert`, `--insecure-tls`) is not reused: pass
+  `--ca-cert` again for a self-signed gateway.
+- **Upgrading an edge after a server upgrade** needs no flags. Download
+  the script first: piped straight into `bash`, a failed download (an
+  expired CA, a server error) runs an empty script that exits 0 and
+  upgrades nothing. The installer prints this line for the trust it uses
+  (no `--cacert` for a publicly trusted gateway):
+  ```bash
+  f=$(mktemp) && curl -fsSL --cacert /etc/sigrift-edge/ca.pem -o "$f" \
+    https://<GATEWAY>:8444/api/edge/install.sh && sudo bash "$f"; rm -f "$f"
+  ```
+- **Release pinning.** The script checks out the release the server runs
+  (the bridge fills its release tag into the served script; `/api/version`
+  shows it as `release`). A development server (`release` `dev` or
+  `main-<sha>`) installs `main`. `--ref <tag>` installs another tag or
+  branch. The tag must exist on `github.com/SigRift/SigRift`.
+- A running agent is **restarted** by a re-run, so it runs the new code
+  and settings.
+- The agent can write `/var/lib/sigrift-edge` (where it puts
+  `scanner-config.json` for the scanner units), which the installer
+  creates if missing; the unit grants it with `ReadWritePaths=`, not
+  `StateDirectory=`, so the directory keeps the owner the `pi` scanner
+  units give it. The agent writes that file through a new random temporary
+  name (never a fixed one a scanner could plant a symlink at), and the unit
+  keeps `/proc/sys`, `/sys`, kernel modules and cgroups read-only
+  (`ProtectKernelTunables=`, `ProtectKernelModules=`,
+  `ProtectControlGroups=`).
 
 ### Gateway certificate for remote edge nodes
 
@@ -984,6 +1025,8 @@ echo "BRIDGE_MFA_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64en
 for v in BRIDGE_AUDIT_KEY BRIDGE_MASTER_KEY UC_PROXY_SECRET; do
   echo "$v=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 done
+# Optional, bridge only: saves imported protocol decryption keys (below).
+echo "BRIDGE_KEYSTORE_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
 ```
 
 All four are required in `BRIDGE_ENV=production`. The bridge needs all
@@ -1009,11 +1052,64 @@ values — and **not** `BRIDGE_MASTER_KEY` (the shipped
   guard).
 - `UC_PROXY_SECRET` — shared secret between the Rust gateway and
   the Python bridge; the bridge validates strength at startup.
+- `BRIDGE_KEYSTORE_KEY` — optional, bridge only (never the gateway): the
+  Fernet key (same format and generator as `BRIDGE_MFA_KEY`, but its own
+  value: the gateway holds `BRIDGE_MFA_KEY` and `BRIDGE_AUDIT_KEY`, and
+  `/api/health` warns when it repeats one of them) that encrypts the
+  protocol decryption keys saved in the database. The installers write it
+  into `.env`. Without it imported keys are kept in memory only. It is
+  bound to the data: see
+  [Protocol decryption keys](#protocol-decryption-keys).
 
 Set `BRIDGE_ADMIN_PASSWORD` too — the bridge refuses to start in
 `BRIDGE_ENV=production` without it. systemd unit templates and an
 example nginx reverse-proxy config are planned for a future
 deployment guide.
+
+### Protocol decryption keys
+
+Keys imported in **Admin → Crypto Keys** (`POST /api/crypto/keys`) are
+saved in the database when `BRIDGE_KEYSTORE_KEY` is set, and are loaded
+again under the same key id at every start, after the built-in defaults
+and before any decode job runs: they survive restarts, upgrades and a move
+of `detections.db` together with `.env`.
+
+- **What is saved:** imported keys only, never the built-in Meshtastic
+  defaults or derived keys. Each is a row of the `crypto_keys` table in
+  `detections.db`: the key bytes are inside a Fernet token encrypted with
+  `BRIDGE_KEYSTORE_KEY` (with the key's id, protocol and algorithm), next
+  to a keyed fingerprint. The raw key never reaches the database file or
+  the log, nor does a rejected import's error (a 422 never repeats it).
+  Revoking a key deletes its row before its memory is zeroed, with SQLite's
+  `secure_delete` on (the freed page holds zeros) and a passive WAL checkpoint.
+- **Revoking is not erasure of older copies.** The
+  `detections.db.pre-migration` copy an upgrade keeps (up to 7 days),
+  maintenance backups and restore points made before the revoke still
+  hold the row, readable with the same `BRIDGE_KEYSTORE_KEY`, and a
+  rollback to one of them brings the key back. For a key that leaked,
+  delete those copies too, and change the key on the radios.
+- **Never change or remove the key once keys are saved.** The bridge
+  never deletes a row it cannot read; it leaves it in the database,
+  unloaded, and says so.
+- **If the value the keys were saved with is lost for good,** delete the
+  saved keys the current value cannot read, then restart and import them
+  again (`--yes` deletes; without it the command only counts them):
+  ```bash
+  docker compose exec bridge python3 -m sigrift.bridge.storage.crypto_keys forget-unreadable --yes
+  docker compose restart bridge
+  ```
+- **Where to see the state:** the line above the key list in Admin →
+  Crypto Keys, the `Status` column (`Saved`, `Memory only`, `Built-in`),
+  `GET /api/crypto/status`, and `crypto_key_persistence` plus a
+  `Protocol decryption keys: ...` warning in `/api/health`.
+
+| State (`crypto_key_persistence`) | Meaning | Fix |
+|---|---|---|
+| `enabled` | Imports are saved; every saved key was loaded, or some rows were damaged and left unloaded (warning). | Nothing; for damaged rows, re-import those keys. |
+| `disabled` | `BRIDGE_KEYSTORE_KEY` is not set: imports are kept in memory only and lost at the next restart (a warning appears once a key is imported, or when saved keys were left unloaded). | Set it (generator above), restart the bridge, import the keys again. If keys were saved earlier, set the value they were saved with. |
+| `invalid_key` | The value is not a Fernet key (a 43-character one is missing its trailing `=`). Saved keys are left unloaded; imports are memory-only. | Append `=` to a 43-character value, or set the value the keys were saved with; restart. |
+| `wrong_key` | A valid key that decrypts none of the saved keys (it was changed). They are left unloaded, and new imports are **not** saved with the new key. | Restore the previous value and restart. If it is lost for good, run `forget-unreadable --yes` (above), restart, and import the keys again. |
+| `error` | The saved keys could not be read from the database. Imports are memory-only until the bridge restarts. | Check the bridge log and the database, then restart. |
 
 ---
 
@@ -1565,6 +1661,51 @@ secrets from it.
   configuration, add `./tls/cert.pem:/app/tls/cert.pem:ro` and
   `MLRF_CA_CERT=/app/tls/cert.pem` to `edge`, `scan`, `wifi-scan` and
   `bt-scan` yourself, keeping its other settings and profiles.
+
+### Upgrade note: v0.2.0 runtime changes
+
+- **Protocol decryption keys persist.** With `BRIDGE_KEYSTORE_KEY` set
+  (the installers write it), keys imported in Admin → Crypto Keys are
+  saved in the database, encrypted, and loaded again at every start under
+  the same key id. Keys imported before this release were memory-only:
+  import them once more. Never change the key once keys are saved; see
+  [Protocol decryption keys](#protocol-decryption-keys).
+- **The bridge refuses to start on an unfinished restore.** While
+  `.sigrift-restore-incomplete` exists at the root of the `bridge_data`
+  or `bridge_secrets` volume, the bridge logs one `FATAL: restore
+  incomplete` line naming the file and exits (the gateway then never
+  starts). Run `bash install-release.sh --status` (source checkout:
+  `scripts/quickstart.sh --status`) and follow it.
+- **A failed pre-migration copy stops the upgrade.** The bridge no longer
+  migrates when it cannot copy `detections.db` to
+  `detections.db.pre-migration` (usually a full disk). It checks the free
+  space first (the database and its WAL, plus max(64 MB, 2%)), so a copy
+  that cannot fit is refused without writing anything, and a bridge that
+  Compose keeps restarting does not fill the volume again each time. Free
+  space and restart, or set `BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1`
+  (only with your own backup; remove it afterwards: `/api/health` warns
+  while it is set). It must reach the bridge container: a
+  `docker-compose.yml` that lists the bridge's environment without it (a
+  release install generated before v0.2.0) needs it in
+  `docker-compose.override.yml` too:
+  ```yaml
+  services:
+    bridge:
+      environment:
+        - BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1
+  ```
+  After a successful upgrade the copy is kept for 7 days while at least
+  max(1 GB, the database's size) stays free and the disk is under 80%
+  used, so the `bridge_data` volume needs that room; the periodic cleanup
+  removes it earlier once that stops being true.
+- **`release` in `/api/version` and `/api/health`**: the image's release
+  tag (`v0.2.0`), `main-<sha12>` for a main build, or `dev` for a local
+  build. `server_version` stays `4.0.0`.
+- **Edge installer re-runs** keep `/etc/sigrift-edge.env` and the CA,
+  install the release the server runs (`--ref` overrides; `main` for a
+  development server), restart the agent, and make `/var/lib/sigrift-edge`
+  writable (see
+  [Installing and upgrading with the one-line installer](#installing-and-upgrading-with-the-one-line-installer)).
 
 ---
 

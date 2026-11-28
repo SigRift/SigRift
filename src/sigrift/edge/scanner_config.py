@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -66,8 +67,12 @@ def reload_summarize(current: bool) -> bool:
 def write_config(params: dict) -> Path:
     """Atomically persist a config update to the scanner config file.
 
-    Writes to ``<path>.tmp`` then ``os.replace`` so a half-written file
-    is never visible to a concurrent poll. Returns the final path.
+    Writes a new temporary file next to it (``mkstemp``: a random name,
+    created with ``O_EXCL``, so a name planted in the directory -- a
+    symlink, say, by another user the directory belongs to -- is never
+    followed), makes it world-readable for the scanner units, then
+    ``os.replace``s it, so a half-written file is never visible to a
+    concurrent poll. Returns the final path.
 
     Raises
     ------
@@ -78,11 +83,18 @@ def write_config(params: dict) -> Path:
         the agent (a non-root user) cannot create it under ``/var/lib``.
     """
     path = _default_path()
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(params))
+        fd, tmp = tempfile.mkstemp(
+            prefix=path.name + ".", suffix=".tmp", dir=path.parent
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(params))
+        # mkstemp makes it 0600; the scanners run as another user.
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)
+        tmp = None
     except OSError as exc:
         raise OSError(
             exc.errno,
@@ -94,4 +106,10 @@ def write_config(params: dict) -> Path:
             "MLRF_SCANNER_CONFIG_PATH at a directory the agent and every "
             "scanner can reach (see the edge README)",
         ) from exc
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     return path

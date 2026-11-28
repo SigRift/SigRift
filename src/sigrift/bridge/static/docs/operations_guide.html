@@ -205,7 +205,7 @@ td { padding: 6px 10px; border: 1px solid var(--border); vertical-align: top; }
 <tr><td>Cross-correlations</td><td><code>cross_correlations</code></td><td>Multi-protocol entity linking</td></tr>
 <tr><td>Summarization</td><td><code>detection_summaries_hourly</code>, <code>fhss_event_summaries</code></td><td>Compact rollup tables</td></tr>
 </table>
-<div class="note"><strong>Migrations:</strong> Schema changes are applied automatically at startup via numbered migrations in <code>storage/base.py</code>. A <code>.pre-migration</code> backup is created before each migration run. See <a href="deployment_guide.html">Deployment Guide</a> for upgrade procedures.</div>
+<div class="note"><strong>Migrations:</strong> Schema changes are applied automatically at startup via numbered migrations in <code>storage/base.py</code>. A <code>.pre-migration</code> backup is created before each migration run; if it cannot be made the bridge does not migrate (<code>BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1</code> overrides), and after a successful upgrade it is kept 7 days while space allows. See <a href="deployment_guide.html">Deployment Guide</a> for upgrade procedures.</div>
 
 <!-- ======== EDGE NODE OPERATIONS ======== -->
 <h2 id="edge-operations">Edge Node Operations</h2>

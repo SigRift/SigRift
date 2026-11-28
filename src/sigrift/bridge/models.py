@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sigrift.bridge import __version__
+from sigrift.bridge.release_info import current_release
 from sigrift.bridge.scanner_status import ScannerProtocol, ScannerReason, ScannerState
 
 # ---------------------------------------------------------------------------
@@ -382,6 +383,11 @@ class BridgeHealthResponse(BaseModel):
 
     status: str = "ok"
     version: str = __version__
+    #: The image's release tag, ``main-<sha12>`` or ``dev`` (release_info).
+    release: str = Field(default_factory=current_release)
+    #: Whether imported protocol decryption keys are saved
+    #: (storage/crypto_keys.Persistence); "unknown" without a vault.
+    crypto_key_persistence: str = "unknown"
     timestamp: datetime = Field(default_factory=_utcnow)
     system: BridgeSystemStatus = Field(default_factory=BridgeSystemStatus)
     security_warnings: list[str] = Field(default_factory=list)

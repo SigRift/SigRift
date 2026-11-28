@@ -136,6 +136,10 @@ class TestLifespanStartup:
                 assert hasattr(app.state, "app_state")
                 assert hasattr(app.state, "detection_store")
                 assert hasattr(app.state, "iq_store")
+                # Protocol decryption keys: the store and the vault that
+                # saves imported keys (storage/crypto_keys.py)
+                assert hasattr(app.state, "crypto_key_store")
+                assert hasattr(app.state, "crypto_key_vault")
 
                 # Anomaly scoring
                 assert hasattr(app.state, "rf_scorer")

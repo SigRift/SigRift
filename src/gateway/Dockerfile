@@ -63,6 +63,15 @@ USER appuser
 ENV UC_HOST=0.0.0.0
 ENV UC_PORT=8444
 
+# The release this image was built for (release.yml: the tag;
+# build-and-push.yml: main-<sha12>; otherwise "dev"). The gateway does not
+# read it: it is for `docker image inspect` and the installers. The
+# bridge reports its own copy in /api/version. Runtime stage only, so the
+# cargo build is unaffected.
+ARG SIGRIFT_RELEASE=dev
+ENV SIGRIFT_RELEASE=${SIGRIFT_RELEASE}
+LABEL org.opencontainers.image.version=${SIGRIFT_RELEASE}
+
 EXPOSE 8444
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

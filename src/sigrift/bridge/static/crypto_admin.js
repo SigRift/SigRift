@@ -2,7 +2,8 @@
  * Crypto Key Management — Admin Panel module.
  *
  * Manages crypto keys for protocol decryption: list, import, revoke,
- * and manual decrypt operations.
+ * and manual decrypt operations. A status line above the list says
+ * whether imported keys are saved in the database (GET /api/crypto/status).
  */
 (function() {
     'use strict';
@@ -47,9 +48,37 @@
         });
     }
 
+    // ── Persistence status ─────────────────────────────────────────
+
+    // The server's own sentence, as text: red unless keys are saved and
+    // every saved key was loaded. Hidden when the bridge does not answer
+    // (an older bridge has no /status).
+    function loadPersistence() {
+        var line = document.getElementById('crypto-keys-persistence');
+        if (!line) return;
+        apiFetch(API + '/status').then(function(data) {
+            if (!data || typeof data.message !== 'string') {
+                line.style.display = 'none';
+                return;
+            }
+            line.textContent = data.message;
+            line.style.color = (data.persistence === 'enabled' && !data.not_loaded)
+                ? 'var(--text-secondary)' : 'var(--accent-red,#ef4444)';
+            line.style.display = '';
+        }).catch(function() {
+            line.style.display = 'none';
+        });
+    }
+
+    function keyStatus(k) {
+        if (k.persisted) return 'Saved';
+        return k.source === 'builtin' ? 'Built-in' : 'Memory only';
+    }
+
     // ── Key List ───────────────────────────────────────────────────
 
     function loadKeys() {
+        loadPersistence();
         apiFetch(API + '/keys').then(function(data) {
             var keys = Array.isArray(data) ? data : (data.keys || []);
             keysTbody.innerHTML = '';
@@ -71,6 +100,7 @@
                     '<td>' + esc(k.source || 'manual') + '</td>' +
                     '<td>' + esc(k.key_len || '') + ' bytes</td>' +
                     '<td>' + fmtTime(k.created_at) + '</td>' +
+                    '<td>' + esc(keyStatus(k)) + '</td>' +
                     '<td>' + revokeBtn + '</td>';
                 keysTbody.appendChild(tr);
             });
@@ -85,7 +115,7 @@
             // A failed listing is not an empty store: hide "No crypto keys".
             var empty = document.getElementById('crypto-keys-empty');
             if (empty) empty.style.display = 'none';
-            keysTbody.innerHTML = '<tr><td colspan="7" style="color:var(--accent-red);">Error: ' + esc((e && (e.detail || e.message)) || 'Unknown') + '</td></tr>';
+            keysTbody.innerHTML = '<tr><td colspan="8" style="color:var(--accent-red);">Error: ' + esc((e && (e.detail || e.message)) || 'Unknown') + '</td></tr>';
         });
     }
 
@@ -131,7 +161,11 @@
             if (result) {
                 result.style.display = '';
                 result.style.color = 'var(--accent-green)';
-                result.textContent = 'Key imported: ' + (data.key_id || 'OK');
+                var id = data.key_id || 'OK';
+                // persisted is absent from an older bridge's answer.
+                result.textContent = data.persisted === true ? 'Key imported and saved: ' + id
+                    : data.persisted === false ? 'Key imported (memory only, lost when the bridge restarts): ' + id
+                    : 'Key imported: ' + id;
             }
             // Clear form
             if (name) name.value = '';

@@ -187,6 +187,9 @@ jobs:
           cache-from: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,scope=sigrift-image-${{ matrix.image }}-${{ matrix.arch }},mode=max
           outputs: type=image,name=ghcr.io/${{ needs.resolve-version.outputs.owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # The validated tag (resolve-version): reported by the bridge's
+          # /api/version and baked into both images' version label.
+          build-args: SIGRIFT_RELEASE=${{ needs.resolve-version.outputs.version }}
 
       - name: Export digest
         env:

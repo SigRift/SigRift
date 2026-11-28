@@ -99,12 +99,20 @@ def test_failed_migration_backup_includes_uncheckpointed_wal(tmp_path, monkeypat
         ctx.close()
 
 
+@pytest.mark.parametrize("override", [False, True], ids=["refused", "override"])
 @pytest.mark.parametrize("failure", ["database", "replace"])
 def test_snapshot_failure_preserves_prior_backup_and_cleans_temporary_file(
-    tmp_path, monkeypatch, caplog, failure
+    tmp_path, monkeypatch, caplog, failure, override
 ):
+    """A failed snapshot stops the upgrade before any migration, unless
+    BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP is set; either way the prior
+    backup is untouched and no temporary file is left."""
     from sigrift.bridge.storage import encryption
 
+    if override:
+        monkeypatch.setenv("BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP", "1")
+    else:
+        monkeypatch.delenv("BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP", raising=False)
     ctx = base.SharedContext(tmp_path / "snapshot.db")
     try:
         backup = Path(ctx.db_path + ".pre-migration")
@@ -121,8 +129,17 @@ def test_snapshot_failure_preserves_prior_backup_and_cleans_temporary_file(
             monkeypatch.setattr(encryption, "open_db", fail)
         else:
             monkeypatch.setattr(base.os, "replace", fail)
-        ctx._run_migrations(ctx.get_conn())
+        if override:
+            ctx._run_migrations(ctx.get_conn())
+            assert "WITHOUT a recovery copy" in caplog.text
+        else:
+            with pytest.raises(RuntimeError, match="refusing to migrate"):
+                ctx._run_migrations(ctx.get_conn())
         assert "Pre-migration backup failed" in caplog.text
+        applied = ctx.get_conn().execute(
+            "SELECT COUNT(*) FROM schema_version WHERE version = 50000"
+        ).fetchone()[0]
+        assert applied == (1 if override else 0)
         assert backup.read_bytes() == b"prior recovery snapshot"
         assert list(tmp_path.glob("snapshot.db.pre-migration.*")) == []
     finally:

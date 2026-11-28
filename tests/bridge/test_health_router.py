@@ -32,13 +32,15 @@ class TestVersionEndpoint:
             resp = tc.get("/api/version")
             assert resp.status_code == 200
 
-    def test_version_response_structure(self, bridge_app: FastAPI) -> None:
+    def test_version_response_structure(self, bridge_app: FastAPI, monkeypatch) -> None:
         """GET /api/version returns all expected fields."""
+        monkeypatch.delenv("SIGRIFT_RELEASE", raising=False)
         with TestClient(bridge_app) as tc:
             resp = tc.get("/api/version")
             data = resp.json()
             assert data["api_version"] == API_VERSION
             assert data["server_version"] == __version__
+            assert data["release"] == "dev"
             assert data["ws_protocol"] == WS_PROTOCOL
             assert data["supported_versions"] == SUPPORTED_API_VERSIONS
 
