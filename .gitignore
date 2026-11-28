@@ -150,6 +150,12 @@ src/sigrift/bridge/data/*.txt
 .sigrift-scanners-pending.json
 .sigrift-scanners-pending-*.json
 
+# Installer state: the host record, journal and restore points (which
+# hold copies of .env and the TLS key). .sigrift-state is reserved for
+# the pointer of source installs, whose state lives outside the checkout.
+.sigrift/
+.sigrift-state
+
 # Local agent worktrees and stray coverage output
 .claude/
 /coverage/

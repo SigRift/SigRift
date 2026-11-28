@@ -20,6 +20,7 @@ import contextlib
 import sqlite3
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -246,7 +247,14 @@ def test_a_migration_that_fails_on_existing_rows_is_never_recorded(
     stays applied), the pre-migration snapshot is kept and the write lock
     is released, even though the refused store's connection is still open
     (``refused`` holds the traceback).  Once the rows are repaired the next
-    start-up applies it."""
+    start-up applies it, and keeps its own snapshot (an upgrade of an
+    existing database, with ample free space): the database as it was just
+    before that run."""
+    monkeypatch.setattr(
+        base_module,
+        "_disk_usage",
+        lambda path: SimpleNamespace(total=10**12, used=10**11, free=9 * 10**11),
+    )
     db = tmp_path / "detections.db"
     backup = tmp_path / "detections.db.pre-migration"
     _build_db(db)
@@ -280,4 +288,5 @@ def test_a_migration_that_fails_on_existing_rows_is_never_recorded(
     ctx = SharedContext(db_path=db)
     ctx.close()
     assert set(versions) <= _applied_versions(db)
-    assert not backup.exists()
+    assert backup.exists()
+    assert failing not in _applied_versions(backup)

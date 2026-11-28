@@ -80,6 +80,15 @@ ENV PYTHONPATH=/app/src
 ENV BRIDGE_ENV=production
 ENV BRIDGE_SECRETS_DIR=/app/secrets
 
+# The release this image was built for: release.yml passes the tag,
+# build-and-push.yml main-<sha12>; any other build is "dev". /api/version
+# and /api/health report it next to server_version, and the served edge
+# installer checks out that tag. After every RUN, so no cached layer
+# depends on it.
+ARG SIGRIFT_RELEASE=dev
+ENV SIGRIFT_RELEASE=${SIGRIFT_RELEASE}
+LABEL org.opencontainers.image.version=${SIGRIFT_RELEASE}
+
 EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

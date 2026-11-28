@@ -1338,6 +1338,13 @@ def _main(argv: list[str] | None = None) -> int:
         help="bridge data directory (default: %(default)s)",
     )
     args = parser.parse_args(argv)
+    # A restore of the volumes that did not finish (restore_marker.py):
+    # leave the half-restored CA files where they are. Silently: the
+    # bridge's lifespan, which starts next, refuses with the one clear line.
+    from sigrift.bridge.restore_marker import find_restore_marker
+
+    if find_restore_marker(args.data_dir, secrets_dir(args.data_dir)) is not None:
+        return 0
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

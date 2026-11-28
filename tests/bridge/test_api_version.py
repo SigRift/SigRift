@@ -74,11 +74,13 @@ class TestVersionEndpoint:
         resp = unauthenticated.get("/api/version")
         assert resp.status_code == 200
 
-    def test_response_structure(self, client: TestClient) -> None:
+    def test_response_structure(self, client: TestClient, monkeypatch) -> None:
+        monkeypatch.delenv("SIGRIFT_RELEASE", raising=False)
         resp = client.get("/api/version")
         data = resp.json()
         assert data["api_version"] == API_VERSION
         assert data["server_version"] == __version__
+        assert data["release"] == "dev"
         assert data["ws_protocol"] == WS_PROTOCOL
         assert data["supported_versions"] == SUPPORTED_API_VERSIONS
 

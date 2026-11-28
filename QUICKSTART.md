@@ -274,6 +274,40 @@ The installer checks that it can verify the gateway, then creates `/opt/sigrift-
 
 ---
 
+## Restore points and rollback
+
+A checkout with data keeps the same guards as a release install. Its
+state directory is `${XDG_STATE_HOME:-~/.local/state}/sigrift/<project>/`
+(the file `.sigrift-state` in the checkout names it, so `sudo` finds the
+same one); keep it in the same backup class as your secrets.
+
+- `git pull && scripts/quickstart.sh` is a guarded upgrade when the commit
+  or an image changed: the images the stack runs get a
+  `sigrift-prev-<commit>` tag, the new ones are built while the old stack
+  serves, then the stack stops and a full restore point (both data volumes,
+  `edge_data`, the PKI directory when its overlay is used, `.env` and
+  `tls/`) is taken before the new images start. A re-run of the same
+  commit takes none.
+- Quickstart never rolls back by itself. A failed start prints the two
+  commands: `git -C <checkout> checkout <commit> && scripts/quickstart.sh --rollback`.
+- `--rollback` refuses unless the checkout is at the restore point's commit
+  (`HEAD`) and `docker-compose.yml`, `docker-compose.pki.yml` and
+  `docker-compose.staging.yml` are unmodified (`git stash` first). It
+  re-tags the kept images (it rebuilds them from that checkout when they
+  were pruned) and starts them with `--no-build`. It asks for the commit's
+  first 12 characters (`--confirm`).
+- While an operation runs, `docker-compose.yml` is a placeholder (the
+  hold) and `git status` shows it modified; do not `git checkout --` it
+  until `scripts/quickstart.sh --status` says the operation is done.
+- The `sigrift-prev-*` images use disk until no restore point names their
+  commit (each successful upgrade removes those tags).
+- `--status`, `--resume`, `--abort`, `--snapshot`, `--list-snapshots`,
+  `--rollback --finish`, `--export FILE [--move]`, `--import FILE` and
+  `--reactivate` work as in INSTALL.md ("Upgrading a release install",
+  "Move to new hardware").
+
+---
+
 ## Where to next
 
 - [INSTALL.md](INSTALL.md) — production install (real TLS, systemd, secrets management, distributed mode)

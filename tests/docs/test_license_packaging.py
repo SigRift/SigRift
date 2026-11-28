@@ -302,3 +302,16 @@ def test_release_archives_retain_notices(tmp_path):
     )
     with tarfile.open(dist / f"sigrift-open-{version}-source.tar.gz") as archive:
         assert f"sigrift-open-{version}/{marker.name}" not in archive.getnames()
+    # The installer is stamped with its release (INSTALLER_RELEASE, phase1b
+    # 5.2): in the tarball and the signed dist copy, exactly once, and in
+    # that line only (the template floor skips this non-release VERSION).
+    source = (ROOT / "scripts/install-release.sh").read_text().splitlines()
+    with tarfile.open(dist / f"sigrift-{version}.tar.gz") as archive:
+        staged = archive.extractfile(f"sigrift-{version}/install-release.sh").read().decode()
+    for text in (staged, (dist / "install-release.sh").read_text()):
+        lines = text.splitlines()
+        assert lines.count(f"INSTALLER_RELEASE={version}") == 1
+        assert "INSTALLER_RELEASE=dev" not in lines
+        diff = [(a, b) for a, b in zip(source, lines) if a != b]
+        assert diff == [("INSTALLER_RELEASE=dev", f"INSTALLER_RELEASE={version}")]
+        assert len(lines) == len(source)

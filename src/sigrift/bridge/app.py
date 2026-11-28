@@ -1273,17 +1273,43 @@ def _write_owner_only_file(path: Path, text: str) -> None:
         raise
 
 
+async def _sweep_migration_leftovers(detection_store: object) -> None:
+    """One periodic sweep of migration leftovers; never raises.
+
+    Startup sweeps them too (``SharedContext._init_db``), but a bridge can
+    run for weeks: this removes what is older than 7 days, including the
+    ``.pre-migration`` copy a successful upgrade keeps, and that copy
+    earlier once the volume has no room for it
+    (``SharedContext.sweep_migration_leftovers``).
+    """
+    ctx = getattr(detection_store, "_ctx", None)
+    if ctx is None:
+        return
+    try:
+        await asyncio.to_thread(ctx.sweep_migration_leftovers)
+    except Exception as exc:
+        logger.warning("Migration leftover sweep failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown of the bridge application.
 
     Startup:
+      - Refuse to start while a restore marker
+        (``.sigrift-restore-incomplete``) exists in bridge_data or
+        bridge_secrets, before anything touches the volumes
+      - Log the release (``SIGRIFT_RELEASE``) next to server_version
       - Load configuration
       - Create and load PersistenceManager
       - Start background auto-save
       - Create AppState and restore alert counter
       - Initialize rate limiter
-      - Initialize DetectionStore
+      - Initialize DetectionStore (migrations under the pre-migration
+        copy policy of storage/base.py)
+      - Load the protocol decryption keys: built-in defaults, then the
+        keys saved in crypto_keys (storage/crypto_keys.py), before any
+        decode job runs
       - Generate initial master key if none exist
 
     Shutdown:
@@ -1297,6 +1323,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # -- Logging: root level + stdout handler so app INFO actually emits -----
     log_level = os.environ.get("BRIDGE_LOG_LEVEL", "INFO").upper()
     _ensure_root_log_handler(log_level)
+
+    # -- Restore marker: a restore of the volumes that did not finish -------
+    # Before anything reads or writes bridge_data / bridge_secrets (the
+    # data-dir chmod, keys.json, the database and its .pre-migration copy).
+    # Raises like the production guards: uvicorn exits, and the healthcheck
+    # never passes, so the gateway never starts.
+    from sigrift.bridge.restore_marker import check_restore_markers
+
+    check_restore_markers()
 
     # -- Worker threads: a default executor shutdown can wait on ------------
     # (asyncio.to_thread work outlives the cancellation of its task; the
@@ -1343,6 +1378,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # -- Log buffer (must be early so it captures all startup logs) ----------
     init_log_buffer()
+
+    from sigrift.bridge.release_info import log_release
+
+    log_release(logger)
+
+    from sigrift.bridge.storage.base import allow_migration_without_backup
+
+    if allow_migration_without_backup():
+        logger.warning(
+            "BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP is set: new database "
+            "migrations are applied without their detections.db.pre-migration "
+            "recovery copy when it cannot be made. Remove it once the upgrade "
+            "it was set for is done."
+        )
 
     # -- OpenTelemetry tracing (P3-13, no-op if opentelemetry not installed) -
     setup_tracing()
@@ -1623,12 +1672,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ProtocolDecodePipeline,
         protocol_decode_job_handler,
     )
-    from sigrift.lib.crypto.key_store import KeyStore
+    from sigrift.bridge.storage.crypto_keys import init_crypto_keys
 
     from sigrift.bridge.storage.decoded_messages import DecodedMessageStore
 
-    crypto_key_store = KeyStore()
-    crypto_key_store.load_builtin_defaults()
+    # Built-in defaults, then the keys saved in crypto_keys (when
+    # BRIDGE_KEYSTORE_KEY is set): before the decode pipeline and the job
+    # queue start, so no decode job runs without them.
+    crypto_key_store, crypto_key_vault = init_crypto_keys(detection_store._ctx)
     # Decoded protocol messages are persisted (also used by the ingest path
     # for edge-decoded messages via app.state.decoded_message_store).
     decoded_message_store = DecodedMessageStore(detection_store._ctx)
@@ -1913,6 +1964,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.packet_store = packet_store
     app.state.fuzz_session_store = fuzz_session_store
     app.state.crypto_key_store = crypto_key_store
+    app.state.crypto_key_vault = crypto_key_vault
     app.state.geolocation_store = geolocation_store
     app.state.map_store = map_store
     app.state.emitter_tracker = emitter_tracker
@@ -2279,6 +2331,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """
         while True:
             await asyncio.sleep(_cleanup_interval)
+            # First, and on its own: a failing cleanup step below never
+            # skips it (a kept .pre-migration copy is database-sized).
+            await _sweep_migration_leftovers(detection_store)
             job = app_state.start_job("scheduled_full_cleanup", trigger="scheduled")
             try:
                 # 1. Aggregate wifi_metadata rows >30min old into hourly buckets
@@ -3294,11 +3349,13 @@ def create_test_app(
     test_app.state.wifi_cluster_store = wifi_cluster_store
     test_app.state.packet_store = packet_store
     test_app.state.fuzz_session_store = fuzz_session_store
-    from sigrift.lib.crypto.key_store import KeyStore as _KeyStore
+    from sigrift.bridge.storage.crypto_keys import init_crypto_keys
 
-    _crypto_key_store = _KeyStore()
-    _crypto_key_store.load_builtin_defaults()
+    # The test app keeps imported keys in memory only, as before, whatever
+    # the developer's shell exports (tests that persist pass their own env).
+    _crypto_key_store, _crypto_key_vault = init_crypto_keys(ctx, {})
     test_app.state.crypto_key_store = _crypto_key_store
+    test_app.state.crypto_key_vault = _crypto_key_vault
     test_app.state.geolocation_store = geolocation_store
     test_app.state.map_store = map_store
     test_app.state.floor_plan_dir = str(tmp_path / "floor_plans")

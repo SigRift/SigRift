@@ -92,7 +92,7 @@ class TestEdgeInstallScript:
         """Re-running must update an existing checkout, not fail or
         duplicate."""
         body = client.get("/api/edge/install.sh").text
-        assert "git -C" in body and "reset --hard" in body
+        assert "git -C" in body and "--detach FETCH_HEAD" in body
 
 
 class TestEdgeInstallScriptFilePresent:

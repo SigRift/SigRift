@@ -188,6 +188,67 @@ dashboard's environment restores the old behaviour, in which any unbound
 key may heartbeat as any node. That is insecure: any key holder can then
 take a node's queued commands.
 
+## Heartbeat agent installed by `edge-install.sh`
+
+The bridge serves an installer for the heartbeat agent alone
+(`node_agent`, no RF capture) at `/api/edge/install.sh`; the dashboard
+shows the command while no edge agent reports. It clones SigRift to
+`/opt/sigrift-edge`, makes a venv, writes `/etc/sigrift-edge.env` (0600,
+it holds the node API key) and `sigrift-edge.service` (root, with
+`ProtectSystem=strict`), and starts it.
+
+```bash
+# First install (copy the gateway's tls/cert.pem here first):
+curl -sfL --cacert gateway-cert.pem https://<gateway>:8444/api/edge/install.sh | \
+  sudo bash -s -- --api-url https://<gateway>:8444 --api-key <node-key> \
+    [--node-id edge-01] --ca-cert gateway-cert.pem [--ref vX.Y.Z]
+
+# Upgrade after a server upgrade, or re-run: no flags needed. Download first:
+# piped into bash, a failed download runs an empty script that exits 0.
+# (No --cacert for a publicly trusted gateway; the installer prints the line.)
+f=$(mktemp) && curl -fsSL --cacert /etc/sigrift-edge/ca.pem -o "$f" \
+  https://<gateway>:8444/api/edge/install.sh && sudo bash "$f"; rm -f "$f"
+```
+
+- **Kept on a re-run:** `MLRF_API_URL`, `MLRF_API_KEY`, `MLRF_NODE_ID`
+  and the gateway trust (`MLRF_CA_CERT`, the certificate in
+  `/etc/sigrift-edge/ca.pem`, or a `MLRF_INSECURE_TLS=1`, which is reused
+  with a warning). A flag given replaces its value: `--ca-cert` replaces a
+  kept `MLRF_INSECURE_TLS=1`, and `--insecure-tls` a kept CA (the file
+  stays on disk, no longer used). A kept `MLRF_CA_CERT` whose file is gone
+  stops the installer: pass `--ca-cert` again. A kept
+  `MLRF_INSECURE_TLS=1` is warned about again in the summary.
+- **Another gateway:** a new `--api-url` needs `--api-key` too (the kept
+  key belongs to the old gateway; the installer stops without it), and
+  the kept gateway trust is not reused: pass `--ca-cert` for a
+  self-signed gateway.
+- **Lines the installer does not manage** (your own `MLRF_*` settings,
+  such as `MLRF_CLIENT_CERT` or `MLRF_STATUS_PORT`, and comments) are kept
+  after its own lines. A re-run that changes nothing leaves the file
+  byte-identical; one that changes it keeps the previous file as
+  `/etc/sigrift-edge.env.bak` (always 0600, whatever mode the old file
+  had). The file is read line by line, never sourced.
+- **Which code:** the agent is checked out (detached, at the exact commit)
+  at the release the server runs: the bridge fills its release tag into
+  the served script. A development server, or a `main-<sha>` image,
+  installs `main`. `--ref <tag-or-branch>` installs another. The tag must
+  exist on `github.com/SigRift/SigRift`: a release candidate tag that is
+  not published there fails to fetch, and the installer stops with a hint
+  to pass `--ref`. Local edits under `/opt/sigrift-edge` are discarded.
+- A running agent is **restarted** by a re-run.
+- **State directory:** the agent writes `scanner-config.json` (a runtime
+  `update_config` from the bridge) to `/var/lib/sigrift-edge` for the
+  scanner units (step 5 above). The installer creates the directory when
+  it is missing (root, 0755) and never re-owns an existing one; the unit
+  grants it in `ReadWritePaths=/var/log /tmp -/var/lib/sigrift-edge` and has no
+  `StateDirectory=`, which in this root unit would re-own the directory
+  to root at every start and lock the `pi` scanner units out. The agent
+  writes the file through a new random temporary name (`mkstemp`), never
+  a fixed one a `pi` process could plant a symlink at, and the unit keeps
+  `/proc/sys`, `/sys`, kernel modules and cgroups read-only
+  (`ProtectKernelTunables=yes`, `ProtectKernelModules=yes`,
+  `ProtectControlGroups=yes`).
+
 ## Configuration
 
 Edit `/opt/rf-edge/bin/monitor.py` to configure:

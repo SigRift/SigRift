@@ -71,6 +71,25 @@ def test_write_config_persists_atomically(config_path):
     assert not config_path.with_suffix(config_path.suffix + ".tmp").exists()
 
 
+def test_write_config_never_follows_a_planted_temp_name(config_path, tmp_path):
+    # The directory belongs to the scanners' user while the agent writes as
+    # root: a symlink planted at the old fixed temp name must not be
+    # followed (it would overwrite its target as root).
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    planted = config_path.with_suffix(config_path.suffix + ".tmp")
+    planted.symlink_to(victim)
+    scanner_config.write_config({"summarize": True})
+    assert victim.read_text() == "untouched"
+    assert planted.is_symlink()
+    assert json.loads(config_path.read_text()) == {"summarize": True}
+    assert not config_path.is_symlink()
+    # Readable by the scanner units (another user), and no temp file left.
+    assert config_path.stat().st_mode & 0o777 == 0o644
+    names = sorted(p.name for p in config_path.parent.iterdir())
+    assert names == sorted([config_path.name, planted.name, victim.name])
+
+
 def test_write_config_missing_dir_error_is_actionable(tmp_path, monkeypatch):
     # The agent unit runs as pi and cannot create /var/lib/sigrift-edge when
     # no unit with StateDirectory=sigrift-edge has run: the error must name

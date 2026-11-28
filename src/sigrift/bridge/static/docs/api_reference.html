@@ -88,6 +88,7 @@ pre code { background: none; padding: 0; }
     <a href="#health-health">GET /api/health</a>
     <a href="#health-status">GET /api/status</a>
     <a href="#health-metrics">GET /api/metrics</a>
+    <a href="#edge-install-script">GET /api/edge/install.sh</a>
     <div class="nav-group">Nodes</div>
     <a href="#nodes-register">POST /register</a>
     <a href="#nodes-heartbeat">POST /heartbeat</a>
@@ -185,6 +186,8 @@ pre code { background: none; padding: 0; }
     <div class="nav-group">Crypto Keys</div>
     <a href="#crypto-list">GET /api/crypto/keys</a>
     <a href="#crypto-import">POST /keys</a>
+    <a href="#crypto-revoke">DELETE /keys/{key_id}</a>
+    <a href="#crypto-status">GET /status</a>
     <a href="#crypto-decrypt">POST /decrypt</a>
     <div class="nav-group">Threat Signatures</div>
     <a href="#threats-list">GET /threats/list</a>
@@ -271,7 +274,7 @@ pre code { background: none; padding: 0; }
 </div>
 <div class="endpoint-body">
 <p>Version discovery endpoint. No authentication required.</p>
-<p>Returns <code>api_version</code>, <code>server_version</code>, <code>ws_protocol</code>, and <code>supported_versions</code>.</p>
+<p>Returns <code>api_version</code>, <code>server_version</code> (the API server's version, 4.0.0, unchanged across releases), <code>release</code> (the image's release tag such as <code>v0.2.0</code>, <code>main-&lt;sha12&gt;</code> for a main build, or <code>dev</code> for any other build), <code>ws_protocol</code>, and <code>supported_versions</code>.</p>
 <pre><code>curl https://bridge.example.com/api/version</code></pre>
 </div></div>
 
@@ -282,7 +285,7 @@ pre code { background: none; padding: 0; }
   <span class="role-badge role-viewer">VIEWER</span>
 </div>
 <div class="endpoint-body">
-<p>Basic health probe. Returns status, version, and UTC timestamp.</p>
+<p>Basic health probe. Returns status, <code>version</code> (4.0.0), <code>release</code> (as in <code>/api/version</code>), UTC timestamp, <code>security_warnings</code> and <code>crypto_key_persistence</code>: whether imported protocol decryption keys are saved (<code>enabled</code>, <code>disabled</code>, <code>invalid_key</code>, <code>wrong_key</code>, <code>error</code>; see <a href="#crypto-status">GET /api/crypto/status</a>). A <code>Protocol decryption keys: ...</code> entry in <code>security_warnings</code> appears only when keys are at risk: <code>BRIDGE_KEYSTORE_KEY</code> invalid or changed, or repeating <code>BRIDGE_MFA_KEY</code> or <code>BRIDGE_AUDIT_KEY</code> (which the gateway holds), saved keys left unloaded, a database error, or imported keys that a restart would lose. A <code>Pre-migration copy guard disabled: ...</code> entry appears while <code>BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP</code> is set.</p>
 <pre><code>curl -H "X-API-Key: $KEY" https://bridge.example.com/api/health</code></pre>
 </div></div>
 
@@ -304,6 +307,18 @@ pre code { background: none; padding: 0; }
 </div>
 <div class="endpoint-body">
 <p>Operational metrics: ingest rate, WS client counts (detections, anomalies, spectrum, wifi), database size and row count, cache statistics.</p>
+</div></div>
+
+<div class="endpoint" id="edge-install-script">
+<div class="endpoint-header">
+  <span class="method method-get">GET</span>
+  <span class="endpoint-path">/api/edge/install.sh</span>
+  <span class="role-badge role-none">No Auth</span>
+</div>
+<div class="endpoint-body">
+<p>Edge onboarding: the host installer for the heartbeat agent, as <code>text/x-shellscript</code>, piped into <code>sudo bash</code> on the edge host (it needs a NODE-role API key at run time, so fetching it grants nothing). The bridge fills in its release tag, so the edge checks out the release the server runs (<code>main</code> for a <code>dev</code> or <code>main-&lt;sha12&gt;</code> build; <code>--ref</code> overrides). Re-runs keep <code>/etc/sigrift-edge.env</code> and the CA certificate.</p>
+<pre><code>f=$(mktemp) &amp;&amp; curl -fsSL --cacert /etc/sigrift-edge/ca.pem -o "$f" https://bridge.example.com/api/edge/install.sh &amp;&amp; sudo bash "$f"; rm -f "$f"</code></pre>
+<p>Download first (as above): piped into <code>bash</code>, a failed download runs an empty script and exits 0. A new <code>--api-url</code> needs <code>--api-key</code> too, and does not reuse the kept gateway trust.</p>
 </div></div>
 
 <!-- ======== NODES ======== -->
@@ -1416,14 +1431,23 @@ pre code { background: none; padding: 0; }
 <!-- ======== TRAINING ======== -->
 <h2 id="crypto">Crypto Key Management</h2>
 <p>Prefix: <code>/api/crypto</code> &mdash; Protocol key management for decryption (Meshtastic AES, DMR, P25).</p>
+<p>Imported keys are saved in the bridge database, encrypted with <code>BRIDGE_KEYSTORE_KEY</code>, when it is set, and loaded again at startup under the same <code>key_id</code> and <code>created_at</code>; without it they are kept in memory only and lost at every restart. The built-in keys are never saved. Every endpoint answers 503 <code>Crypto key store not initialised</code> when the bridge has no key store.</p>
 
 <div class="endpoint" id="crypto-list">
 <div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/crypto/keys</span><span class="role-badge role-analyst">ANALYST</span></div>
-<div class="endpoint-body"><p>List stored keys (metadata only &mdash; key material is NEVER returned). Fields: <code>key_id, protocol, algorithm, label, source, key_len, created_at</code>.</p></div></div>
+<div class="endpoint-body"><p>List the keys the bridge holds: the built-in defaults and every imported key (metadata only &mdash; key material is NEVER returned). Query param: <code>protocol</code>. Fields: <code>key_id, protocol, algorithm, label, source, key_len, created_at, metadata, persisted</code>. <code>persisted</code> is true for a key saved in the database (loaded again at startup).</p></div></div>
 
 <div class="endpoint" id="crypto-import">
 <div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/crypto/keys</span><span class="role-badge role-admin">ADMIN</span></div>
-<div class="endpoint-body"><p>Import a key. Body: <code>{protocol, key_name, raw_key_hex, algorithm}</code>. Returns 201 with <code>{key_id}</code>.</p></div></div>
+<div class="endpoint-body"><p>Import a key. Body: <code>{protocol, key_name, raw_key_hex, algorithm}</code>; <code>protocol</code> and <code>algorithm</code> at most 32 characters, <code>key_name</code> 1&ndash;128, <code>raw_key_hex</code> at most 256 key bytes (two hex digits per byte; <code>:</code> and spaces allowed and not counted; at most 1024 characters in all): longer values get 422. Returns 201 with <code>{key_id, protocol, label, persisted}</code>; <code>persisted</code> says whether the key was saved in the database. Malformed hex gets 400. No error repeats the key: neither the 400 detail nor any 422 (the usual <code>input</code> of each 422 error is left out under <code>/api/crypto/</code>). 503 when the key could not be saved: nothing was imported. An import and a revoke of the same key run one after the other.</p></div></div>
+
+<div class="endpoint" id="crypto-revoke">
+<div class="endpoint-header"><span class="method method-delete">DELETE</span><span class="endpoint-path">/api/crypto/keys/{key_id}</span><span class="role-badge role-admin">ADMIN</span></div>
+<div class="endpoint-body"><p>Revoke a key: deletes its saved row from the database (with SQLite <code>secure_delete</code>, then a passive WAL checkpoint), then zeroes it in memory. Returns <code>{ok, revoked}</code>. 404 for an unknown key. 503 when the saved row could not be deleted: the key was not revoked and stays usable. Revoking a built-in key removes it until the next start. Copies of the database made before the revoke (the kept <code>detections.db.pre-migration</code>, backups) still hold the row.</p></div></div>
+
+<div class="endpoint" id="crypto-status">
+<div class="endpoint-header"><span class="method method-get">GET</span><span class="endpoint-path">/api/crypto/status</span><span class="role-badge role-analyst">ANALYST</span></div>
+<div class="endpoint-body"><p>Whether imported keys are saved. Returns <code>{persistence, loaded, not_loaded, memory_only, message}</code>: <code>persistence</code> is <code>enabled</code> (imports are saved), <code>disabled</code> (<code>BRIDGE_KEYSTORE_KEY</code> not set: memory only), <code>invalid_key</code> (not a Fernet key), <code>wrong_key</code> (it decrypts none of the saved keys: they are left in the database, unloaded, and new imports stay in memory), or <code>error</code> (the saved keys could not be read); <code>loaded</code> and <code>not_loaded</code> count the saved keys loaded and left in the database at startup; <code>memory_only</code> the imported keys a restart would lose; <code>message</code> is the sentence the console shows above the key list.</p></div></div>
 
 <div class="endpoint" id="crypto-decrypt">
 <div class="endpoint-header"><span class="method method-post">POST</span><span class="endpoint-path">/api/crypto/decrypt</span><span class="role-badge role-analyst">ANALYST</span></div>

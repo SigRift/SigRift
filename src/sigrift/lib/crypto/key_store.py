@@ -65,8 +65,11 @@ class KeyStore:
     """In-memory cryptographic key store.
 
     Keys are held as mutable ``bytearray`` objects so material can be
-    securely zeroed on removal.  This class does NOT persist to disk;
-    the bridge storage layer handles that separately.
+    securely zeroed on removal.  This class does NOT persist to disk:
+    imported keys are saved, encrypted, by
+    ``sigrift.bridge.storage.crypto_keys`` when ``BRIDGE_KEYSTORE_KEY`` is
+    set (and loaded back under the same ``key_id`` at startup); built-in
+    and derived keys never are.
     """
 
     def __init__(self) -> None:
@@ -82,10 +85,31 @@ class KeyStore:
         label: str,
         source: str = "import",
         metadata: dict[str, Any] | None = None,
+        *,
+        key_id: str | None = None,
+        created_at: str | None = None,
     ) -> str:
-        """Add a key to the store.  Returns the generated key_id."""
-        key_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        """Add a key to the store.  Returns its key_id.
+
+        Without *key_id* a new uuid4 is minted, and without *created_at*
+        the time is now (UTC).  A key loaded back from the database passes
+        both, so it keeps the id and time it was imported with.  A given
+        *key_id* must be a non-empty string of at most 128 characters that
+        is not in the store yet (``ValueError`` otherwise; the key already
+        there is left alone).
+        """
+        if key_id is None:
+            key_id = str(uuid.uuid4())
+        elif not isinstance(key_id, str) or not key_id or len(key_id) > 128:
+            raise ValueError(
+                "key_id must be a non-empty string of at most 128 characters"
+            )
+        elif key_id in self._keys:
+            raise ValueError(f"key_id {key_id!r} is already in the store")
+        if created_at is None:
+            created_at = datetime.now(timezone.utc).isoformat()
+        elif not isinstance(created_at, str) or not created_at:
+            raise ValueError("created_at must be a non-empty string")
         key = CryptoKey(
             key_id=key_id,
             protocol=protocol,
@@ -93,7 +117,7 @@ class KeyStore:
             key_material=bytearray(key_material),
             label=label,
             source=source,
-            created_at=now,
+            created_at=created_at,
             metadata=metadata or {},
         )
         self._keys[key_id] = key
@@ -118,7 +142,9 @@ class KeyStore:
     def list_keys(self, protocol: str | None = None) -> list[dict[str, Any]]:
         """Return metadata for stored keys.  NEVER includes key_material."""
         results = []
-        for key in self._keys.values():
+        # A copy: an import or revoke on a request thread may change the
+        # dict while a decode job iterates it.
+        for key in list(self._keys.values()):
             if protocol is not None and key.protocol != protocol:
                 continue
             results.append(
@@ -139,7 +165,7 @@ class KeyStore:
         return self._keys.get(key_id)
 
     def lookup_by_protocol(self, protocol: str) -> list[CryptoKey]:
-        return [k for k in self._keys.values() if k.protocol == protocol]
+        return [k for k in list(self._keys.values()) if k.protocol == protocol]
 
     # -- import helpers ----------------------------------------------------
 

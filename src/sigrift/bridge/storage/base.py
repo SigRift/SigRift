@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import logging
 import os
+import shutil
 import time
 import sqlite3
 import stat
@@ -38,6 +40,29 @@ class SQLDialect(str, Enum):
 
 
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "detections.db"
+
+# Pre-migration copy policy (``_run_migrations``).  Before it applies
+# pending migrations to an existing database the bridge copies it to
+# ``<db>.pre-migration`` and refuses to migrate when that copy fails, unless
+# BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP is set.  After a successful upgrade
+# the copy is kept for the 7-day sweep (``_cleanup_orphan_migration_files``)
+# while at least max(_KEEP_MIN_FREE_BYTES, the database's size) stays free
+# and the disk stays below _KEEP_MAX_USED_FRACTION used (the "Disk usage
+# HIGH" band of /api/health): the copy is about the database's size (7+ GB
+# on production volumes), and the volume must still absorb another
+# database-size of growth (WAL, the next upgrade's own copy).  Otherwise,
+# and for a new database, it is deleted at once, as before; the periodic
+# sweep removes a kept copy early once that stops being true.  The free
+# space is checked before the copy is written (the database and its WAL,
+# plus max(_COPY_MIN_MARGIN_BYTES, 2%)): a copy that cannot fit is refused
+# without writing anything, so a bridge that Compose restarts after the
+# refusal never fills the volume again at every start.
+_ALLOW_MIGRATION_WITHOUT_BACKUP_ENV = "BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP"
+_KEEP_MIN_FREE_BYTES = 1 << 30  # 1 GiB
+_KEEP_MAX_USED_FRACTION = 0.80
+_COPY_MIN_MARGIN_BYTES = 64 << 20  # 64 MiB
+#: shutil.disk_usage, at module level so tests can fake a full disk.
+_disk_usage = shutil.disk_usage
 
 # Filter clause for "active" anomalies: not dismissed AND not snoozed.
 #
@@ -1822,6 +1847,114 @@ def sqlite_transaction(
 # ---------------------------------------------------------------------------
 
 
+def _file_size(path: str | Path) -> int:
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return 0
+
+
+def _live_db_bytes(db_path: Path) -> int:
+    """Size of the database and its WAL: what a copy of it needs."""
+    return _file_size(db_path) + _file_size(str(db_path) + "-wal")
+
+
+def allow_migration_without_backup() -> bool:
+    """True when BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP disables the copy guard.
+
+    ``/api/health`` warns while it is set, and the lifespan logs it at every
+    start: it is meant for one upgrade only.
+    """
+    value = os.environ.get(_ALLOW_MIGRATION_WITHOUT_BACKUP_ENV, "")
+    return value.strip().lower() in ("1", "true", "yes", "enabled")
+
+
+_allow_migration_without_backup = allow_migration_without_backup
+
+
+def _copy_space_problem(db_path: Path) -> OSError | None:
+    """An ENOSPC error when the pre-migration copy cannot fit, else None.
+
+    Checked before anything is written.  The copy needs about the database
+    and its WAL, plus max(64 MiB, 2%) for SQLite's own overhead.  When the
+    free space cannot be read the copy is simply tried.
+    """
+    need = _live_db_bytes(db_path)
+    try:
+        free = _disk_usage(db_path.parent).free
+    except OSError:
+        return None
+    margin = max(_COPY_MIN_MARGIN_BYTES, need // 50)
+    if free < need + margin:
+        return OSError(
+            errno.ENOSPC,
+            f"not enough free space for the copy (it needs about "
+            f"{(need + margin) / 1e6:.0f} MB; nothing was written)",
+        )
+    return None
+
+
+def _pre_migration_failure_message(
+    exc: BaseException, db_path: Path, pending: int
+) -> str:
+    """The CRITICAL line for a pre-migration copy that could not be made."""
+    try:
+        free = f"{_disk_usage(db_path.parent).free / 1e6:.0f} MB are free there"
+    except OSError:
+        free = "the free space there could not be read"
+    message = (
+        f"Pre-migration backup failed: {exc}. Refusing to apply {pending} "
+        f"pending migration(s) to {db_path} without a recovery copy: the copy "
+        f"needs about {_live_db_bytes(db_path) / 1e6:.0f} MB next to the "
+        f"database and {free}. Free space in the volume and restart the bridge, "
+        f"or set {_ALLOW_MIGRATION_WITHOUT_BACKUP_ENV}=1 in the bridge's "
+        "environment to migrate without it (only with a backup of your own; "
+        "remove it afterwards): in .env for a docker-compose.yml that passes "
+        "it to the bridge; a release install generated before v0.2.0 also "
+        "needs it in docker-compose.override.yml, under services: bridge: "
+        "environment:."
+    )
+    previous = Path(str(db_path) + ".pre-migration")
+    try:
+        st = previous.stat()
+    except OSError:
+        return message
+    made = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M")
+    return message + (
+        f" A copy from an earlier run is still there: {previous} "
+        f"({st.st_size / 1e6:.0f} MB, made {made} UTC); if the upgrade that "
+        "made it went well, delete it and restart."
+    )
+
+
+def _keep_pre_migration_copy(db_path: Path, had_migrations: bool) -> tuple[bool, str]:
+    """Whether to keep a successful run's ``.pre-migration`` copy, and why not.
+
+    *had_migrations*: the database had applied migrations before this run
+    (an upgrade, not a new database).  The copy is already on disk, so the
+    free space read here is what stays free if it is kept.
+    """
+    if not had_migrations:
+        return False, "a new database: nothing to keep"
+    try:
+        usage = _disk_usage(db_path.parent)
+    except OSError as exc:
+        return False, f"the free space could not be read ({exc})"
+    need = max(_KEEP_MIN_FREE_BYTES, _live_db_bytes(db_path))
+    if usage.free < need:
+        return False, (
+            f"only {usage.free / 1e9:.1f} GB would stay free; it is kept only "
+            f"while at least {need / 1e9:.1f} GB (1 GB, or the database's size "
+            "if larger) stay free"
+        )
+    if usage.total and usage.used / usage.total >= _KEEP_MAX_USED_FRACTION:
+        return False, (
+            f"the disk would be {100 * usage.used / usage.total:.0f}% used; it "
+            f"is kept only below {_KEEP_MAX_USED_FRACTION:.0%}"
+        )
+    return True, ""
+
+
 def _refuse_newer_schema(conn: sqlite3.Connection) -> None:
     """Refuse a database that a newer build has already migrated (PRE-68).
 
@@ -2011,7 +2144,9 @@ class SharedContext:
         # production-sized volume. Anything older than 7 days has no
         # forensic value; the current run's .pre-migration is created
         # fresh further down (in _run_migrations) so it's safe to delete
-        # older copies here.
+        # older copies here. A copy kept after a successful upgrade is
+        # swept the same way: here and on every periodic cleanup
+        # (app.py _periodic_cleanup), 7 days after it was made.
         self._cleanup_orphan_migration_files()
         # Auto-encrypt existing plaintext DB if encryption key is configured
         self._maybe_encrypt_existing_db()
@@ -2119,7 +2254,11 @@ class SharedContext:
 
         P2-14: Creates a .pre-migration backup before applying pending
         migrations, and raises RuntimeError on any migration failure
-        instead of silently skipping.
+        instead of silently skipping.  A backup that cannot be made stops
+        the run before any migration (RuntimeError) unless
+        BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP is set; after a successful
+        upgrade the backup is kept for the 7-day sweep while space allows
+        (see ``_keep_pre_migration_copy``).
         """
         try:
             rows = conn.execute("SELECT version FROM schema_version").fetchall()
@@ -2189,15 +2328,31 @@ class SharedContext:
         db_str = str(self._db_path)
         backup_path = db_str + ".pre-migration"
         backup_created = False
-        if db_str != ":memory:" and Path(db_str).exists():
-            backup = getattr(conn, "backup", None)
-            if not callable(backup):
+        allow_without_backup = _allow_migration_without_backup()
+        snapshot_wanted = db_str != ":memory:" and Path(db_str).exists()
+        backup = getattr(conn, "backup", None)
+        if snapshot_wanted and not callable(backup):
+            if not allow_without_backup:
                 raise RuntimeError(
                     "Database driver lacks the online backup API; refusing "
                     "migrations without a consistent recovery snapshot"
                 )
+            logger.warning(
+                "Database driver lacks the online backup API — applying %d "
+                "pending migration(s) WITHOUT a recovery copy because %s is set",
+                len(pending),
+                _ALLOW_MIGRATION_WITHOUT_BACKUP_ENV,
+            )
+        elif snapshot_wanted:
             snapshot_path = None
+            backup_error: BaseException | None = None
             try:
+                # The space first: a copy that cannot fit would fill the
+                # volume before it failed, and Compose restarts a bridge
+                # that refused, so it would do so again at every start.
+                space_problem = _copy_space_problem(Path(db_str))
+                if space_problem is not None:
+                    raise space_problem
                 # mkstemp creates a private file before any database pages
                 # are written. Its descriptor is closed before SQLite opens
                 # this separate destination, never the live source file.
@@ -2219,10 +2374,30 @@ class SharedContext:
                 backup_created = True
                 logger.info("Pre-migration backup created: %s", backup_path)
             except (OSError, sqlite3.Error) as exc:
-                logger.warning("Pre-migration backup failed: %s", exc)
+                backup_error = exc
             finally:
                 if snapshot_path is not None:
                     Path(snapshot_path).unlink(missing_ok=True)
+            if backup_error is not None and allow_without_backup:
+                logger.warning(
+                    "Pre-migration backup failed: %s — applying %d pending "
+                    "migration(s) WITHOUT a recovery copy because %s is set",
+                    backup_error,
+                    len(pending),
+                    _ALLOW_MIGRATION_WITHOUT_BACKUP_ENV,
+                )
+            elif backup_error is not None:
+                logger.critical(
+                    "%s",
+                    _pre_migration_failure_message(
+                        backup_error, Path(db_str), len(pending)
+                    ),
+                )
+                raise RuntimeError(
+                    f"Pre-migration backup failed ({backup_error}); refusing to "
+                    "migrate without it "
+                    f"({_ALLOW_MIGRATION_WITHOUT_BACKUP_ENV}=1 overrides)"
+                ) from backup_error
 
         for version, description, sql in pending:
             try:
@@ -2305,28 +2480,65 @@ class SharedContext:
                 _rollback_quietly(conn)
                 raise
 
-        # All pending migrations applied successfully — the backup's job
-        # is done. Leaving it around wastes 7+ GB on production-sized DBs.
-        # The schema_version table is the canonical "applied" marker; any
-        # restore from this point would come from a proper backup system,
-        # not a transient sibling file.
+        # All pending migrations applied successfully. After an upgrade the
+        # copy is the database as it was just before them: keep it for the
+        # 7-day sweep (a rollback point while the upgrade is verified) as
+        # long as the volume has room (see _keep_pre_migration_copy: it is
+        # about the database's size, 7+ GB on production volumes). A new
+        # database, or too little space, removes it at once, as before.
         if backup_created:
-            try:
-                Path(backup_path).unlink()
+            keep, reason = _keep_pre_migration_copy(
+                Path(db_str), had_migrations=bool(applied)
+            )
+            if keep:
                 logger.info(
-                    "Pre-migration backup removed after successful run: %s",
+                    "Pre-migration backup kept: %s (%.0f MB). It is removed "
+                    "automatically 7 days after it was made; delete it yourself "
+                    "once the upgrade is verified.",
                     backup_path,
+                    _file_size(backup_path) / 1e6,
                 )
-            except OSError as exc:
-                logger.warning("Pre-migration backup cleanup failed: %s", exc)
+            else:
+                try:
+                    Path(backup_path).unlink()
+                    (logger.info if not applied else logger.warning)(
+                        "Pre-migration backup removed after successful run: %s (%s)",
+                        backup_path,
+                        reason,
+                    )
+                except OSError as exc:
+                    logger.warning("Pre-migration backup cleanup failed: %s", exc)
 
-    def _cleanup_orphan_migration_files(self, max_age_days: int = 7) -> None:
+    def sweep_migration_leftovers(self) -> None:
+        """The periodic sweep (app.py ``_periodic_cleanup``, every cycle).
+
+        Like the startup sweep, and it also removes a kept
+        ``.pre-migration`` copy before its 7 days are up once the volume no
+        longer has room for it (``_keep_pre_migration_copy``).
+        """
+        self._cleanup_orphan_migration_files(recheck_space=True)
+
+    def _cleanup_orphan_migration_files(
+        self, max_age_days: int = 7, *, recheck_space: bool = False
+    ) -> None:
         """Delete stale `<db>.pre-migration` and `<db>.failed-migration-*` files.
 
-        These accumulate when migrations crash or get rolled back manually.
+        These accumulate when migrations crash or get rolled back manually,
+        and a successful upgrade keeps its `.pre-migration` copy on purpose
+        (``_keep_pre_migration_copy``). Runs at startup (``_init_db``) and on
+        every periodic cleanup (app.py), so a long-running bridge removes a
+        kept copy too; its mtime is the time it was made.
         On a 7 GB production DB, each one is ~7 GB; without cleanup the
         volume bloats fast. Anything older than ``max_age_days`` is safe
         to remove — the live schema_version table tracks what applied.
+        ``<db>.pre-migration.XXXXXX`` is a copy that was still being written
+        when its process died (SIGKILL, power loss); one being written now
+        is never that old.
+
+        *recheck_space* (the periodic sweep only, never at startup, where
+        the bridge never deletes an older copy to make room): a younger
+        ``.pre-migration`` copy is removed too, with a WARNING, once the
+        volume no longer has room to keep it.
         """
         db_str = str(self._db_path)
         if db_str == ":memory:":
@@ -2339,10 +2551,41 @@ class SharedContext:
         cutoff = time.time() - max_age_days * 86400
         patterns = [
             f"{prefix}.pre-migration",
+            f"{prefix}.pre-migration.*",
             f"{prefix}.failed-migration-*",
             f"{prefix}-wal.failed-migration-*",
             f"{prefix}-shm.failed-migration-*",
         ]
+        kept = parent / f"{prefix}.pre-migration"
+        if recheck_space and kept.is_file():
+            try:
+                young = kept.stat().st_mtime >= cutoff
+            except OSError:
+                young = False
+            if young:
+                try:
+                    _disk_usage(parent)
+                except OSError:
+                    young = False  # unknown free space: keep it this cycle
+            if young:
+                keep, reason = _keep_pre_migration_copy(db_path, had_migrations=True)
+                if not keep:
+                    size = _file_size(kept)
+                    try:
+                        kept.unlink()
+                        logger.warning(
+                            "Removed the kept pre-migration copy %s (%.1f MB) "
+                            "before its 7 days were up: %s",
+                            kept,
+                            size / 1e6,
+                            reason,
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not remove the kept pre-migration copy %s: %s",
+                            kept,
+                            exc,
+                        )
         for pattern in patterns:
             for candidate in parent.glob(pattern):
                 try:

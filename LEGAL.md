@@ -138,7 +138,11 @@ each protocol reaches differs:
 
 All of this is implemented in `src/sigrift/lib/crypto/aes_decrypt.py`.
 The key-management API (`src/sigrift/bridge/routers/crypto.py`) stores
-keys for any protocol, but `POST /api/crypto/decrypt` and the decode
+keys for any protocol (imported keys are saved in the bridge database,
+encrypted with `BRIDGE_KEYSTORE_KEY`, when it is set; revoking a key
+deletes its saved row, though copies of the database made earlier keep
+it; the built-in keys are never saved), but
+`POST /api/crypto/decrypt` and the decode
 pipeline (`src/sigrift/bridge/decode_pipeline.py`) only accept a
 decryption whose plaintext is verified, which today means Meshtastic
 only: a P25 or DMR request to `POST /api/crypto/decrypt` always answers

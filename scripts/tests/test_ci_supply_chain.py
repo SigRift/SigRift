@@ -158,6 +158,37 @@ def test_release_signs_install_release_and_pins_the_exact_identity():
     assert "install-release.sh.sig" not in text or "install-release.sh" in signing
 
 
+def test_release_signs_the_stamped_installer(tmp_path):
+    """phase1b 5.2: dist/install-release.sh is copied from the stage after
+    the INSTALLER_RELEASE stamp, so SHA256SUMS and the signature cover the
+    stamped file; the stamp refuses a release below LC_TEMPLATE_SINCE."""
+    tarballs = workflow("release.yml")["jobs"]["build-tarballs"]
+    build = next(s["run"] for s in tarballs["steps"]
+                 if s.get("name") == "Build install-release tarball")
+    stamp = build.index("INSTALLER_RELEASE=")
+    assert build.index('cp scripts/install-release.sh "$STAGE/"') < stamp < build.index(
+        'cp "$STAGE/install-release.sh" dist/install-release.sh')
+    assert "cp scripts/install-release.sh dist/" not in build
+    snippet = re.search(r"python3 - \"\$VERSION\" \"\$STAGE/install-release.sh\" <<'PY'\n(.*?)\nPY\n",
+                        build, re.S).group(1)
+    installer = (ROOT / "scripts" / "install-release.sh").read_text()
+    for version, ok in (("v0.2.0", True), ("v0.2.0-rc1", True), ("v0.1.5", False),
+                        ("v0.0.0-license-test", True)):
+        f = tmp_path / ("install-release-%s.sh" % version)
+        f.write_text(installer)
+        r = subprocess.run([sys.executable, "-c", snippet, version, str(f)],
+                           capture_output=True, text=True)
+        assert (r.returncode == 0) == ok, (version, r.stderr)
+        if ok:
+            assert f.read_text().count("\nINSTALLER_RELEASE=%s\n" % version) == 1
+        else:
+            assert "LC_TEMPLATE_SINCE" in r.stderr and f.read_text() == installer
+    f.write_text(installer.replace("INSTALLER_RELEASE=dev", "INSTALLER_RELEASE=v0.2.0"))
+    r = subprocess.run([sys.executable, "-c", snippet, "v0.2.0", str(f)], capture_output=True,
+                       text=True)
+    assert r.returncode == 1 and "exactly one INSTALLER_RELEASE=dev" in r.stderr
+
+
 def test_no_doc_or_workflow_uses_an_identity_regexp_or_pipe_to_shell():
     paths = list(ROOT.glob("*.md")) + list(WORKFLOWS.glob("*.yml"))
     paths += [ROOT / "scripts" / "install-release.sh"]

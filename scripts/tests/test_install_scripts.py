@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import subprocess
+from bash_file import script_argv  # noqa: E402
 import textwrap
 from pathlib import Path
 
@@ -63,7 +64,8 @@ def marked_block(path: Path, begin: str, end: str) -> str:
 
 
 def shared_block(path: Path, name: str) -> str:
-    return marked_block(path, f"# >>> shared: {name}", f"# <<< shared: {name}")
+    # The space ends the name: "lifecycle" is not "lifecycle-tool".
+    return marked_block(path, f"# >>> shared: {name} ", f"# <<< shared: {name}")
 
 
 def function_text(path: Path, name: str) -> str:
@@ -123,7 +125,7 @@ def bash(script: str, *, env: dict | None = None, cwd: Path | None = None):
     }
     full.update(env or {})
     return subprocess.run(
-        [BASH, "-c", script], capture_output=True, text=True, env=full, cwd=cwd
+        script_argv(BASH, script), capture_output=True, text=True, env=full, cwd=cwd
     )
 
 
@@ -810,9 +812,100 @@ def test_workflows_parse():
 # ── round 3: shared blocks, certificate renewal, key permissions ────────
 
 
-@pytest.mark.parametrize("name", ["tls-key-perms", "exposure", "volumes"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tls-key-perms",
+        "exposure",
+        "volumes",
+        "lifecycle-tool",
+        "lifecycle-engine",
+        "identity",
+        "preflight",
+        "lifecycle",
+        "state-tool",
+        "state-engine",
+        "restore",
+        "archive-engine",
+        "move",
+    ],
+)
 def test_new_shared_blocks_identical_in_both_installers(name):
     assert shared_block(QUICKSTART, name) == shared_block(INSTALL_RELEASE, name)
+
+
+def test_lifecycle_blocks_follow_the_backend_subnet_block_in_order():
+    for path in (QUICKSTART, INSTALL_RELEASE):
+        text = path.read_text()
+        starts = [
+            text.index(f"# >>> shared: {n} ")
+            for n in (
+                "backend-subnet",
+                "lifecycle-tool",
+                "lifecycle-engine",
+                "identity",
+                "preflight",
+                "lifecycle",
+                "state-tool",
+                "state-engine",
+                "restore",
+                "archive-engine",
+                "move",
+            )
+        ]
+        assert starts == sorted(starts), path.name
+
+
+def test_lifecycle_state_is_ignored_by_git_and_docker(tmp_path):
+    """Restore points hold .env and TLS key copies: never commit or build them."""
+    ignore = (ROOT / ".gitignore").read_text().splitlines()
+    assert ".sigrift/" in ignore and ".sigrift-state" in ignore
+    docker = (ROOT / ".dockerignore").read_text().splitlines()
+    assert "**/.sigrift/" in docker and "**/.sigrift-state" in docker
+    if shutil.which("git") and (ROOT / ".git").exists():
+        for path in (".sigrift/journal.json", ".sigrift-state"):
+            r = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT)
+            assert r.returncode == 0, path
+
+
+def test_tls_cert_block_calls_the_snapshot_hook_before_the_swap(stubs, tmp_path):
+    """A caller that keeps restore points copies the old pair first."""
+    assert "CHANGED=1" in ensure_cert(stubs, tmp_path).stdout
+    cert, key = tmp_path / "tls" / "cert.pem", tmp_path / "tls" / "key.pem"
+    (tmp_path / "tls" / ".recreate-pending").unlink()  # as after a recreate
+    old = (cert.read_bytes(), key.read_bytes())
+    lib = source_blocks(tmp_path, shared_block(INSTALL_RELEASE, "tls-cert"))
+    # The hook sees the old files (and no recreate marker yet), and its
+    # failure does not stop the renewal.
+    hook = (
+        'tls_before_swap() { cp "$1" saved-cert; cp "$2" saved-key; '
+        '[ ! -e tls/.recreate-pending ] && echo NO-MARKER; return 7; }; '
+    )
+    r = bash(
+        f'source "{lib}"; {hook}TLS_RENEW_DAYS=900; '
+        'tls_ensure_cert tls/cert.pem tls/key.pem localhost ""; '
+        'echo "CHANGED=$TLS_CERT_CHANGED"',
+        env=tls_env(stubs, tmp_path),
+        cwd=tmp_path,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "NO-MARKER" in r.stdout and "CHANGED=1" in r.stdout
+    assert ((tmp_path / "saved-cert").read_bytes(), (tmp_path / "saved-key").read_bytes()) == old
+    assert cert.read_bytes() != old[0]
+    block = shared_block(INSTALL_RELEASE, "tls-cert")
+    assert block.index("tls_before_swap \"$cert\" \"$key\" || true") < block.index(
+        ': > "$(tls_recreate_marker "$cert")"'
+    )
+    # Without a hook (quickstart keeps no restore points yet) the renewal
+    # runs as before.
+    r = bash(
+        f'source "{lib}"; TLS_RENEW_DAYS=900; '
+        'tls_ensure_cert tls/cert.pem tls/key.pem localhost ""; '
+        'echo "CHANGED=$TLS_CERT_CHANGED"',
+        env=tls_env(stubs, tmp_path),
+        cwd=tmp_path,
+    )
+    assert r.returncode == 0 and "CHANGED=1" in r.stdout, r.stderr
 
 
 def full_sans_cert(stubs, tmp_path, days: int) -> Path:
@@ -1134,6 +1227,7 @@ def test_install_release_writes_a_production_env_with_every_key_it_needs():
     # What the bridge's and gateway's production start-up checks require.
     for key in (
         "BRIDGE_MFA_KEY",
+        "BRIDGE_KEYSTORE_KEY",
         "BRIDGE_AUDIT_KEY",
         "BRIDGE_MASTER_KEY",
         "UC_PROXY_SECRET",
@@ -1143,8 +1237,12 @@ def test_install_release_writes_a_production_env_with_every_key_it_needs():
     ):
         assert lines.get(key), key
     assert "BRIDGE_MFA_KEY=${MFA_KEY}" in body  # fernet_key, not randstr
+    assert "BRIDGE_KEYSTORE_KEY=${KEYSTORE_KEY}" in body
     assert re.search(
         r"^    MFA_KEY=\$\(fernet_key\)$", INSTALL_RELEASE.read_text(), re.M
+    )
+    assert re.search(
+        r"^    KEYSTORE_KEY=\$\(fernet_key\)$", INSTALL_RELEASE.read_text(), re.M
     )
 
 
@@ -1640,8 +1738,10 @@ def test_a_new_cert_leaves_a_recreate_marker_until_the_caller_clears_it(
 def fake_docker(stubs, tmp_path: Path) -> Path:
     """A `docker` that logs its arguments and plays a healthy stack.
 
-    FAKE_PULL_RC / FAKE_UP_RC are the exit status of `compose pull` /
-    `compose up`, FAKE_HEALTH what `compose ps` says about the gateway.
+    FAKE_PULL_RC / FAKE_UP_RC are the exit status of `docker pull` and
+    `compose pull` / `compose up`; FAKE_HEALTH and FAKE_BRIDGE_HEALTH
+    (default healthy) what `compose ps` says about the gateway and the
+    bridge.
     The stack runs bridge, gateway and edge (`compose ps -q` lists one
     container each, plus, without service names, an orphan `oldsvc` from
     a service no longer in the compose file); `inspect` says each started
@@ -1672,6 +1772,8 @@ def fake_docker(stubs, tmp_path: Path) -> Path:
                 done
                 exit 0
             fi
+            # The installers pull the images themselves, before any change.
+            [ "$1" = pull ] && exit "${{FAKE_PULL_RC:-0}}"
             [ "$1" = compose ] || exit 0
             for a in "$@"; do
                 case "$a" in
@@ -1691,7 +1793,9 @@ def fake_docker(stubs, tmp_path: Path) -> Path:
                                         *) echo "id-$s" ;;
                                     esac
                                 done ;;
-                            *) printf '{{"Service":"gateway","Health":"%s"}}\\n' \\
+                            *) printf '{{"Service":"bridge","State":"running","Health":"%s"}}\\n' \\
+                                "${{FAKE_BRIDGE_HEALTH:-healthy}}"
+                                printf '{{"Service":"gateway","State":"running","Health":"%s"}}\\n' \\
                                 "${{FAKE_HEALTH:-healthy}}" ;;
                         esac
                         exit 0 ;;
@@ -1699,6 +1803,17 @@ def fake_docker(stubs, tmp_path: Path) -> Path:
                     config) case " $* " in
                             *" --services "*) printf '%s\\n' bridge gateway edge ;;
                             *".sigrift-compose-"*) echo '{{"services":{{"bridge":{{"image":"ghcr.io/sigrift/sigrift-bridge:v9.9.9"}},"gateway":{{"image":"ghcr.io/sigrift/sigrift-gateway:v9.9.9"}}}}}}' ;;
+                            *" --format json "*)
+                                # The project: --env-file, the shell, .env, the folder.
+                                n= prev=
+                                for e in "$@"; do
+                                    [ "$prev" = --env-file ] && n=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$e" | tail -1)
+                                    prev=$e
+                                done
+                                [ -n "$n" ] || n=${{COMPOSE_PROJECT_NAME:-}}
+                                [ -n "$n" ] || n=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2>/dev/null | tail -1)
+                                [ -n "$n" ] || n=$(basename "$PWD" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-')
+                                printf '{{"name":"%s"}}\\n' "$n" ;;
                             *) echo '{{}}' ;;
                         esac
                         exit 0 ;;
@@ -1788,22 +1903,35 @@ def test_release_renewal_retries_a_recreate_that_failed(stubs, tmp_path):
     assert compose_ups(log) == []
 
 
-def test_release_rerun_recreates_after_a_failed_pull(stubs, tmp_path):
+def test_release_rerun_changes_nothing_when_the_pull_fails_then_recreates(
+    stubs, tmp_path
+):
     d = release_dir(tmp_path)
     log = fake_docker(stubs, tmp_path)
     script, marker = d / "install-release.sh", d / "tls" / ".recreate-pending"
+    before = {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
     r = run_script(stubs, tmp_path, script, FAKE_PULL_RC="1")
-    assert r.returncode != 0  # new cert, then the pull failed
-    assert compose_ups(log) == [] and marker.exists()
+    # The images are pulled before any file changes: nothing was written.
+    assert r.returncode == 3, r.stderr
+    assert r.stderr.rstrip().endswith("Nothing was changed.")
+    assert compose_ups(log) == [] and not (d / "tls").exists() and not marker.exists()
+    assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == before
     log.write_text("")
     r = run_script(stubs, tmp_path, script)
     assert r.returncode == 0, r.stderr
-    assert compose_ups(log) == ["compose up -d --remove-orphans --force-recreate"]
+    # The bridge first; then the gateway, recreated for its new certificate.
+    assert compose_ups(log) == [
+        "compose up -d --pull never --remove-orphans bridge",
+        "compose up -d --pull never --remove-orphans --force-recreate gateway",
+    ]
     assert not marker.exists()
     log.write_text("")
     r = run_script(stubs, tmp_path, script)
     assert r.returncode == 0, r.stderr
-    assert compose_ups(log) == ["compose up -d --remove-orphans"]
+    assert compose_ups(log) == [
+        "compose up -d --pull never --remove-orphans bridge",
+        "compose up -d --pull never --remove-orphans",
+    ]
 
 
 def test_release_renewal_leaves_the_cert_alone_when_the_host_gains_an_address(
@@ -1934,9 +2062,24 @@ def test_installers_recreate_while_a_recreate_is_pending():
     confirm = "if ! tls_recreate_confirm tls/cert.pem docker compose; then\n"
     assert qs.index(confirm, wait) > wait
     assert qs.count(confirm) == 2  # the --renew-tls branch too
-    assert "tls_recreate_done tls/cert.pem" not in qs
-    rel = INSTALL_RELEASE.read_text()
-    assert 'docker compose "${up_args[@]}"\ntls_recreate_done tls/cert.pem\n' in rel
+    # The shared lifecycle block's two-stage start (release installs; its
+    # `up` fails hard, so its exit status proves the recreate) is not
+    # quickstart's own flow.
+    assert "tls_recreate_done tls/cert.pem" not in qs.replace(
+        shared_block(QUICKSTART, "lifecycle"), ""
+    )
+    # The release start: the gateway is recreated while a recreate is
+    # pending, and the marker goes only after it turned healthy.
+    start = function_text(INSTALL_RELEASE, "lc_start_rest")
+    assert (
+        "    if tls_recreate_pending tls/cert.pem; then\n"
+        "        # The certificate is new: recreate the gateway (only it mounts\n"
+        "        # tls/; the bridge just became healthy).\n"
+        "        docker compose up -d --pull never --remove-orphans --force-recreate gateway\n"
+    ) in start
+    assert start.index("lc_wait_service_healthy gateway") < start.index(
+        "tls_recreate_done tls/cert.pem"
+    )
 
 
 # ── backend subnet (Q19) ──────────────────────────────────────────────────
@@ -1972,9 +2115,23 @@ def test_every_installer_checks_the_backend_subnet_before_starting():
         '\ndocker compose "${SCANNER_COMPOSE_ARGS[@]}" build "${QUICKSTART_SERVICES[@]}"\n'
     )
     rel = INSTALL_RELEASE.read_text()
-    assert rel.index("\nensure_backend_subnet .env\n") < rel.index(
-        "\ndocker compose pull\n"
+    # A new install: before its start. A re-run and an upgrade: the switch
+    # (release_switch, the "switch" step) runs it before the start steps.
+    fresh = rel.index("    fresh)\n")
+    assert (
+        fresh
+        < rel.index("\n        ensure_backend_subnet .env\n", fresh)
+        < rel.index("\n        lc_start_two_stage\n", fresh)
     )
+    assert "\n    ensure_backend_subnet .env\n}" in function_text(
+        INSTALL_RELEASE, "release_switch"
+    )
+    rerun = rel.index("    rerun)\n")
+    assert rel.index("        release_switch\n", rerun) < rel.index(
+        "        lc_start_two_stage\n", rerun
+    )
+    steps = re.search(r'^LC_UPGRADE_STEPS="([^"]+)"', rel, re.M).group(1).split()
+    assert steps.index("switch") < steps.index("start-bridge")
 
 
 def subnet_env(stubs, tmp_path: Path, networks: list[str], routes: str = "") -> dict:

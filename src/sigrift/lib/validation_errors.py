@@ -8,6 +8,11 @@ rejected body holding one (``{"key_id": NaN}``, an unknown field set to
 ``Infinity``, ...) failed with a 500 instead.  This handler sends the same
 response as FastAPI's, with those floats spelled as their JSON text.
 
+It never echoes a secret: an error about a secret field (``raw_key_hex``,
+the protocol decryption key an import sends), an error whose ``input`` is
+a body holding one (a missing field repeats the whole body), and every
+error of a request under ``/api/crypto/`` lose their ``input``.
+
 Installed by the Shiny dashboard and the Bridge on their apps.
 """
 
@@ -38,13 +43,49 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+#: Request fields whose value is secret: no 422 repeats it.
+SECRET_FIELDS = frozenset({"raw_key_hex"})
+#: Paths whose 422s repeat no input at all (protocol decryption keys).
+SECRET_PATH_PREFIXES = ("/api/crypto/",)
+
+
+def _holds_secret(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            key in SECRET_FIELDS or _holds_secret(item) for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_holds_secret(item) for item in value)
+    return False
+
+
+def redact_secrets(errors: Any, path: str) -> Any:
+    """*errors* (``exc.errors()``) without the ``input`` of any secret."""
+    if not isinstance(errors, (list, tuple)):
+        return errors
+    secret_path = path.startswith(SECRET_PATH_PREFIXES)
+    redacted = []
+    for error in errors:
+        if isinstance(error, dict) and "input" in error:
+            loc = error.get("loc") or ()
+            if (
+                secret_path
+                or any(part in SECRET_FIELDS for part in loc)
+                or _holds_secret(error["input"])
+            ):
+                error = {k: v for k, v in error.items() if k != "input"}
+        redacted.append(error)
+    return redacted
+
+
 async def request_validation_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """FastAPI's 422 for *exc*, made JSON-safe."""
+    """FastAPI's 422 for *exc*, made JSON-safe, with no secret repeated."""
+    errors = redact_secrets(exc.errors(), request.url.path)
     return JSONResponse(
         status_code=422,
-        content={"detail": json_safe(jsonable_encoder(exc.errors()))},
+        content={"detail": json_safe(jsonable_encoder(errors))},
     )
 
 

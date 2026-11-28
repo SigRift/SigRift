@@ -137,7 +137,7 @@ jobs:
   scripts:
     name: Install/deploy scripts (shellcheck + tests)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35  # the upgrade-system lifecycle tests need about 25 min on the runners
     steps:
       - uses: actions/checkout@v7
 
@@ -176,9 +176,11 @@ jobs:
           COVERAGE_FILE: .coverage.scripts
         run: |
           python3 scripts/gateway-notices.py --check
+          # Parallel since Phase 1b (restore points and rollback): run
+          # serially the step passed its 20 minutes (phase1b-spec 11).
           python3 -m pytest scripts/tests tests/docs/test_license_packaging.py \
             tests/docs/test_changelog_unreleased.py -q -p no:cacheprovider \
-            --cov --cov-branch --cov-report=
+            -n auto --dist loadgroup --cov --cov-branch --cov-report=
 
       - name: Record script coverage provenance
         if: always()
@@ -335,7 +337,7 @@ jobs:
     runs-on: ${{ vars.CI_HEAVY_RUNNER && fromJSON(vars.CI_HEAVY_RUNNER) || 'ubuntu-latest' }}
     # pytest-split falls back to an even-by-count split, so the shard with
     # the heaviest suites set the pace (about 20 min on hosted runners).
-    timeout-minutes: 30
+    timeout-minutes: 45  # a shard with the archive and move tests needs about 33 min
     # Gate on Python paths. Rust-only PRs skip the ~40 GH-min shard
     # matrix entirely; the aggregation job below treats skipped shards
     # as a pass so branch protection's "Python bridge tests" required

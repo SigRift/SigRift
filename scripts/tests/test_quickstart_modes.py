@@ -202,7 +202,10 @@ needs_compose = pytest.mark.skipif(not has_compose(), reason="Compose CLI requir
 
 def override_block():
     text = QUICKSTART.read_text()
-    return (
+    # The override's writer is a function (phase 2: an --import writes it
+    # too), defined before quickstart's dispatch; the block calls it.
+    writer = re.search(r"(?ms)^qs_write_override\(\) \{\n.*?^\}\n", text).group(0)
+    return writer + (
         text.split("# ── Compose override:", 1)[1]
         .split("# ── Model for the `scan` service", 1)[0]
         .partition("\n")[2]
@@ -228,7 +231,7 @@ def configure(tmp_path, request="", *, env=None):
         + f'QUICKSTART_MODE=$(quickstart_mode "{request}" plan)\n'
         + """
 if [ ! -f .env ]; then
-    BIND=127.0.0.1 MFA_KEY=placeholder AUDIT_KEY=placeholder
+    BIND=127.0.0.1 MFA_KEY=placeholder KEYSTORE_KEY=placeholder AUDIT_KEY=placeholder
     MASTER_KEY=placeholder PROXY_SECRET=placeholder LOCAL_NODE_KEY=placeholder
     SIGRIFT_PRESET=none ADMIN_PASSWORD_ENV='"test password"'
     cat > .env <<EOF
@@ -450,6 +453,8 @@ if args[:2] == ['compose', 'config'] or args == ['compose', 'version']:
     os.execv(real, [real, *args])
 if args[:2] == ['info', '--format'] or args == ['network', 'ls', '-q']:
     sys.exit(0)
+if args[:2] == ['volume', 'ls'] or (args[:1] == ['ps'] and any(a in ('-a', '-q') for a in args)):
+    sys.exit(0)  # lc_identity's read-only queries: an empty host
 # No build, pull, helper container or other daemon operation is executed.
 sys.exit(77 if args == ['compose', 'build'] else 97)
 """

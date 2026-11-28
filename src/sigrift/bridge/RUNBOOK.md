@@ -488,7 +488,7 @@ PartitionedCache with 2048 total entries (domain-routed). TTL varies by domain. 
 
 ### Automated Backups
 
-Pre-migration backups are created automatically at `data/detections.db.pre-migration` before any schema migration.
+Pre-migration backups are created automatically at `data/detections.db.pre-migration` before any schema migration. A copy that cannot be made stops the migration (`BRIDGE_ALLOW_MIGRATION_WITHOUT_BACKUP=1` overrides); after a successful upgrade the copy is kept 7 days while space allows (at least max(1 GB, the database's size) free and the disk under 80% used), then swept.
 
 For nightly backups, use the system backup timer or an external tool:
 

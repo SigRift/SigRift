@@ -122,6 +122,48 @@ class TestKeyStoreSecrecy:
         assert store.remove_key(kid) is False
         assert len(store) == 0
 
+    def test_add_key_keeps_a_given_id_and_created_at(self) -> None:
+        # How a key saved in crypto_keys comes back after a restart.
+        store = KeyStore()
+        kid = store.add_key(
+            "meshtastic",
+            "aes-128-ctr",
+            KEY16,
+            "saved",
+            key_id="00000000-0000-4000-8000-000000000001",
+            created_at="2026-11-01T00:00:00+00:00",
+        )
+        assert kid == "00000000-0000-4000-8000-000000000001"
+        key = store.lookup_key(kid)
+        assert key.created_at == "2026-11-01T00:00:00+00:00"
+        assert bytes(key.key_material) == KEY16 and key.source == "import"
+
+    def test_add_key_refuses_an_id_already_in_the_store(self) -> None:
+        store = KeyStore()
+        kid = store.add_key("meshtastic", "aes-128-ctr", KEY16, "first")
+        with pytest.raises(ValueError, match="already in the store"):
+            store.add_key("dmr", "aes-256", KEY32, "second", key_id=kid)
+        original = store.lookup_key(kid)
+        assert original.label == "first" and bytes(original.key_material) == KEY16
+        assert len(store) == 1
+
+    @pytest.mark.parametrize("key_id", ["", "x" * 129, 7, b"bytes-id"])
+    def test_add_key_refuses_an_empty_or_overlong_id(self, key_id: object) -> None:
+        store = KeyStore()
+        with pytest.raises(ValueError, match="non-empty string of at most 128"):
+            store.add_key("meshtastic", "aes-128-ctr", KEY16, "bad", key_id=key_id)
+        assert len(store) == 0
+
+    def test_add_key_without_an_id_still_mints_a_uuid4(self) -> None:
+        import uuid
+        from datetime import datetime
+
+        store = KeyStore()
+        kid = store.add_key("meshtastic", "aes-128-ctr", KEY16, "new")
+        assert uuid.UUID(kid).version == 4
+        created = datetime.fromisoformat(store.lookup_key(kid).created_at)
+        assert created.utcoffset() is not None
+
     def test_zeroing_an_empty_key_is_harmless(self) -> None:
         empty = bytearray()
         KeyStore._zero_bytes(empty)
