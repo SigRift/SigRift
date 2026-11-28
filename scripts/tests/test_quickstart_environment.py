@@ -37,6 +37,8 @@ if args[:2] == ['compose', 'config'] or args == ['compose', 'version']:
     os.execv(real, [real, *args])
 if args[:2] == ['info', '--format'] or args == ['network', 'ls', '-q']:
     sys.exit(0)
+if args[:2] == ['volume', 'ls'] or (args[:1] == ['ps'] and any(a in ('-a', '-q') for a in args)):
+    sys.exit(0)  # lc_identity's read-only queries: an empty host
 # Stop at build. Never execute a build, pull, helper container or other daemon I/O.
 sys.exit(77 if args == ['compose', 'build'] else 97)
 """

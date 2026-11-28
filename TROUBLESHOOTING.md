@@ -49,6 +49,308 @@ Then access `https://localhost:8544/`. Don't edit
 `docker-compose.yml` directly — it's tracked, and `git pull` will
 flag a conflict on every upgrade.
 
+A **release install** (`install-release.sh`) is different: the port was
+written into its `docker-compose.yml` when that file was generated
+(`UC_PORT` at install time, 8444 by default). Change the gateway's
+`ports:` entry there, then `docker compose up -d`. A second release
+stack beside the first one needs `--new-instance` and its own port:
+`UC_PORT=8544 bash install-release.sh --new-instance`. If the port clash
+came from running the installer of a newly unpacked release, see
+"A second, empty dashboard after unpacking a new release" below.
+
+---
+
+## install-release.sh says "this host already runs SigRift"
+
+Before it changes anything, the release installer looks at the Docker
+Compose labels of every container and volume on the host. Each of these
+refusals exits with status 3, changes nothing and prints one next
+command:
+
+- **"this host runs 2 SigRift release installs"**: the run cannot tell
+  which one to upgrade. Name it: `bash install-release.sh --upgrade
+  /path/to/that/install`.
+- **"already runs SigRift from a source checkout"**: a release install
+  cannot upgrade a quickstart install (update that one with `git pull &&
+  scripts/quickstart.sh` in its checkout). To run a release stack beside
+  it on purpose, give it its own port: `UC_PORT=8454 bash
+  install-release.sh --new-instance`.
+- **"SigRift data whose install folder is not known"**: a stack was taken
+  down with `docker compose down`, which removes the containers and the
+  folder they name. Pass that folder (the one with its `.env` and
+  `docker-compose.yml`): `--upgrade /path/to/that/folder`. A folder the
+  data volume's record names counts only when that folder's own
+  `.sigrift/install.json` has the same install id (the containers can
+  write the volume, so the record alone is a hint, shown as "which does
+  not confirm it").
+- **"this folder has no data yet and this host already runs SigRift"**: a
+  folder with a `.env` but no data of its own, beside another install. If
+  you meant to upgrade that install, use `--upgrade` with its folder; a
+  separate stack needs `--new-instance` and a free `UC_PORT`.
+- **"… so this run does not upgrade it without being told"**: the one
+  release install's folder does not belong to you (or root), someone
+  else can change it, or it is inside Docker's own data folder. Check
+  the folder, then name it: `--upgrade /path/to/that/folder`.
+- **"this installer has no release version"**: an installer without a
+  `VERSION` (a checkout's `scripts/install-release.sh`) would install the
+  moving `:main` images, so it never upgrades an install by itself, also
+  not one a shell's `COMPOSE_PROJECT_NAME` names. Name the version and
+  the folder: `SIGRIFT_VERSION=vX.Y.Z bash install-release.sh --upgrade
+  DIR`.
+- **"pulls its images from ghcr.io/<account>/"**: the install's
+  `docker-compose.yml` names another registry account than the one this
+  run pulls from (`SIGRIFT_OWNER`, default `sigrift`). Set
+  `SIGRIFT_OWNER` to that account to upgrade it with those images.
+
+With exactly one release install on the host, `bash install-release.sh`
+from a newly unpacked release upgrades it in place instead (INSTALL.md,
+"Upgrading a release install").
+
+---
+
+## A second, empty dashboard after unpacking a new release (older installers)
+
+The installer of v0.1.0, run in a newly unpacked release
+folder, start a second stack: Docker Compose names a stack after its
+folder, so the new folder gets new, empty volumes and a new `.env` with
+new secrets. Its bridge starts with an empty database and asks for a new
+admin; its gateway then fails on the port the old one holds (8444).
+Nothing of the old install is changed: its data is still in the old
+project's volumes.
+
+Undo it in the **new** folder only, and never with `-v` in the old one:
+
+```bash
+cd /path/to/the/new/folder
+docker compose down          # its containers; its empty volumes stay until you remove them
+```
+
+Then upgrade the old install with the current installer, which upgrades
+it in place: run `bash install-release.sh` from the newly unpacked
+release (or `--upgrade /path/to/the/old/install`). The empty volumes of
+the second stack are named after the new folder (`docker volume ls`);
+remove them with `docker volume rm` once you are sure which they are.
+
+---
+
+## "this folder's .env is not pinned" after renaming the install folder
+
+Docker Compose names a stack's volumes after its project, which is the
+folder name unless `.env` sets `COMPOSE_PROJECT_NAME`. The current
+installers pin it in `.env` on their first run, so a renamed folder keeps
+its data. A folder renamed **before** that has a project with no data.
+When exactly one orphaned project matches (its volumes exist, no other
+folder uses them, its last folder is known from its containers or its
+volume record and is gone, and this folder's `.env` verifies its data:
+the TOTP secrets, or the audit chain with a key from this `.env`), the
+installer adopts it by itself and pins it. Otherwise it lists the
+candidates and refuses; name the right one:
+
+```bash
+bash install-release.sh --adopt-project sigrift-v010
+scripts/quickstart.sh --adopt-project sigrift   # a source checkout (also --adopt-project=NAME)
+```
+
+A stack taken down (`docker compose down`) before the rename leaves no
+record of its folder, and a copy of that folder made since would look
+exactly the same, so that case always needs the name. It still refuses
+when this `.env` contradicts that project's data (its keys do not verify
+it, or its record names another install). To start this folder with
+empty data instead, use `--new-instance`.
+
+Related refusals before anything changes:
+
+- **"names a project with no data, but this folder's data is in project
+  …"**: a `COMPOSE_PROJECT_NAME` left in your shell (from another stack)
+  would start this folder on new, empty volumes. `unset
+  COMPOSE_PROJECT_NAME` and run again, or add `--new-instance` for a
+  separate stack on purpose.
+- **"this folder's data could be in more than one Docker Compose
+  project"**: containers of several projects were started from this
+  folder. Name the one that is its own with `--adopt-project NAME`.
+- **"… has data that this folder's .env does not match"**: the project
+  the folder's name gives has data that this `.env` does not verify.
+  Another install may have had this folder's name (name this folder's
+  own project with `--adopt-project`), or `.env` lost the key the data
+  was written with (look in `.env.bak.*~` and `.sigrift/snapshots/`).
+
+A folder whose containers were started under another project name (a
+`COMPOSE_PROJECT_NAME` exported at the time) needs nothing: the
+installer finds the project in the containers' labels and pins it.
+
+---
+
+## A copied install folder
+
+**"this folder is a copy of …"** or **"this folder and … address the same
+Docker Compose project"**: both folders would drive one stack and its
+data, and an upgrade from one would leave the other with old files on
+migrated data. Run the installer on the original folder (the next
+command names it). For a second install, unpack a release into a new
+folder and use `--new-instance` with its own `UC_PORT`; do not copy an
+install folder.
+
+---
+
+## The installer refuses an older release
+
+**"vX is older than the installed vY"** or **"the vX bridge knows
+database migrations up to N, but this install's database is at migration
+M"**: a newer release can change the data one way, and an older bridge
+refuses a database with a newer migration, so the installer never
+installs an older release over it. To go back, restore the database copy
+made before the upgrade first: INSTALL.md, "Upgrading a release install",
+"Going back".
+
+---
+
+## quickstart.sh refuses before it changes anything
+
+`scripts/quickstart.sh` runs the same checks as the release installer
+before host preparation, prompts, certificates or models (exit status 3,
+"Nothing was changed.", one next command):
+
+- **"a fresh quickstart here would start a second, empty stack"**: this
+  host already runs SigRift. Update that install in its own folder; for a
+  separate stack on purpose, give it a free port: `UC_PORT=8454
+  scripts/quickstart.sh --new-instance`.
+- **"there is no .env here, but project … has data"**: the data needs the
+  secrets that were in `.env`; new ones would lock users out. Put `.env`
+  back from a backup (`ls -la .env.bak.*~`).
+- A key that differs from the running bridge, or that does not verify the
+  data: as in "The installer says a key differs from the running bridge"
+  below; `scripts/quickstart.sh --keep-running-secrets` keeps the running
+  values.
+- A checkout renamed before the pin: `scripts/quickstart.sh
+  --adopt-project NAME` (see above).
+
+The flags `--new-instance`, `--adopt-project NAME` and
+`--keep-running-secrets` combine with every mode except `--renew-tls`.
+
+---
+
+## The installer cannot read .env
+
+**"exists but cannot be read as UTF-8 text"**: `.env` belongs to another
+user (an earlier run with `sudo` makes it root's) or holds a byte that is
+not UTF-8. Read as empty it would be planned as a new `.env`, so the run
+stops instead. `ls -l .env` shows its owner: give it back to the user
+who runs the installer (`sudo chown "$(id -u):$(id -g)" .env`), or fix
+the byte. **".env is a symbolic link"**: an edit replaces the file by a
+rename, which would replace the link, and a restore point keeps only the
+link; replace the link with a copy of the file it points to.
+
+---
+
+## The installer says a key differs from the running bridge / no key matches the data
+
+The keys in `.env` that the data depends on (`BRIDGE_MFA_KEY` encrypts
+the TOTP secrets, `BRIDGE_AUDIT_KEY` signs the audit chain, and others)
+must be the ones the data was written with. Before it changes anything,
+the installer compares `.env`, your shell and the running bridge's
+environment (values are never shown) and checks each candidate against
+the data, in the stack's own bridge image:
+
+- **"is set in your shell and differs from .env"**: docker compose would
+  use the shell's value. `unset` it and run again.
+- **"the running bridge uses a different … than .env, and the data needs
+  the running one"**: `.env` was edited after the stack started, or the
+  stack was started with a value from a shell. Keep the running values
+  with `--keep-running-secrets` (written into `.env`, the previous text
+  kept as `.env.bak.<time>~`).
+- **"neither .env's … nor the running bridge's verifies this install's
+  data"**: the right value is in neither place. Look in older copies:
+  `ls -la .env.bak.*~ .sigrift/snapshots/` (restore points keep `.env`
+  under `files/`).
+- **".env has no BRIDGE_MFA_KEY, but N users' TOTP secrets are encrypted
+  with one"**: a new key would lock those users out of MFA. Put the old
+  value back from a backup and run again. With a database the installer
+  cannot read (encrypted, or damaged) it refuses the same way, since it
+  cannot tell whether such secrets exist.
+- **".env's BRIDGE_MFA_KEY does not verify this install's N TOTP
+  secrets, and no running bridge has one that does"** (or the same for
+  the audit key): the stack is down or runs with the same wrong value,
+  and starting the new release with it would migrate the data first and
+  fail its checks afterwards. Find the value the data was written with in
+  older copies, as above.
+- **"the bridge and the gateway run with different … values"**: the
+  next command depends on which value the data verifies: the bridge's
+  (`--keep-running-secrets` writes it into `.env` and the start gives it
+  to both), or `.env`'s (`docker compose up -d --force-recreate`).
+- **".env has no … and only your shell sets one"**: a value the installer
+  cannot check against the data (a key for stored protocol keys,
+  backups or an encrypted database) is never written into `.env` from a
+  shell. If it is the right one, add it to `.env` yourself; otherwise
+  `unset` it.
+
+A key missing from `.env` that the running bridge still has is put back
+by itself when the data shows it is the right one, or when nothing can
+check it (the running bridge uses it).
+
+---
+
+## docker compose up prints "SigRift is mid-upgrade"
+
+`docker-compose.yml` is the installer's placeholder (its first line is
+`# SigRift hold stub`): an upgrade stopped the stack, and the real
+compose files are in `.sigrift/held/`. The placeholder starts nothing
+that touches the data, so a reboot or a plain `docker compose up` during
+an upgrade cannot damage it. Do not edit or delete it; ask the installer
+where the upgrade stands:
+
+```bash
+bash install-release.sh --status
+```
+
+---
+
+## An upgrade was interrupted
+
+An upgrade journals its steps in `.sigrift/journal.json`; its output is
+in `.sigrift/logs/upgrade-<time>.log`. It goes on when the terminal
+closes. When it stops (exit status 4: the new bridge did not become
+healthy, a check failed after the start, the power went), `--status`
+says at which step and what to run:
+
+- `bash install-release.sh --resume` runs the remaining steps again;
+  each is safe to repeat. A plain re-run to the same version does the
+  same.
+- `bash install-release.sh --abort` (try `--abort --dry-run` first) puts
+  the held files and every file of the restore point back and starts the
+  old containers again as they were. It refuses once the new bridge has
+  started: that bridge may have migrated the database, which the old
+  release cannot read. Then fix the cause (`docker compose logs
+  --tail=50 bridge`) and resume. It also refuses, changing nothing, a
+  restore point that is incomplete or damaged, and a database that a
+  newer bridge has already migrated (one started by hand).
+- **"is up, but a check failed"** (the journal says `verify_failed`):
+  `--resume` runs the checks again. Once you have looked at what failed,
+  `bash install-release.sh --resume --accept` closes the upgrade as it
+  is (the host record's history says `accepted`).
+
+These work in the install folder, in the release folder the upgrade was
+started from (it finds the install), or with the install folder named:
+`bash install-release.sh --status /path/to/the/install`. The install
+folder may still hold the older installer, which has none of them; the
+new release's does. `--resume` and `--abort` act on the journal's project
+whatever `COMPOSE_PROJECT_NAME` your shell exports. **"this shell's docker talks
+to another Docker daemon"**: `DOCKER_HOST` or the Docker context points
+elsewhere than where the stack runs; `docker context ls` shows which.
+
+A run that finds another one still working on the folder refuses with
+"another installer run is working on"; follow that one's log instead.
+A cron `--renew-tls` waits for the next run while an upgrade has the
+stack stopped or is still running, says so on stderr, and fails (exit
+status 1) once the certificate expires within 7 days.
+
+A `.sigrift-restore-incomplete` marker at the root of the `bridge_data`
+or `bridge_secrets` volume (reported by `--status`) means a restore was
+interrupted and the data is half restored. The installers refuse to
+start a stack on it, and so does the bridge. The installer creates and
+removes it: resume the operation that wrote it, or restore again; remove
+it by hand only if you restored that volume yourself and know the
+restore is complete.
+
 ---
 
 ## `docker compose up` fails with "Pool overlaps with other one on this address space"

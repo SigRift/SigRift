@@ -74,6 +74,8 @@ class Checkout:
                     'host': os.environ.get('DOCKER_HOST')})+'\\n')
             if args == ['compose', 'config', '--environment']:
                 sys.exit(0)
+            if args[:2] == ['volume', 'ls'] or (args[:1] == ['ps'] and any(a in ('-a', '-q') for a in args)):
+                sys.exit(0)  # lc_identity's read-only queries: an empty host
             if args == ['compose', 'version']:
                 sys.exit(int(os.environ.get('PREFLIGHT_COMPOSE_RC', '0')))
             if args == ['info', '--format', '{{.ServerVersion}}']:
@@ -244,11 +246,21 @@ def test_healthy_preflight_reaches_password_prompt_without_premature_writes(chec
     assert "This installer will create a local admin account" in result.stdout
     assert "Error:" not in result.stderr
     assert checkout.snapshot() == before
-    assert [call["args"] for call in checkout.calls()] == [
+    # Then lc_identity's read-only questions (which installs this host has,
+    # the checkout's project name) and the scanner plan's environment.
+    calls = [call["args"] for call in checkout.calls()]
+    assert calls[:2] == [
         ["compose", "version"],
         ["info", "--format", "{{.ServerVersion}}"],
-        ["compose", "config", "--environment"],
     ]
+    assert [c[:2] for c in calls[2:]] == [
+        ["volume", "ls"],
+        ["ps", "-a"],
+        ["compose", "config"],
+        ["compose", "config"],
+    ]
+    assert calls[4] == ["compose", "config", "--format", "json"]
+    assert calls[5] == ["compose", "config", "--environment"]
 
 
 def process_running(pid):

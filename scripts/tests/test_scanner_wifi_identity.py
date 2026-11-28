@@ -404,6 +404,8 @@ if args[:2]==['compose','version'] or ('compose' in args and 'config' in args):
     os.execv(real,[real,*args])
 if args[:2]==['info','--format'] or args[:2]==['ps','--quiet'] or args==['network','ls','-q'] or ('compose' in args and 'ps' in args):
     sys.exit(0)
+if args[:2]==['volume','ls'] or (args[:1]==['ps'] and any(a in ('-a','-q') for a in args)):
+    sys.exit(0)  # lc_identity's read-only queries: an empty host
 sys.exit(77 if 'build' in args else 97)
 """
     )

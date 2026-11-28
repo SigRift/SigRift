@@ -29,6 +29,10 @@ services:
       - BRIDGE_AUDIT_KEY=${BRIDGE_AUDIT_KEY:-}
       - BRIDGE_MFA_KEY=${BRIDGE_MFA_KEY:-}
       - BRIDGE_MASTER_KEY=${BRIDGE_MASTER_KEY:-}
+      # Key for the protocol decryption keys the bridge keeps (imported in
+      # the console). Without it they stay in memory only. Bridge only:
+      # never pass it to the gateway.
+      - BRIDGE_KEYSTORE_KEY=${BRIDGE_KEYSTORE_KEY:-}
       - BRIDGE_ADMIN_PASSWORD=${BRIDGE_ADMIN_PASSWORD:-}
       - BRIDGE_SESSION_BINDING=${BRIDGE_SESSION_BINDING:-none}
       # The gateway sits in front and proxies every request. Trust its

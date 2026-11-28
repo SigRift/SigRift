@@ -72,3 +72,9 @@ src/sigrift/bridge/secrets/
 # Local evidence and agent worktrees never belong in a build context
 reports/
 .claude/
+
+# Installer state: restore points hold secrets (.env, the TLS key) and
+# can be gigabytes. The build context is the repository root and this
+# file is a deny list, so they are excluded wherever they sit.
+**/.sigrift/
+**/.sigrift-state

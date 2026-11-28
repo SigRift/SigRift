@@ -93,7 +93,7 @@ def test_fresh_quickstart_persists_requested_port(tmp_path):
     ).group(1)
     code = (
         """
-BIND=127.0.0.1 MFA_KEY=x AUDIT_KEY=x MASTER_KEY=x PROXY_SECRET=x
+BIND=127.0.0.1 MFA_KEY=x KEYSTORE_KEY=x AUDIT_KEY=x MASTER_KEY=x PROXY_SECRET=x
 LOCAL_NODE_KEY=x SIGRIFT_PRESET=none ADMIN_PASSWORD_ENV='"test-password"'
 cat > .env <<EOF
 """
@@ -133,7 +133,7 @@ def test_password_reaches_compose_and_login_unchanged(tmp_path, installer, passw
         + """
 IFS= read -r ADMIN_PASSWORD
 ADMIN_PASSWORD_ENV=$(printf '%s' "$ADMIN_PASSWORD" | dotenv_password)
-VERSION=v0.1.0 BIND=127.0.0.1 MFA_KEY=placeholder AUDIT_KEY=placeholder
+VERSION=v0.1.0 BIND=127.0.0.1 MFA_KEY=placeholder KEYSTORE_KEY=placeholder AUDIT_KEY=placeholder
 MASTER_KEY=placeholder PROXY_SECRET=placeholder LOCAL_NODE_KEY=placeholder SIGRIFT_PRESET=none
 cat > .env <<EOF
 """
@@ -358,9 +358,12 @@ def test_tls_file_modes_accept_leading_dash_paths_on_bsd_and_gnu(tmp_path):
 
 def test_explicit_upgrade_remembers_version_for_future_reruns(tmp_path):
     (tmp_path / "VERSION").write_text("v0.1.0\n")
-    text = RELEASE.read_text()
-    start = text.index("# Remember an explicit upgrade")
-    end = text.index("# ── .env: prompt", start)
-    result = shell("VERSION_REQUESTED=1 VERSION=v0.2.0\n" + text[start:end], tmp_path)
+    result = shell(function(RELEASE, "lc_write_version") + "lc_write_version v0.2.0\n", tmp_path)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "VERSION").read_text() == "v0.2.0\n"
+    assert (tmp_path / "VERSION").stat().st_mode & 0o777 == 0o644
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["VERSION"]
+    # Both the switch of a re-run or an upgrade and a fresh install call it
+    # for an explicit version.
+    text = RELEASE.read_text()
+    assert text.count('    lc_write_version "$VERSION"\n') == 2

@@ -238,6 +238,10 @@ docker compose down -v        # DESTRUCTIVE — see warning below
 git pull && scripts/quickstart.sh   # pull updates and rebuild
 ```
 
+Quickstart pins the Docker Compose project in `.env`
+(`COMPOSE_PROJECT_NAME`) on its first run and refuses to start a second
+stack beside another SigRift install; see [Upgrading](#upgrading).
+
 **`docker compose down -v` wipes the `bridge_data` and
 `bridge_secrets` volumes.** Both the bridge and gateway containers
 mount `bridge_data`; `bridge_secrets` (bridge only) holds the embedded
@@ -253,12 +257,14 @@ bridge issued is useless. Removing them deletes everything stored there:
 - Learned anomaly baselines (RF/WiFi/BT) and the signal whitelist —
   the statistics the scoring pipeline has built up since install
 
-`-v` also removes the `edge_data` volume, where the in-stack `edge`
-service persists its learned anomaly baselines
-(`MLRF_DATA_DIR=/app/data` in `docker-compose.yml`). Standalone edge
-installs persist theirs under the systemd unit's `StateDirectory`
-(`MLRF_DATA_DIR=/var/lib/sigrift-edge`) and are unaffected by
-compose teardowns.
+`-v` also removes the `edge_data` volume, which `docker-compose.yml`
+mounts on the in-stack `scan` service (not on `edge`): its learned
+anomaly baselines and its RF summary journal (`MLRF_DATA_DIR=/app/data`).
+Standalone edge nodes are unaffected by compose teardowns. The unit
+that `edge-install.sh` writes runs the heartbeat agent with no
+`MLRF_DATA_DIR` and declares no `StateDirectory`, so it keeps no learned
+state on disk; only `src/sigrift/edge/rf-edge.service` declares one,
+`/var/lib/sigrift-edge` (its `MLRF_DATA_DIR`).
 
 Plain `docker compose down` (no `-v`) stops the containers but
 preserves the volume — detections, keys, audit history, and
@@ -645,8 +651,12 @@ docker compose port gateway 8444   # what docker publishes, exactly
 
 ### Who can reach the dashboard
 
-`docker-compose.yml` (and the one `install-release.sh` writes) publish
-the gateway on `${SIGRIFT_BIND:-127.0.0.1}:${UC_PORT:-8444}`:
+`docker-compose.yml` publishes the gateway on
+`${SIGRIFT_BIND:-127.0.0.1}:${UC_PORT:-8444}` (quickstart keeps `UC_PORT`
+in `.env`). The file `install-release.sh` writes has the port written into
+its `ports:` entry when it is generated (`UC_PORT` at install time, 8444
+by default), `"${SIGRIFT_BIND:-127.0.0.1}:8444:8444"`; to change it,
+edit that entry:
 
 | `SIGRIFT_BIND` in `.env` | Reachable from |
 |---|---|
@@ -795,6 +805,14 @@ spool, sent at the next start); webhooks are delivered in the
 background, so a slow receiver delays nothing else. While the bridge is
 down or restarting and the gateway keeps running, a hand-over that fails
 3 times is dropped, not spooled (see "Upgrading" below).
+
+**Upgrading an edge node.** Re-running the dashboard's edge installer
+(`/api/edge/install.sh`, `edge-install.sh`) resets the node's checkout to
+GitHub `main`, whatever release the server runs, and rewrites
+`/etc/sigrift-edge.env`, so it needs the same `--api-key`, `--node-id`
+and `--ca-cert` again. A server upgrade itself needs nothing on the
+nodes: their API keys and the CA carry over, and the gateway
+certificate is kept unless it lacks a name or expires within 30 days.
 
 ### Gateway certificate for remote edge nodes
 
@@ -954,6 +972,9 @@ installs the `:main` development images). Never pipe a download straight into
 `bash`. Release candidates (`-rcN`) are marked as pre-releases and do
 not move the `:latest` image tags.
 
+On a host that already runs a release install, the same command upgrades
+it in place; see [Upgrading a release install](#upgrading-a-release-install).
+
 ### Production secrets
 
 ```bash
@@ -1074,6 +1095,240 @@ docker compose pull && docker compose up -d --build
 
 Database migrations (where needed) run automatically at bridge boot.
 Back up `data/detections.db` before upgrading a production install.
+A release install (one made with `install-release.sh`) upgrades with the
+new release's installer instead: see the next section.
+
+### Upgrading a release install
+
+Download and check the new release as in
+[Verifying a release](#verifying-a-release), unpack it anywhere (not
+inside the install folder), and run its installer there:
+
+```bash
+tar xzf sigrift-v0.2.0.tar.gz && cd sigrift-v0.2.0
+bash install-release.sh --dry-run   # the plan; changes nothing
+bash install-release.sh
+```
+
+When this host has exactly one release install, the installer finds it
+(from the Docker Compose labels of its containers and volumes) and
+upgrades it in place. Its data, `.env` and certificate are kept, and
+nothing is set up in the new folder, which you can delete afterwards. On
+a terminal it shows the plan first and asks `Upgrade it now? [Y/n]`; no
+answer within 20 s (`SIGRIFT_UPGRADE_PROMPT_SECONDS`) means yes. Without
+a terminal (a script, a soak harness) it goes ahead. To name the install
+yourself, add `--upgrade /path/to/the/install`. Once this installer (or a
+newer one) is in the install folder, `SIGRIFT_VERSION=vX.Y.Z bash
+install-release.sh` there does the same upgrade; the v0.1.0 installer
+there still runs its own, unguarded flow.
+
+It finds the install through the labels Docker Compose put on its
+containers, or through the record in its data volume when the folder's
+own `.sigrift/install.json` confirms it, and upgrades it without being
+named only when that folder belongs to you (or root), nobody else can
+change it, and it is not inside Docker's own data folder; otherwise it
+names the folder and asks for `--upgrade DIR`. It pulls from the
+registry account `SIGRIFT_OWNER` names (`sigrift` by default); an install
+whose `docker-compose.yml` pulls from another account is refused unless
+`SIGRIFT_OWNER` names that account, and the plan shows the image
+references.
+
+```text
+==> Found one SigRift release install on this host:
+      project sigrift-v010, v0.1.0, running, folder /home/pi/sigrift-v0.1.0
+==> [1/8] preflight ok
+==> [2/8] images pulled (v0.2.0)
+==> [3/8] restore point 20261127T101500Z-v0.1.0-files (files only)
+    log: /home/pi/sigrift-v0.1.0/.sigrift/logs/upgrade-20261127T101500Z.log; the upgrade goes on if this terminal closes
+==> [4/8] installer and release files installed in /home/pi/sigrift-v0.1.0: install-release.sh, LICENSE, ...
+==> [5/8] stack stopped and held
+==> [6/8] compose, VERSION and .env switched
+==> [7/8] bridge healthy after 192 s (3 migrations); gateway healthy after 18 s
+==> [8/8] schema 59; MFA ok; audit chain valid, head 18233 -> 18233; records written
+SigRift v0.2.0 is up in /home/pi/sigrift-v0.1.0.
+```
+
+What the run does, in order:
+
+1. **Preflight**, which changes nothing: which install it acts on, that
+   the running bridge, `.env` and your shell agree on every key the data
+   depends on (the engine checks them against the data in the stack's own
+   bridge image: TOTP secrets, the audit chain), that no other container
+   writes the data, and that the new release is not older than the
+   installed one.
+2. **Pull** the new images while the old stack keeps running. A failed
+   pull leaves the stack and every file as they were.
+3. A **files-only restore point** in `.sigrift/snapshots/` (below).
+4. With `--upgrade` or from a new folder: the new `install-release.sh`,
+   `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.txt` and `README-INSTALL.txt`
+   go into the install folder (the old ones are kept as
+   `<name>.bak.<time>~`), so the cron `--renew-tls` runs the new installer
+   from then on.
+5. **Stop and hold**: every container of the stack is stopped, and
+   `docker-compose.yml` is replaced by a placeholder (its first line is
+   `# SigRift hold stub`; the real files are in `.sigrift/held/`). A plain
+   `docker compose up` or a reboot then starts nothing that touches the
+   data.
+6. **Switch**: the image tags in `docker-compose.yml` (the old file is
+   kept as `docker-compose.yml.bak.*~`), `VERSION`, `.env` (below), the
+   certificate and the backend subnet.
+7. **Start in two stages**: the bridge first, alone. It applies its
+   database migrations before it reports healthy, so the installer waits
+   at least 10 minutes (3 minutes plus 1 per 500 MB of database), and
+   longer while new `Migration N applied` lines appear in its log. Then
+   the gateway.
+8. **Check and record**: the schema the new bridge knows, TOTP secrets and
+   the audit chain still verify, and the newest audit entry and detection
+   are not older than before. Then `.sigrift/install.json` and a record in
+   the data volume (no secrets) are written, so a later run recognises a
+   renamed, copied or moved folder.
+
+Steps 4 to 8 run detached from the terminal: closing it, or losing the
+SSH session, does not stop them. The output is in
+`.sigrift/logs/upgrade-<time>.log`, and only one installer run at a time
+works on an install folder.
+
+**What is kept.** `.env` is never replaced. A key that is missing is
+added only where nothing depends on it, in one edit that keeps the
+previous text as `.env.bak.<time>~` (mode 0600):
+
+| `.env` key | When it is missing |
+|---|---|
+| `COMPOSE_PROJECT_NAME` | Written once, on the first run of this installer: the name Docker Compose already uses for the folder, so the volume names stay the same. It keeps a renamed folder on its own data. |
+| `BRIDGE_MFA_KEY` | Added only while no TOTP secret is encrypted with one; otherwise the run is refused (put the old value back). |
+| `BRIDGE_AUDIT_KEY` | Added only while the audit log is empty; otherwise a warning. |
+| `BRIDGE_KEYSTORE_KEY` | Added only while no protocol decryption key is stored (the key the bridge uses to keep keys imported in the console). |
+| `BRIDGE_MASTER_KEY` | Added only when an audit key is set. |
+| `UC_PROXY_SECRET` | Always added. The old public default `uppercrust-internal` is replaced (config migration cm-0001, from v0.2.0). |
+| `BRIDGE_ADMIN_PASSWORD` | Needed only while the data has no users; then a re-run at the installed version asks for it. |
+| A key the data depends on | Restored from the running bridge when the data shows that value is the right one, or when nothing can check it (the running bridge uses it). A value only your shell has is never written into `.env` unless nothing depends on it yet. |
+| Any of them, when the database cannot be read | Nothing data-bound is added (an encrypted or damaged database is not an empty one): the run says so in a note, or refuses where a missing key would lock users out. |
+| Keys this installer does not know | Kept, and named in a note. |
+
+The certificate is kept unless it lacks a name or address of this host,
+or expires within 30 days; then edge nodes on other hosts that were given
+the old `tls/cert.pem` need the new one. `docker-compose.override.yml` is
+kept. A `docker-compose.yml` from an older installer keeps its settings,
+including the published port (written into its `ports:` entry), and
+gets a note for each setting a newer one has, such as
+`BRIDGE_KEYSTORE_KEY` for the bridge.
+
+**What it refuses.** Before anything changes, a run that could act on the
+wrong data stops with exit status 3, ends with `Nothing was changed.`
+and names one next command (TROUBLESHOOTING.md explains each):
+
+- several release installs on this host: name one with `--upgrade DIR`;
+- only a source install, or data whose folder is not known;
+- a folder renamed before this installer pinned it. When exactly one
+  orphaned project matches (its volumes exist, no other folder uses
+  them, its last folder is known from its containers or its volume
+  record and no longer exists, and this folder's `.env` verifies its
+  data) it is adopted automatically; otherwise `--adopt-project NAME`
+  names it. A stack taken down before the rename leaves no folder
+  behind, and a copy of its folder would look the same, so that case
+  needs the name;
+- a copied folder (it would drive the same stack and data);
+- a key that differs between the running bridge and `.env`, when the data
+  needs the running one: `--keep-running-secrets` writes the running
+  values into `.env`; and a key in `.env` that does not verify the data
+  while no running bridge has one that does;
+- a `COMPOSE_PROJECT_NAME` in your shell that has no data while this
+  folder's data is in another project (`--new-instance` makes the empty
+  stack on purpose);
+- a `.env` the installer cannot read, or one that is a symbolic link;
+- an older release, or a database newer than the new bridge knows.
+
+A folder whose containers were started under another project name (a
+`COMPOSE_PROJECT_NAME` exported at the time) keeps that project: the
+installer finds it in the containers' labels and pins it.
+
+A second stack on purpose (a test stack beside the real one) needs
+`--new-instance` and a free port: `UC_PORT=8454 bash install-release.sh
+--new-instance`.
+
+**Restore points.** `.sigrift/snapshots/<time>-<version>-files/` (mode
+0700, files 0600) holds `.env`, the compose files, `VERSION`, `tls/` (the
+private key is read through the installer's helper image when you cannot
+read it), the installer and release files, and `.sigrift/install.json`.
+The newest 10 are kept. They hold secrets and are not off-host backups;
+after rotating a key, remove the old ones and the `.env.bak.*~` files.
+**The data volumes are not copied by this installer yet.** To keep a
+copy of the database first, run step 2 of
+[Docker Upgrade](src/sigrift/bridge/UPGRADE.md#docker-upgrade) in the
+install folder.
+
+**Status, resume, abort.** Run these in the install folder, in the
+release folder the upgrade was started from, or anywhere with the
+install folder named (`bash install-release.sh --status /path/to/the/install`):
+
+```bash
+bash install-release.sh --status    # version, health, schema, the last upgrade, restore points
+bash install-release.sh --resume    # go on with an interrupted upgrade
+bash install-release.sh --abort     # undo it, while the new bridge has not started
+bash install-release.sh --resume --accept   # close one that is up but failed its checks
+```
+
+An upgrade that stops in the middle (exit status 4: the new bridge did
+not become healthy, a check failed, the power went) keeps where it stands
+in `.sigrift/journal.json`. `--resume` runs the remaining steps again
+(each is safe to repeat), and a plain re-run to the same version does
+the same. An upgrade that is up but failed its checks is resumed (the
+checks run again) or, once you have looked at it, closed as it is with
+`--resume --accept` (the host record's history says `accepted`).
+`--abort` (try `--abort --dry-run` first) puts the held files and every
+file of the restore point back and starts the old containers again as
+they were (`docker compose up -d --no-recreate`). It works only until
+the new bridge starts: from then on the bridge may have migrated the
+database, which the old release cannot read. Before it changes anything
+it checks that the restore point is whole and that the database is
+still at the schema it had before the upgrade. A folder adopted or
+pinned from its containers' labels keeps its `COMPOSE_PROJECT_NAME`
+line in the restored `.env`. `--resume` and `--abort` act on the
+journal's own project on the Docker daemon the upgrade ran on, whatever
+the shell exports, and refuse when this shell's docker talks to another
+daemon.
+
+While an upgrade has the stack stopped, or is still running, the cron
+`--renew-tls` waits for the next run and says so on stderr; it fails
+(exit status 1) once the certificate expires within 7 days. After an
+upgrade that failed its checks, or one that stopped with the stack
+running again, it renews as usual.
+
+#### Going back
+
+The installer never installs an older release over newer data: a newer
+release can change the data one way (database migrations, the audit
+record format), and the older bridge refuses a database with a newer
+migration. To go back after an upgrade has finished:
+
+1. Restore the copy of the database made before the upgrade: step 2 of
+   [Docker Rollback](src/sigrift/bridge/UPGRADE.md#docker-rollback), run
+   in the install folder (it needs the copy that step 2 of Docker Upgrade
+   made).
+2. Put `.env`, `docker-compose.yml` and `VERSION` back from the restore
+   point, which holds them as they were before the upgrade, and keep the
+   `COMPOSE_PROJECT_NAME` line the first run of this installer pinned (a
+   restore point from before that has none, and without it the folder's
+   name decides which volumes Docker Compose uses):
+
+   ```bash
+   pin=$(grep '^COMPOSE_PROJECT_NAME=' .env)
+   cp -p .sigrift/snapshots/<id>/files/{.env,docker-compose.yml,VERSION} .
+   grep -q '^COMPOSE_PROJECT_NAME=' .env || printf '%s\n' "$pin" >> .env
+   ```
+3. Run the installer at the older version:
+   `SIGRIFT_VERSION=v0.1.0 bash install-release.sh`. The restored
+   `VERSION` says that release is installed, but the containers still
+   run the newer images, so it takes the guarded path above (pull,
+   restore point, stop, start: the stack is down for a minute or two).
+   It keeps `.env`, sets the TLS key's owner and mode again and starts
+   the older images.
+
+A one-command rollback, with restore points that include the data
+volumes, is planned. The installer from before this one (v0.1.0) still
+replaces a `.env` that has no `BRIDGE_ADMIN_PASSWORD=` line, and still
+starts a second, empty stack when run from a newly unpacked folder: once
+this installer has run on an install, use only it or a newer one.
 
 ### Upgrade note: loopback by default, proxy-only bridge, CA key volume
 
@@ -1208,8 +1463,9 @@ Back up `data/detections.db` before upgrading a production install.
   `bridge_data` volume), which it sends first at the next start. Only a
   gateway stop spools: **while the bridge is down or restarting and the
   gateway keeps running** — `docker compose restart bridge`, a bridge
-  that crashed or is still starting, or an upgrade, which recreates the
-  bridge while the old gateway is still serving — the gateway tries each
+  that crashed or is still starting, or, on a source install, an upgrade, which recreates the
+  bridge while the old gateway is still serving (a release install's
+  upgrade stops the gateway first, so it spools) — the gateway tries each
   hand-over 3 times (0.5 s, then 1 s apart), then drops it, counts it in
   `post_ingest_hooks.failed_batches` / `failed_detections` in
   `GET /health` and logs `Post-ingest hook failed after retries —

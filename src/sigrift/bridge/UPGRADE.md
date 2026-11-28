@@ -68,6 +68,7 @@ The bridge uses a numbered migration system in `storage/base.py`. Migrations run
 | FK safety | `PRAGMA foreign_keys=OFF` during migration execution to prevent spurious validation errors from table recreation patterns |
 | FK re-enabled | `PRAGMA foreign_keys=ON` after each migration completes |
 | Commit per migration | Each migration is committed individually, so partial progress is preserved if a later migration fails |
+| Restore marker (reserved) | `.sigrift-restore-incomplete` at the root of the `bridge_data` volume (`/app/src/sigrift/bridge/data/` in the bridge container) means a restore was interrupted and the data is half restored. The installers never start a stack while it exists; see "Restore marker" under [Release Install Upgrade](#release-install-upgrade-install-releasesh) |
 | Newer-schema refusal | The bridge refuses to start on a database containing migrations newer than its own newest one, before the base schema or any migration runs. The Rust gateway, which opens the same database, does the same against the newest bridge migration it was built with, before it changes anything in the database (it adds its own tables and the `sessions.scope` column). It checks again when its wait for the bridge ends (the bridge answered, or 60 s passed), before it listens; a migration committed after that is refused only at the gateway's next start. Both exit with an error naming the unknown migrations |
 
 ### Startup Sequence
@@ -163,6 +164,71 @@ curl -sf http://localhost:8001/api/healthz
 curl -s -H "X-API-Key: $KEY" http://localhost:8001/api/health
 ```
 
+### Release Install Upgrade (install-release.sh)
+
+A stack installed with `install-release.sh` runs pinned registry images
+and is upgraded by the new release's installer: unpack the release
+anywhere and run `bash install-release.sh` there (INSTALL.md, "Upgrading
+a release install", has the details and the refusals). It finds the one
+release install on the host (or the one `--upgrade DIR` names) and:
+
+1. checks, changing nothing, which install it acts on and that the
+   running bridge, `.env` and the shell agree on the keys the data
+   depends on (checked against the data in the stack's own bridge image);
+2. pulls the new images while the old stack runs;
+3. takes a files-only restore point, `.sigrift/snapshots/<time>-<version>-files/`:
+   `.env`, the compose files, `VERSION`, `tls/` and the installer files;
+4. copies the new installer into the install folder;
+5. stops every container of the stack (the gateway has the database open
+   too) and holds it: `docker-compose.yml` becomes a placeholder that
+   declares no volume, the real files wait in `.sigrift/held/`;
+6. switches the image tags, `VERSION` and `.env` (an existing `.env` is
+   never replaced; a missing key is added only where nothing depends on
+   it);
+7. starts the bridge alone and waits while it migrates (at least 10
+   minutes, longer while `Migration N applied` lines appear), then the
+   gateway;
+8. checks the schema, the TOTP secrets, the audit chain and the newest
+   detection against the values from before the stop, and writes its
+   records.
+
+Steps 4 to 8 run detached from the terminal and are journaled in
+`.sigrift/journal.json`, so an upgrade that stopped (exit status 4) can
+be resumed or, before the new bridge started, undone. Run these in the
+install folder, in the release folder the upgrade was started from, or
+anywhere with the install folder named (`--status DIR`):
+
+```bash
+bash install-release.sh --status   # where it stands
+bash install-release.sh --resume   # run the remaining steps again
+bash install-release.sh --abort    # files back from the restore point, old stack started
+```
+
+`--resume` and `--abort` act on the journal's own project on the Docker
+daemon the upgrade ran on, whatever `COMPOSE_PROJECT_NAME` or
+`COMPOSE_FILE` the shell exports, and refuse when this shell's docker
+talks to another daemon.
+An upgrade that is up but failed its checks is resumed (the checks run
+again) or closed as it is with `--resume --accept`, which the host
+record's history keeps as `accepted`.
+
+**The data volume is not copied by the installer yet.** Keep a copy of
+the database first: step 2 of Docker Upgrade below works in a release
+install folder too. The bridge's own `.pre-migration` copy (see Safety
+Features) is a second line of defence, not a backup.
+
+**Restore marker.** `.sigrift-restore-incomplete` is reserved for the
+restore that comes with full restore points: the installer writes it at
+the root of each volume it restores (`bridge_data`, and `bridge_secrets`
+when it restores that one too) before it moves restored data into place,
+and removes it last. The content is the installer's (JSON with the
+operation and its id); only its existence counts, in either volume, even
+as a dangling symlink. While one exists, `install-release.sh` and
+`scripts/quickstart.sh` refuse to start a stack (`--status` reports it
+and the volume), and a bridge that knows the marker refuses to start.
+The installer creates and removes it; remove it by hand only if you
+restored that volume yourself and know the restore is complete.
+
 ### Docker Upgrade
 
 These commands are for the stack built from source with `docker-compose.yml`
@@ -173,8 +239,10 @@ stack was started with. Compose names the images `<project>-bridge` and
 is the directory name unless set), so the commands ask compose for the
 images and work in the volume through the bridge service, instead of
 naming either. A stack that runs pinned registry images (`image:` set, as
-`install-release.sh` does) keeps the previous release's tag instead of
-step 1; see [Docker Rollback](#docker-rollback).
+`install-release.sh` does) is upgraded by its installer instead; see
+[Release Install Upgrade](#release-install-upgrade-install-releasesh)
+(step 2 below still copies its database) and, to go back,
+[Docker Rollback](#docker-rollback).
 
 ```bash
 # 1. Keep the images the stack runs now, for a rollback

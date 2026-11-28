@@ -559,6 +559,8 @@ if args[:2]==['compose','version'] or ('compose' in args and 'config' in args):
     os.execv(real,[real,*args])
 if args[:2]==['info','--format'] or args==['network','ls','-q'] or ('compose' in args and 'ps' in args):
     sys.exit(0)
+if args[:2]==['volume','ls'] or (args[:1]==['ps'] and any(a in ('-a','-q') for a in args)):
+    sys.exit(0)  # lc_identity's read-only queries: an empty host
 # No daemon-changing command is permitted. Build is the deliberate boundary.
 sys.exit(77 if 'build' in args else 97)
 """
@@ -1056,6 +1058,8 @@ def test_real_cli_unsupported_compose_stops_before_password_and_files(tmp_path):
             output.write(json.dumps({'tool':'docker','args':args})+'\\n')
         if args == ['compose','version'] or args == ['info','--format','{{.ServerVersion}}']:
             sys.exit(0)
+        if args[:2] == ['volume','ls'] or (args[:1] == ['ps'] and any(a in ('-a','-q') for a in args)):
+            sys.exit(0)  # lc_identity's read-only queries: an empty host
         if '-f' in args and args[args.index('-f')+1] == '-':
             assert '!override' in sys.stdin.read()
             sys.exit(3)
@@ -1107,6 +1111,8 @@ if args[:2]==['compose','version'] or ('compose' in args and 'config' in args):
     os.execv(real,[real,*args])
 if args[:2]==['info','--format'] or args[:2]==['ps','--quiet'] or args==['network','ls','-q'] or ('compose' in args and 'ps' in args):
     sys.exit(0)
+if args[:2]==['volume','ls'] or (args[:1]==['ps'] and any(a in ('-a','-q') for a in args)):
+    sys.exit(0)  # lc_identity's read-only queries: an empty host
 sys.exit(77 if 'build' in args else 97)
 """
     )
