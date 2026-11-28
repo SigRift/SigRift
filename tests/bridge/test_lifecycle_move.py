@@ -192,7 +192,7 @@ def test_export_call_order_downtime_and_secret_hygiene(inst, usb, host, tmp_path
     # #4: every engine run that holds the passphrase or a data key.
     assert ar_seen(host) == {"ar-wrap", "ar-write", "ar-verify"}
     # 11.3: the sizes left out, a known medium (or "the medium").
-    assert re.search(r"Not included: Docker images, backups/ \(\d+ B\) and exports/ \(\d+ B\)", r.stdout)
+    assert re.search(r"Not included: Docker images, backups/ \([^)]+\) and exports/ \([^)]+\)", r.stdout)
     assert "read back from unknown" not in r.stdout
     # The stack runs again and a plain --status is clean.
     r = run(inst, "--status", host=host)

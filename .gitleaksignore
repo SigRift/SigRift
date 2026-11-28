@@ -79,3 +79,4 @@ tests/bridge/test_proxy_auth.py:generic-api-key:253
 tests/bridge/test_proxy_auth.py:generic-api-key:293
 tests/bridge/test_proxy_auth.py:generic-api-key:318
 tests/bridge/test_proxy_auth.py:generic-api-key:334
+tests/bridge/test_crypto_security.py:generic-api-key:133

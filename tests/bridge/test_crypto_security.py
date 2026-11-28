@@ -130,10 +130,10 @@ class TestKeyStoreSecrecy:
             "aes-128-ctr",
             KEY16,
             "saved",
-            key_id="6f1c0f5e-1d1a-4c55-9a43-3c8f7e1b2a90",
+            key_id="00000000-0000-4000-8000-000000000001",
             created_at="2026-11-01T00:00:00+00:00",
         )
-        assert kid == "6f1c0f5e-1d1a-4c55-9a43-3c8f7e1b2a90"
+        assert kid == "00000000-0000-4000-8000-000000000001"
         key = store.lookup_key(kid)
         assert key.created_at == "2026-11-01T00:00:00+00:00"
         assert bytes(key.key_material) == KEY16 and key.source == "import"
