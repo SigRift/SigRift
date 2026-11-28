@@ -95,7 +95,11 @@ def switch(host, folder: Path, version, *extra):
         'VERSION=%s OWNER=sigrift PORT=8444' % version,
         'release_switch_compose docker-compose.yml %s' % " ".join(extra),
         'echo "SHA=${LC_COMPOSE_TEMPLATE_SHA256:-}"'])
-    return subprocess.run([BASH, "-c", script], cwd=folder, capture_output=True, text=True,
+    # A file, not bash -c: the state-tool block alone is over Linux's 128 KiB
+    # limit for one argument (MAX_ARG_STRLEN), so -c fails with E2BIG there.
+    path = Path(folder).parent / ("switch-%s.sh" % version)
+    path.write_text(script)
+    return subprocess.run([BASH, str(path)], cwd=folder, capture_output=True, text=True,
                           env=host.env())
 
 

@@ -11045,9 +11045,12 @@ def rp_key(d, create=False):
 
 
 def read_nofollow(path, limit=64 << 20):
+    # Read at most the file's size + 1 (and never more than limit). A bare
+    # f.read(limit) allocates limit bytes up front: 1 << 34 is a MemoryError
+    # on Linux, where large allocations are not overcommitted.
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as f:
-        return f.read(limit)
+        return f.read(min(limit, max(os.fstat(f.fileno()).st_size, 0) + 1))
 
 
 def mac_of(key, manifest_bytes):
