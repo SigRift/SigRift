@@ -18,6 +18,7 @@ import re
 import sqlite3
 import struct
 import subprocess
+from bash_file import script_argv  # noqa: E402
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -367,7 +368,7 @@ def test_release_render_compose_port_owner_and_version(tmp_path, host):
                         'release_render_compose --port 99999 "$1/c.yml"; echo "c=$?"',
                         'release_render_compose --owner "Bad Owner" "$1/d.yml"; echo "d=$?"',
                         'release_render_compose --port "1;x" "$1/e.yml"; echo "e=$?"'])
-    r = subprocess.run([BASH, "-c", script, "x", str(tmp_path)], capture_output=True, text=True)
+    r = subprocess.run(script_argv(BASH, script, str(tmp_path)), capture_output=True, text=True)
     assert "ok-a" in r.stdout and "ok-b" in r.stdout, r.stderr
     a = (tmp_path / "a.yml").read_text()
     assert "ghcr.io/acme-labs/sigrift-bridge:v0.2.1" in a

@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import subprocess
+from bash_file import script_argv  # noqa: E402
 import time
 from pathlib import Path
 
@@ -701,7 +702,7 @@ lc_tool() {{
 lc_lock_acquire "{d}" install
 echo "held=$LC_LOCK_HELD tries=$n"
 '''
-    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True)
+    r = subprocess.run(script_argv(BASH, script), capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "held=1 tries=2"
     assert (d / ".sigrift" / "lock").is_file()

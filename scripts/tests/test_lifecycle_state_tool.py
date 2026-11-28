@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+from bash_file import script_argv  # noqa: E402
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -891,7 +892,7 @@ def bash_tool(args, env=None, stdin=""):
     script = block + '\nHELPER_IMAGE=helper:1\nlc_state_tool "$@"\n'
     full = dict(os.environ)
     full.update(env or {})
-    return subprocess.run([BASH, "-c", script, "bash"] + list(args), capture_output=True,
+    return subprocess.run(script_argv(BASH, script, *args), capture_output=True,
                           text=True, input=stdin, env=full)
 
 
@@ -908,7 +909,7 @@ def test_state_tool_gets_the_engine_bootstrap_and_helper_image(tmp_path):
     block = shared_block(INSTALL_RELEASE, "state-tool")
     block = re.sub(r"<<'PY'\n.*?\nPY\n", "<<'PY'\n" + probe + "\nPY\n", block, flags=re.S)
     script = block + '\nLC_ENGINE_BOOTSTRAP=boot HELPER_IMAGE=helper:1\nlc_state_tool x\n'
-    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True, input="SOURCE")
+    r = subprocess.run(script_argv(BASH, script), capture_output=True, text=True, input="SOURCE")
     assert r.stdout == "boot|helper:1|6", r.stderr
     # The names never reach a docker child: TOOL_ENV of the lifecycle tool strips them.
     assert {"LC_ENGINE_BOOTSTRAP", "LC_HELPER_IMAGE", "LC_FACTS_JSON"} <= set(

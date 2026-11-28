@@ -39,7 +39,9 @@ from lifecycle_fakes import (  # noqa: E402
     unpacked_release,
 )
 
-pytestmark = pytest.mark.timeout(240)
+# The runners are several times slower than a dev machine for these end-to-end
+# installer runs; 240 s timed some out there.
+pytestmark = pytest.mark.timeout(900)
 PROJECT = "sigrift-v010"
 TARGET = "sigrift-v020"
 PASS = "a long archive passphrase 2026"

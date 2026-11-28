@@ -1085,6 +1085,7 @@ def test_real_subprocess_input_remains_bounded_and_is_not_a_shell(tmp_path):
     assert output.strip() == repr(token)
 
 
+@pytest.mark.timeout(120)  # load-sensitive on shared CI runners
 @pytest.mark.parametrize("retry", ["plain", "none"])
 @pytest.mark.parametrize("failure", ["truncated", "stalled"])
 def test_real_failed_model_transfer_preserves_intent_for_safe_retry(

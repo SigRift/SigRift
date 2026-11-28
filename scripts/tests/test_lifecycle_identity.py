@@ -12,6 +12,7 @@ import os
 import shutil
 import socket
 import subprocess
+from bash_file import script_argv  # noqa: E402
 from pathlib import Path
 
 import pytest
@@ -85,7 +86,7 @@ def identity(host, folder: Path, installer="release", *flags, env=None, version=
               + "".join(f"{k}={v!r}\n" for k, v in (flags[0] if flags else {}).items())
               + f"lc_identity {installer}\n"
               + 'for k in $LC_DECISION_KEYS; do printf "%s=%s\\n" "$k" "${!k}"; done\n')
-    r = subprocess.run([BASH, "-c", script], capture_output=True, text=True, cwd=folder,
+    r = subprocess.run(script_argv(BASH, script), capture_output=True, text=True, cwd=folder,
                        env=host.env(**(env or {})))
     if r.returncode:
         return r

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from bash_file import script_argv  # noqa: E402
 from pathlib import Path
 
 import pytest
@@ -169,7 +170,7 @@ def test_below_the_floor_a_rerun_stays_tag_only_and_the_keystore_note_is_silent(
 def test_pull_policy_is_missing_for_tags_and_always_for_main(tmp_path, version, policy):
     script = function("release_write_compose") + \
         "VERSION=%s OWNER=sigrift PORT=8444 release_write_compose >/dev/null\n" % version
-    subprocess.run([BASH, "-c", script], cwd=tmp_path, check=True)
+    subprocess.run(script_argv(BASH, script), cwd=tmp_path, check=True)
     text = (tmp_path / "docker-compose.yml").read_text()
     assert text.count("    pull_policy: %s\n" % policy) == 2
 

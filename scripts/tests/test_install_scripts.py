@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import subprocess
+from bash_file import script_argv  # noqa: E402
 import textwrap
 from pathlib import Path
 
@@ -124,7 +125,7 @@ def bash(script: str, *, env: dict | None = None, cwd: Path | None = None):
     }
     full.update(env or {})
     return subprocess.run(
-        [BASH, "-c", script], capture_output=True, text=True, env=full, cwd=cwd
+        script_argv(BASH, script), capture_output=True, text=True, env=full, cwd=cwd
     )
 
 
